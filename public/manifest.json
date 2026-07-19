@@ -1,0 +1,14 @@
+{
+  "name": "Tränarbänken",
+  "short_name": "Tränarbänken",
+  "description": "Fiktivt fotbollsmanagerspel med 300 klubbar och 5 länder.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#092A20",
+  "theme_color": "#092A20",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
