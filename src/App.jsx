@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { Home, Trophy, CalendarDays, Users, ArrowLeftRight, Play, ChevronRight, TrendingUp, TrendingDown, Pencil, Check, X, Landmark, Building2, Star, Swords, Medal, Lock, GraduationCap, ArrowUpCircle, RotateCw, Layers, Trash2, Award, MessageCircle, Maximize, Minimize, Download, Upload } from "lucide-react";
+import { Home, Trophy, CalendarDays, Users, ArrowLeftRight, Play, ChevronRight, TrendingUp, TrendingDown, Pencil, Check, X, Landmark, Building2, Star, Swords, Medal, Lock, GraduationCap, ArrowUpCircle, RotateCw, Layers, Trash2, Award, MessageCircle, Maximize, Minimize, Download, Upload, Bell, UserCog } from "lucide-react";
 
 // ---------------------------------------------------------------
 // window.storage polyfill — this game was originally built for the
@@ -58,6 +58,21 @@ function expectedGoals(attack, defense, atHome) {
   const diff = (attack - defense) / 12;
   return clamp(1.25 + diff * 0.6 + (atHome ? 0.2 : -0.05), 0.25, 4.5);
 }
+const SEASON_BASE_YEAR = 2026; // Season 1 = 2026/2027, matching a real European club season
+function seasonLabel(season) { const y = SEASON_BASE_YEAR + (season - 1); return `${y}/${y + 1}`; }
+function preSeasonStartDate(season) { return new Date(Date.UTC(SEASON_BASE_YEAR + (season - 1), 6, 1)); } // 1 July
+function roundDate(season, round) {
+  const kickoff = new Date(Date.UTC(SEASON_BASE_YEAR + (season - 1), 7, 9)); // 9 August kickoff
+  const winterBreakAfterRound = 19; // short winter break, like most European leagues
+  let days = round * 7;
+  if (round > winterBreakAfterRound) days += 14;
+  const d = new Date(kickoff);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d;
+}
+const SV_MONTHS_SHORT = ["jan", "feb", "mar", "apr", "maj", "jun", "jul", "aug", "sep", "okt", "nov", "dec"];
+function formatGameDate(date) { return `${date.getUTCDate()} ${SV_MONTHS_SHORT[date.getUTCMonth()]} ${date.getUTCFullYear()}`; }
+function formatGameDateShort(date) { return `${date.getUTCDate()} ${SV_MONTHS_SHORT[date.getUTCMonth()]}`; }
 function formatMoney(v) {
   const sign = v < 0 ? "-" : "";
   const abs = Math.abs(v);
@@ -99,6 +114,12 @@ function randomSpecificPosition(pos) {
   const options = SPECIFIC_POSITIONS[pos] || SPECIFIC_POSITIONS.MF;
   return pick(options).code;
 }
+function sideFilterPosition(pos, side) {
+  const options = SPECIFIC_POSITIONS[pos] || SPECIFIC_POSITIONS.MF;
+  const targetRow = side === "left" ? 0 : side === "right" ? 4 : 2;
+  const matching = options.filter(o => o.row === targetRow);
+  return matching.length ? pick(matching).code : pick(options).code;
+}
 function specificPositionLabel(code) { return SPECIFIC_POSITION_LOOKUP[code]?.label || code || ""; }
 function positionFit(specificPos, col, row) {
   const anchor = SPECIFIC_POSITION_LOOKUP[specificPos];
@@ -133,10 +154,12 @@ function cellKey(col, row) { return `${col}-${row}`; }
 // ---------- Countries ----------
 const LEAGUE_FLAG = { england: "🇬🇧", italy: "🇮🇹", spain: "🇪🇸", germany: "🇩🇪", france: "🇫🇷" };
 const TICKET_TIERS = {
-  lagt: { label: "Lågt", desc: "Fler i publiken, mindre per biljett.", fillMult: 1.14, incomeMult: 0.65, fanAdj: 0.4 },
-  medel: { label: "Medel", desc: "Balanserat pris för en vanlig matchdag.", fillMult: 1.0, incomeMult: 1.0, fanAdj: 0 },
-  hogt: { label: "Högt", desc: "Mer per biljett, men färre kommer.", fillMult: 0.85, incomeMult: 1.35, fanAdj: -0.2 },
-  premium: { label: "Premium", desc: "Maximal intäkt per biljett — riskerar tomma läktare.", fillMult: 0.65, incomeMult: 1.75, fanAdj: -0.5 },
+  t1: { price: 8, label: "£8", desc: "Mycket lågt pris — fulla läktare, minimal marginal per biljett.", fillMult: 1.22, incomeMult: 0.5, fanAdj: 0.55 },
+  t2: { price: 12, label: "£12", desc: "Lågt pris — fler i publiken, mindre per biljett.", fillMult: 1.12, incomeMult: 0.7, fanAdj: 0.35 },
+  t3: { price: 16, label: "£16", desc: "Balanserat pris för en vanlig matchdag.", fillMult: 1.0, incomeMult: 1.0, fanAdj: 0 },
+  t4: { price: 22, label: "£22", desc: "Något högre pris — mer per biljett, något färre kommer.", fillMult: 0.88, incomeMult: 1.3, fanAdj: -0.25 },
+  t5: { price: 30, label: "£30", desc: "Högt pris — riskerar märkbart tomma läktare.", fillMult: 0.72, incomeMult: 1.65, fanAdj: -0.45 },
+  t6: { price: 45, label: "£45", desc: "Premiumpris — maximal intäkt per biljett, stor risk för tomma läktare.", fillMult: 0.55, incomeMult: 2.1, fanAdj: -0.7 },
 };
 const LEAGUES = [
   { id: "england", name: "Albion Football League", blurb: "Fysisk intensitet och fullsatta arenor varje helg.", cupName: "Silverskölden" },
@@ -223,9 +246,14 @@ const PRESS_OPTIONS = {
   hogt: { label: "Högt press", defMult: 1.06, cardMult: 1.3 },
 };
 const POSSESSION_OPTIONS = {
-  direkt: { label: "Direkt spel", atkMult: 1.05, defMult: 0.98 },
+  direkt: { label: "Direkt", atkMult: 1.05, defMult: 0.98 },
   balanserat: { label: "Balanserat", atkMult: 1, defMult: 1 },
-  bollinnehav: { label: "Bollinnehåll", atkMult: 0.97, defMult: 1.05 },
+  kort: { label: "Kort", atkMult: 0.97, defMult: 1.05 },
+};
+const POSSESSION_APPROACH_OPTIONS = {
+  mer: { label: "Mer", atkMult: 0.98, defMult: 1.03, possBias: 9 },
+  balanserat: { label: "Balanserat", atkMult: 1, defMult: 1, possBias: 0 },
+  mindre: { label: "Mindre", atkMult: 1.03, defMult: 0.98, possBias: -9 },
 };
 const TEMPO_OPTIONS = {
   kontrollerat: { label: "Kontrollerat", atkMult: 0.99, defMult: 1.03 },
@@ -239,80 +267,96 @@ const RISK_OPTIONS = {
 };
 const TACTICAL_DIALS = [
   { key: "press", label: "Press", options: PRESS_OPTIONS },
-  { key: "possession", label: "Bollinnehav", options: POSSESSION_OPTIONS },
+  { key: "possession", label: "Passningsspel", options: POSSESSION_OPTIONS },
+  { key: "possessionApproach", label: "Bollinnehav", options: POSSESSION_APPROACH_OPTIONS },
   { key: "tempo", label: "Omställningar", options: TEMPO_OPTIONS },
   { key: "risk", label: "Försiktighet", options: RISK_OPTIONS },
 ];
-const DEFAULT_TACTICAL_SETTINGS = { press: "medel", possession: "balanserat", tempo: "balanserat", risk: "balanserat" };
+const DEFAULT_TACTICAL_SETTINGS = { press: "medel", possession: "balanserat", possessionApproach: "balanserat", tempo: "balanserat", risk: "balanserat" };
 function combinedTacticalMods(settings) {
   const s = settings || DEFAULT_TACTICAL_SETTINGS;
   const p = PRESS_OPTIONS[s.press] || PRESS_OPTIONS.medel;
   const po = POSSESSION_OPTIONS[s.possession] || POSSESSION_OPTIONS.balanserat;
+  const pa = POSSESSION_APPROACH_OPTIONS[s.possessionApproach] || POSSESSION_APPROACH_OPTIONS.balanserat;
   const t = TEMPO_OPTIONS[s.tempo] || TEMPO_OPTIONS.balanserat;
   const r = RISK_OPTIONS[s.risk] || RISK_OPTIONS.balanserat;
   return {
-    atkMult: (po.atkMult ?? 1) * (t.atkMult ?? 1) * (r.atkMult ?? 1),
-    defMult: (p.defMult ?? 1) * (po.defMult ?? 1) * (t.defMult ?? 1) * (r.defMult ?? 1),
+    atkMult: (po.atkMult ?? 1) * (pa.atkMult ?? 1) * (t.atkMult ?? 1) * (r.atkMult ?? 1),
+    defMult: (p.defMult ?? 1) * (po.defMult ?? 1) * (pa.defMult ?? 1) * (t.defMult ?? 1) * (r.defMult ?? 1),
     cardMult: (p.cardMult ?? 1) * (r.cardMult ?? 1),
+    possBias: pa.possBias ?? 0,
   };
 }
 
 // ---------- Hand-authored flagship clubs (become Division 1 anchors) ----------
 const CLUB_DATA = [
   { id: "eng1", league: "england", name: "Liverpool Athletic", short: "LIV", color: "#C8102E", archetype: "storklubb" },
-  { id: "eng2", league: "england", name: "Manchester Rovers", short: "MAN", color: "#1C87C9", archetype: "storklubb" },
+  { id: "eng2", league: "england", name: "Manchester Rovers", short: "MAN", color: "#6CABDD", archetype: "storklubb" },
   { id: "eng3", league: "england", name: "Thames Ironworks F.C.", short: "TIW", color: "#7A1E33", archetype: "storklubb" },
-  { id: "eng4", league: "england", name: "Swindon Athletic", short: "SWI", color: "#4FA8E0", archetype: "medelklubb" },
-  { id: "eng5", league: "england", name: "Southampton Rovers", short: "SOU", color: "#D99A2B", archetype: "arbetarklubb" },
-  { id: "eng6", league: "england", name: "Wigan Wanderers", short: "WIG", color: "#6C3FA0", archetype: "nyrik" },
-  { id: "eng7", league: "england", name: "Portsmouth Albion", short: "POR", color: "#2F8F5B", archetype: "akademiklubb" },
-  { id: "eng8", league: "england", name: "Peterborough United", short: "PET", color: "#D2601F", archetype: "utmanare" },
-  { id: "eng9", league: "england", name: "Northampton City", short: "NOR", color: "#1B2A55", archetype: "medelklubb" },
-  { id: "eng10", league: "england", name: "Huddersfield Town", short: "HUD", color: "#1E8A82", archetype: "medelklubb" },
+  { id: "eng4", league: "england", name: "North London Gunners", short: "NLG", color: "#EF0107", archetype: "storklubb" },
+  { id: "eng5", league: "england", name: "Millwall Rovers", short: "MIL", color: "#0C2340", archetype: "arbetarklubb" },
+  { id: "eng6", league: "england", name: "Wigan Wanderers", short: "WIG", color: "#1B458F", archetype: "nyrik" },
+  { id: "eng7", league: "england", name: "Trafford United", short: "TRA", color: "#DA020E", archetype: "storklubb" },
+  { id: "eng8", league: "england", name: "Stamford Athletic", short: "STA", color: "#034694", archetype: "storklubb" },
+  { id: "eng9", league: "england", name: "Merseyside Toffees", short: "MER", color: "#003399", archetype: "arbetarklubb" },
+  { id: "eng10", league: "england", name: "White Hart Wanderers", short: "WHW", color: "#FFFFFF", archetype: "storklubb" },
+  { id: "eng11", league: "england", name: "Elland Whites", short: "ELL", color: "#FFFFFF", archetype: "utmanare" },
+  { id: "eng12", league: "england", name: "Tyneside Magpies", short: "TYN", color: "#000000", archetype: "nyrik" },
+  { id: "eng13", league: "england", name: "Villa Claret", short: "VIL", color: "#670E36", archetype: "utmanare" },
 
   { id: "ita1", league: "italy", name: "Roma 1927", short: "ROM", color: "#A9182C", archetype: "storklubb" },
   { id: "ita2", league: "italy", name: "Milano 1899", short: "MIL", color: "#A2001D", archetype: "storklubb" },
-  { id: "ita3", league: "italy", name: "Avellino Sportiva", short: "AVE", color: "#3FA6D9", archetype: "medelklubb" },
-  { id: "ita4", league: "italy", name: "Cremona Unione", short: "CRE", color: "#7A1F2B", archetype: "medelklubb" },
-  { id: "ita5", league: "italy", name: "Verona 1913", short: "VER", color: "#2E7D4F", archetype: "arbetarklubb" },
-  { id: "ita6", league: "italy", name: "Pescara 1920", short: "PES", color: "#C21E2A", archetype: "nyrik" },
-  { id: "ita7", league: "italy", name: "Empoli Calcio", short: "EMP", color: "#E0B02A", archetype: "akademiklubb" },
-  { id: "ita8", league: "italy", name: "Forlì AC", short: "FOR", color: "#D4772B", archetype: "utmanare" },
-  { id: "ita9", league: "italy", name: "Udine Sportiva", short: "UDI", color: "#6A4C93", archetype: "medelklubb" },
-  { id: "ita10", league: "italy", name: "Lucca Unione", short: "LUC", color: "#555A66", archetype: "medelklubb" },
+  { id: "ita3", league: "italy", name: "Milano Nerazzurri", short: "INT", color: "#0068A8", archetype: "storklubb" },
+  { id: "ita4", league: "italy", name: "Piemonte Bianconeri", short: "PIE", color: "#000000", archetype: "storklubb" },
+  { id: "ita5", league: "italy", name: "Verona 1913", short: "VER", color: "#E0B02A", archetype: "arbetarklubb" },
+  { id: "ita6", league: "italy", name: "Pescara 1920", short: "PES", color: "#3FA6D9", archetype: "nyrik" },
+  { id: "ita7", league: "italy", name: "Empoli Calcio", short: "EMP", color: "#1B4F8A", archetype: "akademiklubb" },
+  { id: "ita8", league: "italy", name: "Partenope Napoli", short: "NAP", color: "#1E88C7", archetype: "storklubb" },
+  { id: "ita9", league: "italy", name: "Udine Sportiva", short: "UDI", color: "#1A1A1A", archetype: "medelklubb" },
+  { id: "ita10", league: "italy", name: "Lucca Unione", short: "LUC", color: "#A9182C", archetype: "medelklubb" },
+  { id: "ita11", league: "italy", name: "Firenze Viola", short: "FIO", color: "#5B2A86", archetype: "utmanare" },
+  { id: "ita12", league: "italy", name: "Orobica Bergamo", short: "ORO", color: "#1B3A5C", archetype: "utmanare" },
 
-  { id: "esp1", league: "spain", name: "CF Madrid", short: "MAD", color: "#1A1A1A", archetype: "storklubb" },
+  { id: "esp1", league: "spain", name: "CF Madrid", short: "MAD", color: "#F5F5F0", archetype: "storklubb" },
   { id: "esp2", league: "spain", name: "Deportivo Barcelona", short: "BAR", color: "#004D98", archetype: "storklubb" },
-  { id: "esp3", league: "spain", name: "Deportivo Pamplona", short: "PAM", color: "#E08A2B", archetype: "medelklubb" },
-  { id: "esp4", league: "spain", name: "Unión Albacete", short: "ALB", color: "#2E8B57", archetype: "medelklubb" },
-  { id: "esp5", league: "spain", name: "UD Santander", short: "SAN", color: "#B22222", archetype: "arbetarklubb" },
-  { id: "esp6", league: "spain", name: "Balompié Girona", short: "GIR", color: "#E0C93A", archetype: "nyrik" },
+  { id: "esp3", league: "spain", name: "Atlético Rojiblanco", short: "ATL", color: "#C8102E", archetype: "storklubb" },
+  { id: "esp4", league: "spain", name: "Unión Albacete", short: "ALB", color: "#F5F5F0", archetype: "medelklubb" },
+  { id: "esp5", league: "spain", name: "UD Santander", short: "SAN", color: "#2E8B57", archetype: "arbetarklubb" },
+  { id: "esp6", league: "spain", name: "Hispalense Sevilla", short: "SEV", color: "#D2001C", archetype: "utmanare" },
   { id: "esp7", league: "spain", name: "CF Badajoz", short: "BAD", color: "#2A5CAA", archetype: "akademiklubb" },
-  { id: "esp8", league: "spain", name: "Real Gijón", short: "GIJ", color: "#D6A419", archetype: "utmanare" },
-  { id: "esp9", league: "spain", name: "Deportivo Valladolid", short: "VAL", color: "#1E7A46", archetype: "medelklubb" },
+  { id: "esp8", league: "spain", name: "Real Gijón", short: "GIJ", color: "#C8102E", archetype: "utmanare" },
+  { id: "esp9", league: "spain", name: "Bilbao Vizcaya", short: "BIL", color: "#EE2523", archetype: "akademiklubb" },
   { id: "esp10", league: "spain", name: "Unión Lleida", short: "LLE", color: "#1B7A72", archetype: "medelklubb" },
+  { id: "esp11", league: "spain", name: "Turia Valencia", short: "VLC", color: "#EE7100", archetype: "utmanare" },
+  { id: "esp12", league: "spain", name: "Real Donosti", short: "DON", color: "#0067B1", archetype: "akademiklubb" },
 
   { id: "ger1", league: "germany", name: "München 1900", short: "MUN", color: "#DC052D", archetype: "storklubb" },
   { id: "ger2", league: "germany", name: "Dortmund 1909", short: "DOR", color: "#F2C230", archetype: "storklubb" },
-  { id: "ger3", league: "germany", name: "Essen SC", short: "ESS", color: "#6C3FA0", archetype: "medelklubb" },
-  { id: "ger4", league: "germany", name: "Ulm TSV", short: "ULM", color: "#D9B310", archetype: "medelklubb" },
-  { id: "ger5", league: "germany", name: "Freiburg VfL", short: "FRE", color: "#2C4E8A", archetype: "arbetarklubb" },
-  { id: "ger6", league: "germany", name: "Karlsruhe Kickers", short: "KAR", color: "#9A2E2E", archetype: "nyrik" },
-  { id: "ger7", league: "germany", name: "Dresden Sportfreunde", short: "DRE", color: "#2E8B57", archetype: "akademiklubb" },
-  { id: "ger8", league: "germany", name: "Duisburg SV", short: "DUI", color: "#1F4A32", archetype: "utmanare" },
-  { id: "ger9", league: "germany", name: "Offenbach FC", short: "OFF", color: "#1B4F8A", archetype: "medelklubb" },
-  { id: "ger10", league: "germany", name: "Aachen SC", short: "AAC", color: "#4FA8E0", archetype: "medelklubb" },
+  { id: "ger3", league: "germany", name: "Gelsenkirchen Knappen", short: "GEL", color: "#004C9D", archetype: "arbetarklubb" },
+  { id: "ger4", league: "germany", name: "Leverkusen Werkself", short: "LEV", color: "#E32221", archetype: "utmanare" },
+  { id: "ger5", league: "germany", name: "Leipzig Rasenballsport", short: "LEI", color: "#DD0741", archetype: "nyrik" },
+  { id: "ger6", league: "germany", name: "Karlsruhe Kickers", short: "KAR", color: "#1B458F", archetype: "nyrik" },
+  { id: "ger7", league: "germany", name: "Dresden Sportfreunde", short: "DRE", color: "#E0B02A", archetype: "akademiklubb" },
+  { id: "ger8", league: "germany", name: "Duisburg SV", short: "DUI", color: "#1A1A1A", archetype: "utmanare" },
+  { id: "ger9", league: "germany", name: "Offenbach FC", short: "OFF", color: "#C8102E", archetype: "medelklubb" },
+  { id: "ger10", league: "germany", name: "Aachen SC", short: "AAC", color: "#1A1A1A", archetype: "medelklubb" },
+  { id: "ger11", league: "germany", name: "Weser Bremen", short: "BRE", color: "#00863F", archetype: "arbetarklubb" },
+  { id: "ger12", league: "germany", name: "Main Frankfurt", short: "FRA", color: "#E1000F", archetype: "utmanare" },
+  { id: "ger13", league: "germany", name: "Niederrhein Fohlen", short: "MGL", color: "#00693E", archetype: "storklubb" },
+  { id: "ger14", league: "germany", name: "Elbe Hamburg", short: "HAM", color: "#0C1C8C", archetype: "utmanare" },
 
   { id: "fra1", league: "france", name: "FC Paris", short: "PAR", color: "#004170", archetype: "storklubb" },
   { id: "fra2", league: "france", name: "Racing Marseille", short: "MAR", color: "#3FA6D9", archetype: "storklubb" },
-  { id: "fra3", league: "france", name: "US Rouen", short: "ROU", color: "#2A5CAA", archetype: "medelklubb" },
-  { id: "fra4", league: "france", name: "Racing Orléans", short: "ORL", color: "#274690", archetype: "medelklubb" },
-  { id: "fra5", league: "france", name: "Stade Mulhouse", short: "MUL", color: "#1E8A82", archetype: "arbetarklubb" },
+  { id: "fra3", league: "france", name: "Rhône Lyonnais", short: "LYO", color: "#1B458F", archetype: "storklubb" },
+  { id: "fra4", league: "france", name: "AS Monégasque", short: "MON", color: "#CE1126", archetype: "nyrik" },
+  { id: "fra5", league: "france", name: "Stade Mulhouse", short: "MUL", color: "#1B458F", archetype: "arbetarklubb" },
   { id: "fra6", league: "france", name: "Olympique Caen", short: "CAE", color: "#C1272D", archetype: "nyrik" },
-  { id: "fra7", league: "france", name: "FC Pau", short: "PAU", color: "#E0B02A", archetype: "akademiklubb" },
-  { id: "fra8", league: "france", name: "AS Le Mans", short: "LEX", color: "#D2601F", archetype: "utmanare" },
+  { id: "fra7", league: "france", name: "FC Pau", short: "PAU", color: "#1B7A72", archetype: "akademiklubb" },
+  { id: "fra8", league: "france", name: "AS Le Mans", short: "LEX", color: "#1B458F", archetype: "utmanare" },
   { id: "fra9", league: "france", name: "US Valenciennes", short: "VAL", color: "#B22222", archetype: "medelklubb" },
-  { id: "fra10", league: "france", name: "Racing Lorient", short: "LOR", color: "#2E7D4F", archetype: "medelklubb" },
+  { id: "fra10", league: "france", name: "Lille Nordistes", short: "LIL", color: "#C8102E", archetype: "akademiklubb" },
+  { id: "fra11", league: "france", name: "Les Verts Forez", short: "STE", color: "#00A651", archetype: "arbetarklubb" },
+  { id: "fra12", league: "france", name: "Gironde Bordeaux", short: "BOR", color: "#002F6C", archetype: "utmanare" },
 ];
 
 // ---------- Procedural club generation for the rest of the pyramid ----------
@@ -363,37 +407,74 @@ function generateWorld() {
     CLUB_DATA.filter(c => c.league === country.id).forEach(c => {
       const arche = ARCHETYPES[c.archetype];
       usedNames.add(c.name);
-      clubs[c.id] = { id: c.id, league: c.league, division: 1, name: c.name, short: c.short, color: c.color, archetype: c.archetype, strength: clamp(rndInt(arche.tierMin, arche.tierMax), 22, 96), manager: generateManager(country.id) };
+      const strength = withSeededRandom(c.id + "strength", () => clamp(rndInt(arche.tierMin, arche.tierMax), 22, 96));
+      const squad = withSeededRandom(c.id + "squad", () => makeSquad(country.id, c.archetype, 1, arche.startDev.akademi));
+      clubs[c.id] = { id: c.id, league: c.league, division: 1, name: c.name, short: c.short, color: c.color, archetype: c.archetype, strength, manager: generateManager(country.id), squad };
     });
-    for (let i = 0; i < 10; i++) {
-      const archetype = pick(DIV1_EXTRA_ARCHETYPES);
-      const arche = ARCHETYPES[archetype];
+    const namedCount = CLUB_DATA.filter(c => c.league === country.id).length;
+    const fillerCount = Math.max(0, 20 - namedCount);
+    for (let i = 0; i < fillerCount; i++) {
       const id = `${country.id}_d1_p${i}`;
-      const name = makeProceduralName(country.id, usedNames);
-      clubs[id] = { id, league: country.id, division: 1, name, short: shortCodeFrom(name), color: pick(COLOR_POOL), archetype, strength: clamp(rndInt(arche.tierMin, arche.tierMax), 22, 96), manager: generateManager(country.id) };
+      const { archetype, name, strength, squad } = withSeededRandom(id + "identity", () => {
+        const archetype = pick(DIV1_EXTRA_ARCHETYPES);
+        const arche = ARCHETYPES[archetype];
+        const name = makeProceduralName(country.id, usedNames);
+        const strength = clamp(rndInt(arche.tierMin, arche.tierMax), 22, 96);
+        const squad = makeSquad(country.id, archetype, 1, arche.startDev.akademi);
+        return { archetype, name, strength, squad };
+      });
+      clubs[id] = { id, league: country.id, division: 1, name, short: shortCodeFrom(name), color: pick(COLOR_POOL), archetype, strength, manager: generateManager(country.id), squad };
     }
     for (let i = 0; i < 20; i++) {
-      const archetype = pick(DIV2_ARCHETYPES);
-      const arche = ARCHETYPES[archetype];
       const id = `${country.id}_d2_p${i}`;
-      const name = makeProceduralName(country.id, usedNames);
-      clubs[id] = { id, league: country.id, division: 2, name, short: shortCodeFrom(name), color: pick(COLOR_POOL), archetype, strength: clamp(rndInt(arche.tierMin, arche.tierMax) - 14, 22, 90), manager: generateManager(country.id) };
+      const { archetype, name, strength, squad } = withSeededRandom(id + "identity", () => {
+        const archetype = pick(DIV2_ARCHETYPES);
+        const arche = ARCHETYPES[archetype];
+        const name = makeProceduralName(country.id, usedNames);
+        const strength = clamp(rndInt(arche.tierMin, arche.tierMax) - 14, 22, 90);
+        const squad = makeSquad(country.id, archetype, 2, arche.startDev.akademi);
+        return { archetype, name, strength, squad };
+      });
+      clubs[id] = { id, league: country.id, division: 2, name, short: shortCodeFrom(name), color: pick(COLOR_POOL), archetype, strength, manager: generateManager(country.id), squad };
     }
     for (let i = 0; i < 20; i++) {
-      const archetype = pick(DIV3_ARCHETYPES);
-      const arche = ARCHETYPES[archetype];
       const id = `${country.id}_d3_p${i}`;
-      const name = makeProceduralName(country.id, usedNames);
-      clubs[id] = { id, league: country.id, division: 3, name, short: shortCodeFrom(name), color: pick(COLOR_POOL), archetype, strength: clamp(rndInt(arche.tierMin, arche.tierMax) - 26, 20, 80), manager: generateManager(country.id) };
+      const { archetype, name, strength, squad } = withSeededRandom(id + "identity", () => {
+        const archetype = pick(DIV3_ARCHETYPES);
+        const arche = ARCHETYPES[archetype];
+        const name = makeProceduralName(country.id, usedNames);
+        const strength = clamp(rndInt(arche.tierMin, arche.tierMax) - 26, 20, 80);
+        const squad = makeSquad(country.id, archetype, 3, arche.startDev.akademi);
+        return { archetype, name, strength, squad };
+      });
+      clubs[id] = { id, league: country.id, division: 3, name, short: shortCodeFrom(name), color: pick(COLOR_POOL), archetype, strength, manager: generateManager(country.id), squad };
     }
   });
   assignRivals(clubs);
   return clubs;
 }
+const FORCED_RIVALRIES = [
+  ["eng3", "eng5"], // Thames Ironworks F.C. vs Millwall Rovers
+  ["eng1", "eng9"], // Liverpool Athletic vs Merseyside Toffees — Merseyside Derby
+  ["eng4", "eng10"], // North London Gunners vs White Hart Wanderers — North London Derby
+  ["eng2", "eng7"], // Manchester Rovers vs Trafford United — Manchester Derby
+  ["ita2", "ita3"], // Milano 1899 vs Milano Nerazzurri — Derby della Madonnina
+  ["esp1", "esp2"], // CF Madrid vs Deportivo Barcelona — El Clásico
+  ["ger1", "ger2"], // München 1900 vs Dortmund 1909 — Der Klassiker
+  ["fra1", "fra2"], // FC Paris vs Racing Marseille — Le Classique
+];
 function assignRivals(clubs) {
+  const forcedIds = new Set();
+  FORCED_RIVALRIES.forEach(([a, b]) => {
+    if (clubs[a] && clubs[b]) {
+      clubs[a].rivalId = b;
+      clubs[b].rivalId = a;
+      forcedIds.add(a); forcedIds.add(b);
+    }
+  });
   LEAGUES.forEach(country => {
     [1, 2, 3].forEach(div => {
-      const ids = shuffle(clubsInPool(country.id, div, clubs).map(c => c.id));
+      const ids = shuffle(clubsInPool(country.id, div, clubs).map(c => c.id).filter(id => !forcedIds.has(id)));
       for (let i = 0; i + 1 < ids.length; i += 2) {
         clubs[ids[i]].rivalId = ids[i + 1];
         clubs[ids[i + 1]].rivalId = ids[i];
@@ -469,7 +550,7 @@ const PERSONALITY_DESC = {
   Ambitiös: "Vill vinna titlar och spela regelbundet — annars växer missnöjet snabbt.",
   Problemspelare: "Trivseln svänger kraftigt, med ökad risk för gula kort.",
 };
-function makePlayer(pos, homeCountry, forcedSpecificPosition, archetype, division) {
+function makePlayer(pos, homeCountry, forcedSpecificPosition, archetype, division, youthSlot) {
   const arche = ARCHETYPES[archetype];
   const archShift = arche ? Math.round(((arche.tierMin + arche.tierMax) / 2 - 68.5) * 0.6) : 0;
   const divPenalty = division === 3 ? 26 : division === 2 ? 14 : 0;
@@ -481,11 +562,15 @@ function makePlayer(pos, homeCountry, forcedSpecificPosition, archetype, divisio
   else { attack = rndInt(60, 84); defense = rndInt(22, 45); }
   attack = clamp(attack + shift, 15, 96);
   defense = clamp(defense + shift, 15, 96);
+  if (youthSlot) { attack = clamp(Math.round(attack * 0.82), 15, 90); defense = clamp(Math.round(defense * 0.82), 15, 90); }
   const value = Math.round(((attack + defense) / 2) * 8 + rndInt(-25, 35));
   const nationality = homeCountry ? randomDomesticNationality(homeCountry) : pick(NATIONALITY_KEYS);
-  const age = rndInt(18, 33);
+  const age = youthSlot ? rndInt(18, 21) : rndInt(18, 33);
   const finalValue = Math.max(40, value);
-  return { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition: forcedSpecificPosition || randomSpecificPosition(pos), attack, defense, value: finalValue, wage: computeWage(finalValue, attack, defense), contractYears: rndInt(1, 4), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, personality: pick(PERSONALITIES), apps: 0, goals: 0, assists: 0, seasonLog: [], ratingSum: 0 };
+  const overall = (attack + defense) / 2;
+  const ageRoom = youthSlot ? rndInt(16, 28) : age <= 21 ? rndInt(8, 22) : age <= 25 ? rndInt(3, 12) : age <= 29 ? rndInt(0, 5) : 0;
+  const potential = clamp(Math.round(overall + ageRoom), Math.round(overall), 99);
+  return { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition: forcedSpecificPosition || randomSpecificPosition(pos), attack, defense, potential, value: finalValue, wage: computeWage(finalValue, attack, defense), contractYears: rndInt(1, 4), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, personality: pick(PERSONALITIES), apps: 0, goals: 0, assists: 0, seasonLog: [], ratingSum: 0 };
 }
 function distributeSpecificPositions(pos, count) {
   if (pos !== "FÖ" && pos !== "MF") return Array.from({ length: count }, () => randomSpecificPosition(pos));
@@ -498,14 +583,15 @@ function distributeSpecificPositions(pos, count) {
   for (let i = result.length; i < count; i++) result.push(pick(allOptions));
   return shuffle(result);
 }
-function makeSquad(homeCountry, archetype, division) {
+function makeSquad(homeCountry, archetype, division, akademiLevel = 2) {
   const counts = { MV: 2, FÖ: 7, MF: 7, AN: 4 };
   const squad = [];
+  const youthSlotChance = clamp(0.1 + (akademiLevel - 1) * 0.09, 0.08, 0.5);
   Object.entries(counts).forEach(([pos, n]) => {
     const specificPositions = distributeSpecificPositions(pos, n);
-    for (let i = 0; i < n; i++) squad.push(makePlayer(pos, homeCountry, specificPositions[i], archetype, division));
+    for (let i = 0; i < n; i++) squad.push(makePlayer(pos, homeCountry, specificPositions[i], archetype, division, Math.random() < youthSlotChance));
   });
-  for (let i = 0; i < 2; i++) squad.push(makePlayer(pick(POS_ORDER), homeCountry, null, archetype, division));
+  for (let i = 0; i < 2; i++) squad.push(makePlayer(pick(POS_ORDER), homeCountry, null, archetype, division, false));
   squad.forEach((p, i) => { p.number = i + 1; });
   return squad;
 }
@@ -549,7 +635,35 @@ function scoutMissionCeiling(scoutLevel, division) {
   const base = scoutLevel ? clamp(58 + scoutLevel * 7, 58, 95) : 62;
   return clamp(base + divAdj, 38, 95);
 }
-function generateScoutCandidate(mission, scoutLevel, clubs, division) {
+function findRealScoutCandidate(mission, clubs, userClubId) {
+  const attrFilters = mission.attributeFilters || {};
+  const activeAttrKeys = Object.keys(attrFilters).filter(k => attrFilters[k]);
+  const candidates = [];
+  Object.values(clubs).forEach(club => {
+    if (club.id === userClubId || !club.squad) return;
+    club.squad.forEach(p => {
+      if (mission.posFilter && p.pos !== mission.posFilter) return;
+      if (mission.ageMin && p.age < mission.ageMin) return;
+      if (mission.ageMax && p.age > mission.ageMax) return;
+      if (mission.maxValue && p.value > mission.maxValue) return;
+      if (mission.maxWage && p.wage > mission.maxWage) return;
+      if (mission.minPotential && (p.potential || 0) < mission.minPotential) return;
+      if (activeAttrKeys.length) {
+        const attrs = getAttrs(p);
+        if (!activeAttrKeys.every(k => attrs[k] >= attrFilters[k])) return;
+      }
+      candidates.push({ player: p, clubId: club.id });
+    });
+  });
+  if (!candidates.length) return null;
+  const chosen = candidates[rndInt(0, candidates.length - 1)];
+  return { ...chosen.player, clubId: chosen.clubId };
+}
+function generateScoutCandidate(mission, scoutLevel, clubs, division, userClubId) {
+  if (Math.random() < 0.65) {
+    const real = findRealScoutCandidate(mission, clubs, userClubId);
+    if (real) return real;
+  }
   const ceiling = scoutMissionCeiling(scoutLevel, division);
   const floor = clamp(ceiling - 18, 26, ceiling - 4);
   const attrFilters = mission.attributeFilters || {};
@@ -576,7 +690,8 @@ function generateScoutCandidate(mission, scoutLevel, clubs, division) {
     const ageRoom = clamp((26 - age) * 2.2, 0, 22);
     const potential = clamp(Math.round((attack + defense) / 2 + ageRoom + rnd(-4, 8)), Math.round((attack + defense) / 2), 99);
     if (mission.minPotential && potential < mission.minPotential) { if (tries < maxTries - 1) continue; }
-    const candidate = { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition: randomSpecificPosition(pos), attack, defense, potential, value, wage: mission.maxWage ? Math.min(wage, mission.maxWage) : wage, clubId, contractYears: rndInt(1, 4), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, personality: pick(PERSONALITIES), apps: 0, goals: 0, assists: 0, seasonLog: [], ratingSum: 0 };
+    const specificPosition = mission.sideFilter ? sideFilterPosition(pos, mission.sideFilter) : randomSpecificPosition(pos);
+    const candidate = { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition, attack, defense, potential, value, wage: mission.maxWage ? Math.min(wage, mission.maxWage) : wage, clubId, contractYears: rndInt(1, 4), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, personality: pick(PERSONALITIES), apps: 0, goals: 0, assists: 0, seasonLog: [], ratingSum: 0 };
     if (activeAttrKeys.length) {
       const attrs = getAttrs(candidate);
       const meetsAll = activeAttrKeys.every(k => attrs[k] >= attrFilters[k]);
@@ -613,8 +728,81 @@ const SCOUT_PRESETS = [
   { key: "lovande", label: "Ung talang med hög potential", posFilter: null, attrs: {}, minPotential: 78, ageMax: 21 },
 ];
 const SELL_THRESHOLD = { storklubb: 1.28, nyrik: 1.32, medelklubb: 1.05, arbetarklubb: 0.92, akademiklubb: 0.88, utmanare: 1.0 };
+function sellerOpeningLine(club, player) {
+  const first = player.name.split(" ")[0];
+  const lines = {
+    storklubb: [`Vi lyssnar på bud för ${first}, men det blir ingen fyndaffär.`, `${first} är central för oss — priset speglar det.`],
+    nyrik: [`Vi säljer bara om priset är rätt för oss.`, `${first} har högt värde i vårt system just nu.`],
+    medelklubb: [`Vi kan diskutera ${first}, kom med ett seriöst bud.`],
+    arbetarklubb: [`Om priset känns rimligt lyssnar vi gärna.`, `Vi är öppna för en affär kring ${first}.`],
+    akademiklubb: [`${first} är en av våra bästa akademialster — det kostar.`],
+    utmanare: [`Vi bygger något här, men allt går att diskutera för rätt pris.`],
+  };
+  return pick(lines[club.archetype] || lines.medelklubb);
+}
+function negoAcceptLine() { return pick(["Det där kan vi leva med. Affär!", "Rimligt — vi tackar ja.", "Okej, vi är överens.", "Det duger. Affär klar."]); }
+function negoCounterLine(counterAmount) { return pick([`Nära, men vi vill ha ${formatMoney(counterAmount)} istället.`, `Vi uppskattar budet, men ${formatMoney(counterAmount)} känns mer rätt.`, `Höj lite till ${formatMoney(counterAmount)} så pratar vi.`]); }
+function negoRejectLine(player) { const first = player.name.split(" ")[0]; return pick([`Nej, det där är för lågt för ${first}.`, `Vi säljer inte till det priset.`, `Kom tillbaka med ett bättre bud.`]); }
+function playerWageOpeningLine(player) {
+  const first = player.name.split(" ")[0];
+  const lines = {
+    Ambitiös: [`Jag vill vinna titlar här — lönen får spegla ambitionen.`, `Ge mig rätt villkor så levererar jag på plan.`],
+    Lojal: [`Jag trivs redan här, vi hittar nog en lösning tillsammans.`],
+    Ledare: [`Jag bryr mig mest om truppen, men lönen ska förstås vara rättvis.`],
+    Problemspelare: [`Ni får bjuda rejält om ni vill ha mig kvar.`],
+    Balanserad: [`Låt oss se vad ni erbjuder.`],
+  };
+  return pick(lines[player.personality] || lines.Balanserad);
+}
+function wageAcceptLine() { return pick(["Det känns schysst — deal!", "Jag är nöjd med det.", "Vi är överens."]); }
+function wageCounterLine(counterWage) { return pick([`Kan vi mötas vid ${formatMoney(counterWage)}/omgång?`, `Jag hade tänkt mig närmare ${formatMoney(counterWage)}/omgång.`]); }
+function wageRejectLine() { return pick(["Det där räcker inte för mig.", "Nej, jag behöver ett bättre erbjudande.", "Det känns för lågt just nu."]); }
+function NegotiationThread({ messages }) {
+  return (
+    <div className="space-y-2">
+      {messages.map((m, i) => (
+        <div key={i} style={{ display: "flex", justifyContent: m.from === "you" ? "flex-end" : "flex-start" }}>
+          <div style={{
+            maxWidth: "82%", padding: "8px 12px", borderRadius: 14, fontSize: 12.5, lineHeight: 1.4,
+            background: m.from === "you" ? C.gold : C.paperDim, color: m.from === "you" ? C.turfDeep : C.ink,
+            borderBottomRightRadius: m.from === "you" ? 3 : 14, borderBottomLeftRadius: m.from === "you" ? 14 : 3,
+            fontWeight: m.from === "you" ? 600 : 400,
+          }}>{m.text}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+const NEGOTIATION_MAX_ATTEMPTS = 3;
+function negotiationWalkAwayChance(offerRatio, reputation) {
+  const shortfall = clamp(1 - offerRatio, 0, 1);
+  const repDiscount = clamp(reputation / 900, 0, 0.25);
+  return clamp(shortfall * 0.55 - repDiscount, 0.02, 0.55);
+}
+function negotiationDrift(value, attemptsUsed) { return value * (1 + attemptsUsed * 0.035); }
+function rivalStealChance(attemptsUsed, rivalMult) { return clamp((attemptsUsed - 1) * 0.12 * rivalMult, 0, 0.4); }
+function negotiationLeverage(reputation, counterpartPrestige) { return clamp((reputation - counterpartPrestige) / 100, -1, 1); }
+function leverageReading(score) {
+  if (score >= 0.22) return { text: "Övertaget: ni", color: C.win, sub: "Ert rykte väger tungt i förhandlingen." };
+  if (score <= -0.22) return { text: "Övertaget: dem", color: C.loss, sub: "Motparten har starkare kort på hand just nu." };
+  return { text: "Jämnt läge", color: C.gold, sub: "Ingen sida har ett tydligt övertag." };
+}
+function opportunityChance(score) { return clamp(0.06 + Math.max(0, score) * 0.32, 0.05, 0.38); }
+function LeverageBadge({ score }) {
+  const r = leverageReading(score);
+  return (
+    <div className="flex items-center justify-between px-3 py-2 rounded-xl" style={{ background: "rgba(0,0,0,0.04)" }}>
+      <div>
+        <div className="text-9 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Läget i förhandlingen</div>
+        <div className="text-10 mt-0.5" style={{ color: C.inkSoft }}>{r.sub}</div>
+      </div>
+      <span className="text-11 font-bold" style={{ color: r.color }}>{r.text}</span>
+    </div>
+  );
+}
 function negotiateOffer(offerAmount, value, club, reputation, rivalBoost = 1) {
-  const threshold = (SELL_THRESHOLD[club.archetype] || 1.1) * value * (1 - reputation / 500) * rivalBoost;
+  const goodwillMult = 1 + clamp((50 - (club.goodwill ?? 50)) / 200, -0.1, 0.25);
+  const threshold = (SELL_THRESHOLD[club.archetype] || 1.1) * value * (1 - reputation / 500) * rivalBoost * goodwillMult;
   const ratio = offerAmount / threshold;
   if (ratio >= 1) return { result: "accept" };
   if (ratio >= 0.8) return { result: "counter", counterPrice: Math.round(threshold * rnd(0.98, 1.06)) };
@@ -672,6 +860,15 @@ function seededRandom(seedStr) {
     h ^= h + Math.imul(h ^ (h >>> 7), h | 61);
     return ((h ^ (h >>> 14)) >>> 0) / 4294967296;
   };
+}
+function withSeededRandom(seedStr, fn) {
+  const original = Math.random;
+  Math.random = seededRandom(seedStr);
+  try {
+    return fn();
+  } finally {
+    Math.random = original;
+  }
 }
 const POSITION_WEIGHTS = {
   MV: { shooting: 0.35, passing: 0.2, dribbling: 0, pace: 0, defending: 0.3, physical: 0.15 },
@@ -806,15 +1003,54 @@ function contractDemand(player) {
 // ---------- Club facility sub-parts (Arena/Akademi/Scouting details) ----------
 const STAND_NAMES = { north: "Norra läktaren", south: "Södra läktaren", east: "Östra läktaren", west: "Västra läktaren" };
 const STAND_TIER_NAMES = ["Ståplats", "Sittplatser", "Numrerade platser", "Läktartak", "VIP-loger"];
-function standCapacity(level) { return 1200 + level * 1300; }
+function startPartLevel_(prestigeScore, max) { return clamp(prestigeScore >= 82 ? 3 : prestigeScore >= 70 ? 2 : 1, 1, max); }
+function startArenaStands(club, division) {
+  const rng = seededRandom(club.id + "arenastands");
+  const arche = ARCHETYPES[club.archetype];
+  const prestigeScore = (arche.tierMin + arche.tierMax) / 2 - (division - 1) * 10;
+  const base = startPartLevel_(prestigeScore, 5);
+  if (division === 1) {
+    return { north: base, south: base, east: Math.max(1, base - 1), west: Math.max(1, base - 1) };
+  }
+  if (division === 2) {
+    const isRough = prestigeScore < 25 && rng() < 0.12;
+    if (isRough) {
+      return { north: Math.max(1, base), south: 0, east: 0, west: 0 };
+    }
+    return {
+      north: base, south: rng() < 0.7 ? Math.max(1, base - 1) : 0,
+      east: rng() < 0.4 ? 1 : 0, west: rng() < 0.25 ? 1 : 0,
+    };
+  }
+  // division 3: often just one main stand on the long side, rest bare ground
+  return {
+    north: Math.max(1, base),
+    south: rng() < 0.3 ? 1 : 0,
+    east: 0, west: 0,
+  };
+}
+function arenaCapacityForClub(club, division) {
+  const stands = startArenaStands(club, division);
+  const arche = ARCHETYPES[club.archetype];
+  const devArena = Math.max(1, arche.startDev.arena - (division - 1));
+  return Math.round(4000 + devArena * 2000 + Object.values(stands).reduce((s, l) => s + standCapacity(l), 0));
+}
+function standCapacity(level) { return level <= 0 ? 0 : 1200 + level * 1300; }
+function constructionSeatDelta(ac) {
+  if (!ac) return 0;
+  const perLevel = ac.stand === "arena" ? 2000 : 1300;
+  return (ac.toLevel - ac.fromLevel) * perLevel;
+}
 function arenaConstructionDuration(targetLevel) { return clamp(6 + (targetLevel - 1) * 9, 6, 50); }
 function arenaCapacityOf(dev, stands) {
   const s = stands || { north: 1, south: 1, east: 1, west: 1 };
   return Math.round(4000 + dev.arena * 2000 + Object.values(s).reduce((sum, l) => sum + standCapacity(l), 0));
 }
 function partUpgradeCost(category, level) {
-  const base = { arenaStands: 350, arenaFacilities: 300, akademiParts: 380, scoutingParts: 380 }[category];
-  return Math.round(base * Math.pow(level, 1.55));
+  const base = { arenaStands: 350, arenaFacilities: 300, akademiParts: 380, scoutingParts: 460 }[category];
+  const exponent = category === "scoutingParts" ? 1.8 : 1.55;
+  const effLevel = category === "arenaStands" ? level + 0.6 : level;
+  return Math.round(base * Math.pow(effLevel, exponent));
 }
 const PART_MAX = { arenaStands: 5, arenaFacilities: 3, akademiParts: 3, scoutingParts: 3 };
 
@@ -824,6 +1060,11 @@ const SPONSOR_NAME_POOL = {
   local: ["Stadens Bageri", "Bilverkstaden", "Café Mötesplatsen", "Sportbutiken", "Byggvaruhuset", "Restaurang Hörnan"],
 };
 const SPONSOR_SLOT_LABEL = { main: "Huvudsponsor (matchtröja)", stadium: "Arenapartner (namnrätt)", local: "Lokala partners" };
+const SPONSOR_TYPES = {
+  ambitios: { label: "Ambitiös partner", desc: "Vill synas och växa med er, men förväntar sig resultat.", walkMod: 1.1, improveMod: 1.2 },
+  forsiktig: { label: "Försiktig partner", desc: "Håller hårt i pengarna — svårförhandlad.", walkMod: 0.85, improveMod: 0.55 },
+  lojal: { label: "Lojal partner", desc: "Vill bygga en långsiktig relation, mer följsam.", walkMod: 0.7, improveMod: 1.0 },
+};
 function generateSponsorOffers(slotType, reputation) {
   const pool = SPONSOR_NAME_POOL[slotType];
   const baseIncome = slotType === "main" ? 60 : slotType === "stadium" ? 45 : 20;
@@ -835,25 +1076,37 @@ function generateSponsorOffers(slotType, reputation) {
     used.add(name);
     const income = Math.round(baseIncome * repMult * rnd(0.8, 1.3));
     const bonus = Math.round(income * rnd(2, 5));
-    return { id: uid(), name, income, bonus };
+    const type = pick(Object.keys(SPONSOR_TYPES));
+    return { id: uid(), name, income, bonus, type };
   });
 }
-function negotiateSponsor(offer, reputation) {
-  const walkChance = clamp(0.14 - reputation / 800, 0.04, 0.14);
-  if (Math.random() < walkChance) return { result: "walk" };
-  const improveChance = clamp(0.35 + reputation / 300, 0.3, 0.6);
+function negotiateSponsor(offer, reputation, attemptsUsed = 0) {
+  const type = SPONSOR_TYPES[offer.type] || SPONSOR_TYPES.forsiktig;
+  const walkChance = clamp((0.13 - reputation / 700 + attemptsUsed * 0.1) * type.walkMod, 0.04, 0.48);
+  if (Math.random() < walkChance) return { result: "walk", line: pick(["Tyvärr, vi går vidare med en annan partner.", "Det här känns inte rätt för oss längre — vi drar oss ur.", "Efter internt samtal väljer vi att avstå."]) };
+  const improveChance = clamp((0.22 + reputation / 400) * type.improveMod, 0.12, 0.5);
   if (Math.random() < improveChance) {
-    return { result: "improved", offer: { ...offer, income: Math.round(offer.income * rnd(1.1, 1.25)), bonus: Math.round(offer.bonus * rnd(1.05, 1.15)) } };
+    return { result: "improved", offer: { ...offer, income: Math.round(offer.income * rnd(1.1, 1.25)), bonus: Math.round(offer.bonus * rnd(1.05, 1.15)) }, line: pick(["Er profil är stark just nu — vi höjer erbjudandet.", "Okej, vi kan sträcka oss lite längre för det här.", "Ni har ett argument — här är ett bättre bud."]) };
   }
-  return { result: "same" };
+  if (Math.random() < 0.4) {
+    const skewUp = Math.random() < 0.5;
+    const newOffer = skewUp
+      ? { ...offer, income: Math.round(offer.income * rnd(0.82, 0.93)), bonus: Math.round(offer.bonus * rnd(1.35, 1.7)) }
+      : { ...offer, income: Math.round(offer.income * rnd(1.08, 1.18)), bonus: Math.round(offer.bonus * rnd(0.55, 0.75)) };
+    return { result: "counter", offer: newOffer, line: skewUp ? pick(["Vad sägs om lägre löpande intäkt men en större signeringsbonus istället?", "Vi kan lägga mer upfront men mindre per omgång."]) : pick(["Vi höjer hellre den löpande delen, men sänker bonusen.", "Så här: mer varje omgång, mindre i handen direkt."]) };
+  }
+  return { result: "same", line: pick(["Det här är vårt bästa erbjudande.", "Vi håller fast vid villkoren vi redan lagt.", "Samma summa står kvar — ta det eller lämna det."]) };
 }
 
 // ---------- Staff ----------
-const STAFF_ROLE_LABEL = { assistant: "Assisterande tränare", physio: "Fysioterapeut", scout: "Huvudscout" };
+const STAFF_ROLE_LABEL = { assistant: "Assisterande tränare", physio: "Fysioterapeut", scout: "Huvudscout", gkCoach: "Målvaktstränare", analyst: "Analytiker", fitnessCoach: "Fystränare" };
 const STAFF_ROLE_DESC = {
   assistant: "Bättre matchdagsdisciplin — färre gula/röda kort och en liten prestationsboost.",
   physio: "Minskar skaderisken i match och kortar återhämtningstiden vid skador.",
   scout: "Höjer kvalitetstaket på spelare ni hittar, både i A-laget och på ungdomsmarknaden.",
+  gkCoach: "Höjer lagets försvarsstyrka i matcher genom bättre målvaktsspel.",
+  analyst: "Höjer lagets anfallsstyrka i matcher genom bättre matchförberedelse.",
+  fitnessCoach: "Snabbare återhämtning mellan matcher och mindre uttröttning under match.",
 };
 function generateStaffOffers(role, homeCountry) {
   return Array.from({ length: 3 }, () => {
@@ -966,6 +1219,11 @@ const OWNER_TYPES = {
   kravande: { label: "Krävande ägare", desc: "Ger stora resurser men vill se resultat direkt — förtroendet svänger snabbt åt båda hållen.", patienceDecay: 1.4 },
   sparsam: { label: "Sparsam ägare", desc: "Håller hårt i pengarna och kräver ibland utdelning, men är svår att reta upp.", patienceDecay: 0.4 },
 };
+function ownerRequestChance(owner, type) {
+  const base = owner.patience / 110;
+  const typeMod = type === "budget" ? (owner.type === "talmodig" ? 1.2 : owner.type === "sparsam" ? 0.55 : 0.9) : (owner.type === "kravande" ? 0.65 : 1.0);
+  return clamp(base * typeMod, 0.08, 0.85);
+}
 function generateOwner(reputation) {
   const type = pick(Object.keys(OWNER_TYPES));
   const nationality = pick(NATIONALITY_KEYS);
@@ -1056,13 +1314,26 @@ function tvDealIncome(reputation, division) {
   const divMult = { 1: 1, 2: 0.4, 3: 0.15 }[division];
   return Math.round((40 + reputation * 1.1) * divMult);
 }
-function merchandiseIncome(fanbase, shopLevel) { return Math.round(fanbase * 0.6 + shopLevel * 15); }
+const MERCH_PRICING = {
+  budget: { label: "Budget", desc: "Låga priser, hög volym — bra för fanlojalitet.", mult: 0.82 },
+  standard: { label: "Standard", desc: "Balanserat utbud och pris.", mult: 1.0 },
+  premium: { label: "Premium", desc: "Höga priser — kräver stark fanbase för att löna sig fullt ut.", mult: 1.32 },
+};
+function merchandiseIncome(fanbase, shopLevel, pricing = "standard") {
+  const base = fanbase * 0.6 + shopLevel * 15;
+  const tier = MERCH_PRICING[pricing] || MERCH_PRICING.standard;
+  const fanSensitivity = pricing === "premium" ? clamp(fanbase / 70, 0.6, 1.15) : 1;
+  return Math.round(base * tier.mult * fanSensitivity);
+}
 function generateTourOffers(reputation) {
   return [
-    { id: uid(), name: "Turné i Asien", cost: 250, incomeMin: 300, incomeMax: 700, repBonus: 3 },
-    { id: uid(), name: "Turné i Nordamerika", cost: 180, incomeMin: 200, incomeMax: 500, repBonus: 2 },
-    { id: uid(), name: "Lokal försäsongsturné", cost: 60, incomeMin: 60, incomeMax: 160, repBonus: 1 },
+    { id: uid(), name: "Turné i Asien", cost: 250, incomeMin: 300, incomeMax: 700, repBonus: 3, opponents: ["Tokyo All-Stars", "Seoul United", "Shanghai Select XI", "Bangkok Select XI"] },
+    { id: uid(), name: "Turné i Nordamerika", cost: 180, incomeMin: 200, incomeMax: 500, repBonus: 2, opponents: ["LA All-Stars", "New York Select XI", "Toronto United", "Mexico City All-Stars"] },
+    { id: uid(), name: "Lokal försäsongsturné", cost: 60, incomeMin: 60, incomeMax: 160, repBonus: 1, opponents: ["Grannlaget IF", "Regionsserien XI", "Lokala Utmanarna", "Distriktslaget"] },
   ];
+}
+function simulateTourMatches(offer) {
+  return offer.opponents.map(name => ({ opponent: name, us: rndInt(0, 4), them: rndInt(0, 3) }));
 }
 
 // ---------- National team call-ups ----------
@@ -1088,6 +1359,7 @@ function processInternationalBreak(squad) {
 // ---------- Random narrative events ----------
 function processRandomEvents(squad, youthSquad, sponsors, incomingOffers, clubs, userClubId, reputation, windowOpen) {
   const messages = [];
+  const importantEvents = [];
   let newYouth = youthSquad;
   let newSponsors = sponsors;
   let newOffers = incomingOffers;
@@ -1115,6 +1387,7 @@ function processRandomEvents(squad, youthSquad, sponsors, incomingOffers, clubs,
     newSquad = newSquad.filter(pl => pl.id !== p.id);
     budgetDelta += p.releaseClause;
     messages.push(`En klubb löste ut ${p.name}s utköpsklausul för ${formatMoney(p.releaseClause)}!`);
+    importantEvents.push({ text: `En klubb löste ut ${p.name}s utköpsklausul för ${formatMoney(p.releaseClause)}!`, category: "Övergångar" });
   }
 
   const unhappy = squad.filter(p => p.personality !== "Lojal" && (p.morale <= 22 || (p.personality === "Ambitiös" && p.morale <= 38)));
@@ -1127,6 +1400,7 @@ function processRandomEvents(squad, youthSquad, sponsors, incomingOffers, clubs,
     const offer = { id: uid(), playerId: p.id, playerName: p.name, buyerId: buyer.id, buyerName: buyer.name, offer: Math.round(p.value * rnd(0.75, 0.95)), requested: true };
     newOffers = [...incomingOffers, offer];
     messages.push(`${p.name} har begärt en övergång — ${buyer.name} hör genast av sig.`);
+    importantEvents.push({ text: `${p.name} har begärt en övergång — missnöjd med sin situation, ${buyer.name} hör genast av sig.`, category: "Missnöje" });
   }
 
   const emptySlots = Object.entries(sponsors).filter(([, v]) => !v).map(([k]) => k);
@@ -1137,7 +1411,7 @@ function processRandomEvents(squad, youthSquad, sponsors, incomingOffers, clubs,
     messages.push(`${offer.name} hör spontant av sig och blir ny sponsor (+${formatMoney(offer.income)}/omg)!`);
   }
 
-  return { newYouth, newSponsors, newOffers, newSquad, messages, budgetDelta };
+  return { newYouth, newSponsors, newOffers, newSquad, messages, budgetDelta, importantEvents };
 }
 
 function generateYouthProspect(akademiLevel, intakeBonus = 0, homeCountry) {
@@ -1153,6 +1427,18 @@ function generateYouthProspect(akademiLevel, intakeBonus = 0, homeCountry) {
   const nationality = homeCountry ? (Math.random() < foreignChance ? pick(NATIONALITY_KEYS.filter(n => n !== homeCountry)) : homeCountry) : pick(NATIONALITY_KEYS);
   const age = rndInt(15, 17);
   return { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition: randomSpecificPosition(pos), attack, defense, potential, yearsInAcademy: 0, value, apps: 0, goals: 0, ratingSum: 0 };
+}
+function developmentDeltas(pl, rating) {
+  const overall = (pl.attack + pl.defense) / 2;
+  const potential = pl.potential ?? Math.min(99, overall + 5);
+  const gap = potential - overall;
+  const gapFactor = clamp(gap / 15, -0.6, 1.4); // slows near potential, can even reverse slightly if over it
+  const baseDelta = rating >= 7.4 ? rnd(0.1, 0.4) : rating < 5.4 ? -rnd(0.05, 0.25) : 0;
+  const growthDelta = baseDelta > 0 ? baseDelta * Math.max(gapFactor, 0.12) : baseDelta;
+  const ageDecline = pl.age >= 31 ? -rnd(0.02, 0.05) * (pl.age - 30) : 0;
+  const total = growthDelta + ageDecline;
+  const attackShare = pl.pos === "AN" ? 0.65 : pl.pos === "MF" ? 0.5 : pl.pos === "FÖ" ? 0.3 : 0.2;
+  return { attackDelta: total * (0.6 + attackShare * 0.8), defenseDelta: total * (0.6 + (1 - attackShare) * 0.8) };
 }
 function growYouth(y, akademiLevel, spelide, coachBonus = 0) {
   const reliability = akademiLevel / 5;
@@ -1182,6 +1468,90 @@ function roundsUntilWindowOpens(round) {
   return next !== undefined ? next - round : null;
 }
 
+function seededResolveGroup(teamIds, clubs, seed, revealedMatchdays) {
+  return withSeededRandom(seed, () => {
+    const fullSchedule = generateGroupSchedule(teamIds);
+    const sched = fullSchedule.map((round, ri) => round.map(f => {
+      const home = clubs[f.home], away = clubs[f.away];
+      if (!home || !away) return f;
+      if (revealedMatchdays !== undefined && ri >= revealedMatchdays) return f; // not played yet
+      const hg = poisson(expectedGoals(home.strength, away.strength, true));
+      const ag = poisson(expectedGoals(away.strength, home.strength, false));
+      return { ...f, homeGoals: hg, awayGoals: ag };
+    }));
+    return { schedule: sched, standings: computeStandings(sched, teamIds) };
+  });
+}
+const CUP_LAUNCH_ROUND = { domestic: 2, cup1: 3, cup2: 6 };
+function spreadRounds(start, end, count) {
+  if (count <= 0) return [];
+  if (count === 1) return [end];
+  const step = (end - start) / (count - 1);
+  return Array.from({ length: count }, (_, i) => Math.round(start + step * i));
+}
+function cupDueSchedule(type, fieldSize) {
+  if (type === "domestic") {
+    const roundsNeeded = Math.max(1, Math.ceil(Math.log2(Math.max(2, fieldSize))));
+    return spreadRounds(2, 28, roundsNeeded); // widest field, starts earliest, final lands earliest of the three
+  }
+  if (type === "cup2") {
+    return spreadRounds(6, 33, 7); // R16(2 legs) + QF(2 legs) + SF(2 legs) + Final = 7 steps, final lands mid-pack
+  }
+  if (type === "cup1knockout") {
+    return [...spreadRounds(27, 33, 4), 38]; // QF(2 legs) + SF(2 legs) within the season, Final pinned to round 38 — a genuine "eftersäsong" week after the league's last round (37)
+  }
+  return [];
+}
+function seededResolveBracket(teamIds, clubs, seed) {
+  return withSeededRandom(seed, () => {
+    const rounds = [];
+    let current = [...teamIds];
+    while (current.length > 1) {
+      const roundMatches = [];
+      const next = [];
+      for (let i = 0; i < current.length; i += 2) {
+        const a = current[i], b = current[i + 1];
+        if (!b) { next.push(a); roundMatches.push({ home: a, away: null, winner: a }); continue; }
+        const ca = clubs[a], cb = clubs[b];
+        if (!ca || !cb) { next.push(a); roundMatches.push({ home: a, away: b, winner: a }); continue; }
+        const scoreA = ca.strength + rnd(-13, 13), scoreB = cb.strength + rnd(-13, 13);
+        const winner = scoreA >= scoreB ? a : b;
+        next.push(winner);
+        roundMatches.push({ home: a, away: b, winner });
+      }
+      rounds.push(roundMatches);
+      current = next;
+    }
+    return rounds;
+  });
+}
+function generateAllSchedules(clubs) {
+  const schedules = {};
+  LEAGUES.forEach(country => {
+    [1, 2, 3].forEach(div => {
+      const ids = clubsInPool(country.id, div, clubs).map(c => c.id);
+      schedules[`${country.id}_d${div}`] = generateSchedule(ids);
+    });
+  });
+  return schedules;
+}
+function simulateOtherDivisionsRound(allSchedules, clubs, round, skipKey) {
+  const updated = {};
+  Object.entries(allSchedules || {}).forEach(([key, schedule]) => {
+    if (key === skipKey || round >= schedule.length) { updated[key] = schedule; return; }
+    updated[key] = schedule.map((r, ri) => {
+      if (ri !== round) return r;
+      return r.map(f => {
+        const home = clubs[f.home], away = clubs[f.away];
+        if (!home || !away || f.homeGoals !== null) return f;
+        const hg = poisson(expectedGoals(home.strength, away.strength, true));
+        const ag = poisson(expectedGoals(away.strength, home.strength, false));
+        return { ...f, homeGoals: hg, awayGoals: ag };
+      });
+    });
+  });
+  return updated;
+}
 function generateSchedule(teamIds) {
   const teams = [...teamIds];
   const n = teams.length;
@@ -1202,7 +1572,7 @@ function generateSchedule(teamIds) {
 function generateGroupSchedule(teamIds) {
   const teams = [...teamIds];
   const n = teams.length;
-  const rounds = [];
+  const firstLeg = [];
   for (let r = 0; r < n - 1; r++) {
     const roundFixtures = [];
     for (let i = 0; i < n / 2; i++) {
@@ -1210,10 +1580,11 @@ function generateGroupSchedule(teamIds) {
       if (r % 2 === 1) [home, away] = [away, home];
       roundFixtures.push({ home, away, homeGoals: null, awayGoals: null });
     }
-    rounds.push(roundFixtures);
+    firstLeg.push(roundFixtures);
     teams.splice(1, 0, teams.pop());
   }
-  return rounds;
+  const secondLeg = firstLeg.map(round => round.map(f => ({ home: f.away, away: f.home, homeGoals: null, awayGoals: null })));
+  return [...firstLeg, ...secondLeg];
 }
 function computeStandings(schedule, clubIds) {
   const table = {};
@@ -1246,7 +1617,7 @@ function instantSeasonTable(clubIds, clubs) {
   return Object.values(table).sort((x, y) => (y.pts - x.pts) || ((y.gf - y.ga) - (x.gf - x.ga)) || (y.gf - x.gf));
 }
 
-function userStrength(xi, tactic, spelide, tacticalSettings, fitScore) {
+function userStrength(xi, tactic, spelide, tacticalSettings, fitScore, staff) {
   let attack = xi.reduce((s, p) => s + p.attack * (p.pos === "AN" ? 1.3 : p.pos === "MF" ? 1.1 : 0.5), 0) / xi.length;
   let defense = xi.reduce((s, p) => s + p.defense * (p.pos === "FÖ" || p.pos === "MV" ? 1.3 : p.pos === "MF" ? 0.9 : 0.5), 0) / xi.length;
   if (tactic === "anfall") { attack *= 1.16; defense *= 0.88; }
@@ -1260,6 +1631,12 @@ function userStrength(xi, tactic, spelide, tacticalSettings, fitScore) {
   if (fitScore !== undefined && fitScore !== null) {
     const fitMult = 0.75 + 0.25 * clamp(fitScore, 0.3, 1);
     attack *= fitMult; defense *= fitMult;
+  }
+  if (staff) {
+    const gkLevel = staff.gkCoach?.level || 0;
+    const analystLevel = staff.analyst?.level || 0;
+    defense *= 1 + gkLevel * 0.012;
+    attack *= 1 + analystLevel * 0.009;
   }
   return { attack: clamp(attack, 20, 99), defense: clamp(defense, 20, 99) };
 }
@@ -1554,7 +1931,7 @@ function milestoneFromRoundName(roundName) {
 }
 function eliminationText(cup) {
   if (cup.roundName === "Gruppspelet") return "Utslagna i gruppspelet";
-  return `Utslagna i ${cup.roundName.toLowerCase()}en`;
+  return `Utslagna ${roundNameWithArticle(cup.roundName)}`;
 }
 const CUP1_PRIZES = { participation: 300, quarterfinal: 550, semifinal: 1000, runnerup: 1800, winner: 3500 };
 const CUP2_PRIZES = { participation: 150, quarterfinal: 280, semifinal: 500, runnerup: 850, winner: 1700 };
@@ -1722,7 +2099,7 @@ export default function TranarbankenApp() {
       akademiParts: parsed.akademiParts || { tranare: 1, intag: 1 },
       scoutingParts: parsed.scoutingParts || { analys: 1, kontakter: 1 },
       sponsors: parsed.sponsors || { main: null, stadium: null, local: null },
-      staff: parsed.staff || { assistant: null, physio: null, scout: null },
+      staff: { assistant: null, physio: null, scout: null, gkCoach: null, analyst: null, fitnessCoach: null, ...(parsed.staff || {}) },
       boardConfidence: parsed.boardConfidence === undefined ? 60 : parsed.boardConfidence,
       plannedSub: parsed.plannedSub || null,
       incomingOffers: parsed.incomingOffers || [],
@@ -1733,6 +2110,7 @@ export default function TranarbankenApp() {
       owner: parsed.owner || generateOwner(parsed.reputation),
       takeoverBid: parsed.takeoverBid || null,
       tourOffers: parsed.tourOffers || null,
+      lastTourResult: parsed.lastTourResult || null,
       tourCompletedThisOffseason: parsed.tourCompletedThisOffseason || false,
       formationFamiliarity: parsed.formationFamiliarity || 0,
       teamTalk: parsed.teamTalk || "neutral",
@@ -1740,7 +2118,7 @@ export default function TranarbankenApp() {
       pendingMidGame: null,
       cupQueue: parsed.cupQueue || [],
       scoutMission: parsed.scoutMission || null,
-      ticketPrice: parsed.ticketPrice || "medel",
+      ticketPrice: parsed.ticketPrice || "t3",
       arenaConstruction: parsed.arenaConstruction || null,
       outgoingLoans: parsed.outgoingLoans || [],
       loanOffers: parsed.loanOffers || [],
@@ -1750,6 +2128,15 @@ export default function TranarbankenApp() {
       clubRecords: parsed.clubRecords || {},
       setPieceTakers: parsed.setPieceTakers || { penalties: [], freeKick: null, cornerLeft: null, cornerRight: null },
       chemistryPairs: parsed.chemistryPairs || {},
+      newsFeed: parsed.newsFeed || [],
+      captainId: parsed.captainId || null,
+      clubGoodwill: parsed.clubGoodwill || {},
+      blacklistedPlayers: parsed.blacklistedPlayers || {},
+      staffCandidates: parsed.staffCandidates || {},
+      recentMatchFinances: parsed.recentMatchFinances || [],
+      allSchedules: parsed.allSchedules || generateAllSchedules(parsed.clubs),
+      merchandisePricing: parsed.merchandisePricing || "standard",
+      seasonStaffImpact: parsed.seasonStaffImpact || { physio: 0, assistant: 0, analyst: 0, gkCoach: 0, fitnessCoach: 0 },
       sillySeasonWeeksLeft: parsed.sillySeasonWeeksLeft || 0,
       season1Qualifiers: parsed.season1Qualifiers || null,
       repHistory: parsed.repHistory && parsed.repHistory.length ? parsed.repHistory : [parsed.reputation],
@@ -1815,7 +2202,17 @@ export default function TranarbankenApp() {
     return computeStandings(g.schedule, clubsInPool(g.leagueId, club.division, g.clubs).map(c => c.id));
   }, [g.schedule, g.clubs, g.setupDone, g.leagueId, g.userClubId]);
 
-  function showToast(msg) { setToast(msg); setTimeout(() => setToast(null), 2400); }
+  function showToast(msg) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2400);
+  }
+  function pushNews(text, category) {
+    if (!text) return;
+    setG(prev => ({ ...prev, newsFeed: [{ id: uid(), text, category, season: prev.season, round: prev.round, read: false }, ...(prev.newsFeed || [])].slice(0, 80) }));
+  }
+  function markNewsRead() {
+    setG(prev => ({ ...prev, newsFeed: (prev.newsFeed || []).map(n => ({ ...n, read: true })) }));
+  }
 
   function switchToSave(id) {
     (async () => {
@@ -1902,7 +2299,7 @@ export default function TranarbankenApp() {
       asien: Array.from({ length: 6 }, () => makeScoutPlayer(pick(POS_ORDER), "asien", rating, clubs)),
     };
     const userPoolIds = clubsInPool(countryId, division, clubs).map(c => c.id);
-    const startSquad = makeSquad(countryId, club.archetype, division);
+    const startSquad = club.squad ? club.squad.map(p => ({ ...p })) : makeSquad(countryId, club.archetype, division, ARCHETYPES[club.archetype].startDev.akademi);
     const manager = initialManager(managerName, countryId, division);
     const pressOpt = presentationPressOptions(boardTargetLabel(club.archetype, division).label).find(o => o.key === pressChoice);
     const startFanbase = clamp(fanbase + (pressOpt?.fanbaseDelta || 0), 5, 95);
@@ -1913,21 +2310,21 @@ export default function TranarbankenApp() {
     const initial = {
       setupDone: true, leagueId: countryId, userClubId: clubId, season: 1, round: 0, tactic: "balanserad", spelide: "balanserad",
       budget: Math.round(arche.startBudget * divMult), lastDelta: 0, dev, reputation, fanbase: startFanbase, lastCup2ChampionId: null,
-      clubs, schedule: generateSchedule(userPoolIds), squad: startSquad, startingXI: pickBestXI(startSquad).map(p => p.id), market,
-      arenaStands: { north: startPartLevel(5), south: startPartLevel(5), east: startPartLevel(5), west: startPartLevel(5) }, arenaFacilities: { restaurant: startPartLevel(3), shop: startPartLevel(3) },
+      clubs, schedule: generateSchedule(userPoolIds), allSchedules: generateAllSchedules(clubs), squad: startSquad, startingXI: pickBestXI(startSquad).map(p => p.id), market,
+      arenaStands: startArenaStands(club, division), arenaFacilities: { restaurant: startPartLevel(3), shop: startPartLevel(3) },
       akademiParts: { tranare: startPartLevel(3), intag: startPartLevel(3) }, scoutingParts: { analys: startPartLevel(3), kontakter: startPartLevel(3) },
       sponsors: { main: null, stadium: null, local: null },
-      staff: { assistant: null, physio: null, scout: null }, boardConfidence: startBoardConfidence, plannedSub: null, incomingOffers: [], loans: [], loanOffers: [],
-      seasonIncomeTotal: 0, seasonWageTotal: 0, difficulty: "normal", savedScoutProfiles: [], clubRecords: {},
-      setPieceTakers: { penalties: [], freeKick: null, cornerLeft: null, cornerRight: null }, chemistryPairs: {},
+      staff: { assistant: null, physio: null, scout: null, gkCoach: null, analyst: null, fitnessCoach: null }, boardConfidence: startBoardConfidence, plannedSub: null, incomingOffers: [], loans: [], loanOffers: [],
+      seasonIncomeTotal: 0, seasonWageTotal: 0, difficulty: "normal", savedScoutProfiles: [], clubRecords: {}, seasonStaffImpact: { physio: 0, assistant: 0, analyst: 0, gkCoach: 0, fitnessCoach: 0 },
+      setPieceTakers: { penalties: [], freeKick: null, cornerLeft: null, cornerRight: null }, chemistryPairs: {}, newsFeed: [], captainId: null, clubGoodwill: {}, blacklistedPlayers: {}, staffCandidates: {}, recentMatchFinances: [],
       formationCode: "4-4-2", tacticalSettings: { ...DEFAULT_TACTICAL_SETTINGS }, lineupCells: null,
-      owner: generateOwner(reputation), takeoverBid: null, tourOffers: null, tourCompletedThisOffseason: false,
+      owner: generateOwner(reputation), takeoverBid: null, tourOffers: null, tourCompletedThisOffseason: false, lastTourResult: null,
       formationFamiliarity: 0, teamTalk: "neutral", pendingLateGame: null, pendingMidGame: null, restedForMatch: false,
       repHistory: [reputation], fanHistory: [startFanbase],
       manager, assistantManager: null,
       youthSquad: [generateYouthProspect(dev.akademi, 1, countryId)], youthMarket: Array.from({ length: 6 }, () => generateYouthProspect(clamp(dev.scouting, 1, 5), 1)),
       lastMatchReport: null, view: "home", activeTab: "home", pendingAfterResult: "home",
-      cup: null, cupQueue: initialCupQueue, season1Qualifiers, lastSeasonSummary: null, seasonEndSnapshot: null, history: [], scoutMission: null, ticketPrice: "medel", arenaConstruction: null, outgoingLoans: [], sillySeasonWeeksLeft: 4,
+      cups: { domestic: null, cup1: null, cup2: null }, activeCupType: null, qualifiedCupTypes: initialCupQueue, season1Qualifiers, lastSeasonSummary: null, seasonEndSnapshot: null, history: [], scoutMission: null, ticketPrice: "t3", merchandisePricing: "standard", arenaConstruction: null, outgoingLoans: [], sillySeasonWeeksLeft: 4,
     };
     const id = uid();
     const entry = { id, ...saveSummary(initial) };
@@ -1955,12 +2352,12 @@ export default function TranarbankenApp() {
   const hasOfferNotif = g.incomingOffers.length > 0;
   const hasContractNotif = g.squad.some(p => p.contractYears <= 1);
   const hasClubNotif = !!g.takeoverBid || Object.values(g.staff).some(m => m?.needsRaise);
-  const NAV_NOTIFS = { transfers: hasOfferNotif, squad: hasContractNotif, club: hasClubNotif };
-
-  function setupCup(type, base) {
+  const NAV_NOTIFS = { transfers: hasOfferNotif, squad: hasContractNotif, club: hasClubNotif, news: (g.newsFeed || []).some(n => !n.read) };
+function setupCup(type, base) {
     if (type === "domestic") {
       const field = domesticCupField(base.leagueId, base.clubs);
-      return { type: "domestic", label: LEAGUES.find(l => l.id === base.leagueId).cupName, phase: "knockoutSimple", teams: field, roundName: field.length <= 4 ? bracketName(field.length) : `Omgång 1`, roundIndex: 1, userReport: null, pendingWinners: null, eliminated: false, champion: null };
+      const dueRounds = cupDueSchedule("domestic", field.length);
+      return { type: "domestic", label: LEAGUES.find(l => l.id === base.leagueId).cupName, phase: "knockoutSimple", teams: field, roundName: field.length <= 4 ? bracketName(field.length) : `Omgång 1`, roundIndex: 1, userReport: null, pendingWinners: null, eliminated: false, champion: null, dueRounds, dueIndex: 0 };
     }
     const { cup1, cup2 } = base.season1Qualifiers || buildContinentalQualifiers(base.clubs, base.seasonEndSnapshot.worldStandings, base.seasonEndSnapshot.otherCupWinners, base.leagueId, base.lastSeasonSummary.domesticCupWinnerId, base.lastCup2ChampionId);
     if (type === "cup1") {
@@ -1968,11 +2365,14 @@ export default function TranarbankenApp() {
       const userGroupIndex = groups.findIndex(gr => gr.includes(base.userClubId));
       const otherGroupsQualifiers = groups.filter((_, i) => i !== userGroupIndex).flatMap(gr => topTwoByStrengthNoise(gr, base.clubs));
       const groupSchedule = generateGroupSchedule(groups[userGroupIndex]);
-      return { type: "cup1", label: "Kimby Mästerskapet", finalArena: pick(CUP1_ARENAS), phase: "groups", groups, userGroupIndex, groupSchedule, groupRound: 0, otherGroupsQualifiers, roundName: "Gruppspelet", pendingReport: null, eliminated: false, champion: null };
+      const groupDueRounds = spreadRounds(3, 24, groupSchedule.length);
+      const knockoutDueRounds = cupDueSchedule("cup1knockout", 8);
+      return { type: "cup1", label: "Kimby Mästerskapet", finalArena: pick(CUP1_ARENAS), phase: "groups", groups, userGroupIndex, groupSchedule, groupRound: 0, otherGroupsQualifiers, roundName: "Gruppspelet", pendingReport: null, eliminated: false, champion: null, dueRounds: groupDueRounds, knockoutDueRounds, dueIndex: 0 };
     }
     const { pendingOtherWinners, tie } = setupKnockoutRound(cup2, base.clubs, base.userClubId);
-    return { type: "cup2", label: "Kimby Cupen", finalArena: pick(CUP2_ARENAS), phase: "knockout", teams: cup2, roundName: bracketName(16), pendingOtherWinners, tie, pendingReport: null, eliminated: false, champion: null };
-  }
+    const dueRounds = cupDueSchedule("cup2", cup2.length);
+    return { type: "cup2", label: "Kimby Cupen", finalArena: pick(CUP2_ARENAS), phase: "knockout", teams: cup2, roundName: bracketName(16), pendingOtherWinners, tie, pendingReport: null, eliminated: false, champion: null, dueRounds, dueIndex: 0 };
+}
 
   function beginRound() {
     if (seasonOver) return;
@@ -1998,23 +2398,26 @@ export default function TranarbankenApp() {
     const userIsHome = fixture.home === g.userClubId;
     const oppId = userIsHome ? fixture.away : fixture.home;
     const opp = newClubs[oppId];
-    const { attack, defense } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad));
-    const talk = TEAM_TALK_OPTIONS[g.teamTalk] || TEAM_TALK_OPTIONS.neutral;
+    const { attack, defense } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff);
+    const { attack: attackNoStaff, defense: defenseNoStaff } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), null);
+    const analystImpactDelta = Math.max(0, attack - attackNoStaff);
+    const gkCoachImpactDelta = Math.max(0, defense - defenseNoStaff);
+    const fitnessImpactDelta = (g.staff.fitnessCoach ? g.staff.fitnessCoach.level : 0) * 1.2;
     const famBonus = 1 + familiarityBonus(g.formationFamiliarity);
     const weather = weatherForMatch(`weather${g.round}${g.userClubId}`);
-    const lambdaUserHalf = (expectedGoals(attack * talk.atkMult * famBonus, opp.strength, userIsHome) * weather.mult) / 2;
-    const lambdaOppHalf = (expectedGoals(opp.strength, defense * talk.defMult * famBonus, !userIsHome) * weather.mult) / 2;
-    const h1User = poisson(lambdaUserHalf), h1Opp = poisson(lambdaOppHalf);
 
     setG(prev => ({
-      ...prev, clubs: newClubs, view: "halftime",
-      pendingRound: { newSchedule, oppId, oppName: opp.name, oppStrength: opp.strength, userIsHome, weather, lambdaUserHalf, lambdaOppHalf, h1User, h1Opp, xiIds: xi.map(p => p.id) },
+      ...prev, clubs: newClubs, view: "livematch",
+      pendingRound: { newSchedule, oppId, oppName: opp.name, oppStrength: opp.strength, userIsHome, weather, xiIds: xi.map(p => p.id), analystImpactDelta, gkCoachImpactDelta, fitnessImpactDelta },
     }));
   }
 
   function finalizeMatch(p, secondHalfXiIds, subText, userGoals, oppGoals, lateGameNote) {
     const newClubs = g.clubs;
     const staff = g.staff;
+    const analystImpactDelta = p.analystImpactDelta || 0;
+    const gkCoachImpactDelta = p.gkCoachImpactDelta || 0;
+    const fitnessImpactDelta = p.fitnessImpactDelta || 0;
     const result = userGoals > oppGoals ? "win" : userGoals < oppGoals ? "loss" : "draw";
     const unionIds = Array.from(new Set([...p.xiIds, ...secondHalfXiIds]));
     const unionXi = g.squad.filter(pl => unionIds.includes(pl.id));
@@ -2047,12 +2450,14 @@ export default function TranarbankenApp() {
     const physioLevel = staff.physio ? staff.physio.level : 0;
     const difficultySettings = DIFFICULTY_SETTINGS[g.difficulty] || DIFFICULTY_SETTINGS.normal;
     let injuredPlayer = null;
+    let physioImpactDelta = 0;
     unionXi.forEach(pl => {
-      if (injuredPlayer) return;
       const attrs = getAttrs(pl);
       const staminaRisk = clamp((70 - (pl.stamina ?? 100)) / 3000, 0, 0.015);
       const chance = clamp((0.045 - attrs.physical / 2200 - physioLevel * 0.003 + staminaRisk) * difficultySettings.injuryMult * injuryProneMult(pl), 0.005, 0.12);
-      if (Math.random() < chance) injuredPlayer = pl;
+      const baselineChance = clamp((0.045 - attrs.physical / 2200 + staminaRisk) * difficultySettings.injuryMult * injuryProneMult(pl), 0.005, 0.12);
+      physioImpactDelta += Math.max(0, baselineChance - chance);
+      if (!injuredPlayer && Math.random() < chance) injuredPlayer = pl;
     });
     // card rolls (assisterande tränare lowers chance, taktiska val kan höja/sänka)
     const assistantLevel = staff.assistant ? staff.assistant.level : 0;
@@ -2060,13 +2465,18 @@ export default function TranarbankenApp() {
     const refereeStrictness = rnd(0.75, 1.3);
     const tacticCardMult = combinedTacticalMods(g.tacticalSettings).cardMult * talkCardMult * refereeStrictness;
     const cardEvents = {};
+    let assistantImpactDelta = 0;
     unionXi.forEach(pl => {
       const personalityCardMult = pl.personality === "Problemspelare" ? 1.6 : 1;
       const yellowChance = clamp((0.09 - assistantLevel * 0.008) * tacticCardMult * personalityCardMult, 0.02, 0.2);
       const redChance = clamp((0.012 - assistantLevel * 0.001) * tacticCardMult * personalityCardMult, 0.002, 0.03);
+      const baselineYellow = clamp(0.09 * tacticCardMult * personalityCardMult, 0.02, 0.2);
+      const baselineRed = clamp(0.012 * tacticCardMult * personalityCardMult, 0.002, 0.03);
+      assistantImpactDelta += Math.max(0, (baselineYellow - yellowChance) + (baselineRed - redChance));
       if (Math.random() < redChance) cardEvents[pl.id] = "red";
       else if (Math.random() < yellowChance) cardEvents[pl.id] = "yellow";
     });
+
 
     const isDerby = g.clubs[g.userClubId].rivalId === p.oppId;
     const xiForStats = getXI(g.squad, g.startingXI);
@@ -2089,11 +2499,12 @@ export default function TranarbankenApp() {
     let incomeSponsring = g.dev.sponsring * 35;
     let incomeSponsorDeals = (g.sponsors.main?.income || 0) + (g.sponsors.stadium?.income || 0) + (g.sponsors.local?.income || 0);
     let incomeTv = tvDealIncome(g.reputation, userClub.division);
-    let incomeShop = merchandiseIncome(g.fanbase, g.arenaFacilities.shop);
+    let incomeShop = merchandiseIncome(g.fanbase, g.arenaFacilities.shop, g.merchandisePricing);
     let incomeTickets = 0, incomeRestaurant = 0;
+    let attendance = 0;
     if (p.userIsHome) {
       const userArchetype = ARCHETYPES[g.clubs[g.userClubId].archetype];
-      const ticketTier = TICKET_TIERS[g.ticketPrice] || TICKET_TIERS.medel;
+      const ticketTier = TICKET_TIERS[g.ticketPrice] || TICKET_TIERS.t3;
       const derbyDraw = isDerby ? 0.3 : 0;
       const oppDraw = clamp((p.oppStrength - 50) / 200, 0, 0.25);
       const form5 = recentForm(g.schedule, g.round, g.userClubId);
@@ -2102,7 +2513,7 @@ export default function TranarbankenApp() {
       const posNow = computeStandings(g.schedule, leaguePoolIds).findIndex(r => r.id === g.userClubId) + 1;
       const positionDraw = posNow >= 1 && posNow <= 3 ? 0.15 : posNow >= 4 && posNow <= 6 ? 0.07 : 0;
       const crowdDraw = Math.min(derbyDraw + oppDraw + formDraw + positionDraw, 0.45);
-      const attendance = Math.min(arenaCapacityOf(g.dev, g.arenaStands), Math.round((3000 + g.fanbase * 180) * ticketTier.fillMult * (1 + crowdDraw)));
+      attendance = Math.min(arenaCapacityOf(g.dev, g.arenaStands), Math.round((3000 + g.fanbase * 180) * ticketTier.fillMult * (1 + crowdDraw)));
       incomeTickets = Math.round(attendance * 0.018 * userArchetype.incomeMult * ticketTier.incomeMult) + Object.values(g.arenaStands).reduce((s, l) => s + l, 0) * 12;
       incomeRestaurant = g.arenaFacilities.restaurant * 18;
       incomeShop += g.arenaFacilities.shop * 18;
@@ -2112,19 +2523,24 @@ export default function TranarbankenApp() {
     const counts = {}; matchReport.scorers.forEach(n => { counts[n] = (counts[n] || 0) + 1; });
     const assistCounts = {}; assistProviders.forEach(p => { if (p) assistCounts[p.name] = (assistCounts[p.name] || 0) + 1; });
     const trainingInjuryNames = [];
+    let physioTrainingImpactDelta = 0;
     const newSquad = g.squad.map(pl => {
       if (!unionIds.includes(pl.id)) {
         let updated = pl.injuryWeeks > 0 ? { ...pl, injuryWeeks: Math.max(0, pl.injuryWeeks - 1) } : pl;
         updated = updated.suspendedMatches > 0 ? { ...updated, suspendedMatches: Math.max(0, updated.suspendedMatches - 1) } : updated;
         if (updated.internationalDuty) updated = { ...updated, internationalDuty: false, fatigued: true };
-        updated = { ...updated, stamina: clamp((updated.stamina ?? 100) + rndInt(6, 10), 0, 100) };
+        const fitnessCoachLevel = staff.fitnessCoach ? staff.fitnessCoach.level : 0;
+        updated = { ...updated, stamina: clamp((updated.stamina ?? 100) + rndInt(6, 10) + fitnessCoachLevel * 1.2, 0, 100) };
         if (!updated.injuryWeeks && !updated.suspendedMatches) {
           const physioLevel = staff.physio ? staff.physio.level : 0;
           const trainingRisk = clamp((0.006 - physioLevel * 0.0008 + ((70 - (updated.stamina ?? 100)) / 9000)) * difficultySettings.injuryMult * injuryProneMult(updated), 0.0003, 0.025);
+          const baselineTrainingRisk = clamp((0.006 + ((70 - (updated.stamina ?? 100)) / 9000)) * difficultySettings.injuryMult * injuryProneMult(updated), 0.0003, 0.025);
+          physioTrainingImpactDelta += Math.max(0, baselineTrainingRisk - trainingRisk);
           if (Math.random() < trainingRisk) {
             const weeks = pick([1, 1, 2]);
             updated = { ...updated, injuryWeeks: weeks };
             trainingInjuryNames.push(`${updated.name} (${weeks} omg)`);
+            pushNews(`${updated.name} skadades på träning — borta i ca ${weeks} omgångar.`, "Skada");
           }
         }
         return updated;
@@ -2138,20 +2554,23 @@ export default function TranarbankenApp() {
       const staminaNow = pl.stamina ?? 100;
       const staminaBonus = staminaNow < 30 ? -0.25 : staminaNow < 50 ? -0.1 : 0;
       const clutchBonus = isDerby ? clutchFactor(pl) * 0.3 : 0;
+      const captainBonus = g.captainId === pl.id ? 0.15 : 0;
       const chemBonus = chemistryBonusFor(pl.id);
-      const rating = clamp(6.0 + rnd(-0.6, 0.6) + (result === "win" ? 0.35 : result === "loss" ? -0.25 : 0) + goals * 1.1 + moraleBonus + fatigueBonus + staminaBonus + clutchBonus + chemBonus, 3.5, 9.8);
-      const attackDelta = rating >= 7.4 ? rnd(0.1, 0.4) : rating < 5.4 ? -rnd(0.05, 0.25) : 0;
+      const rating = clamp(6.0 + rnd(-0.6, 0.6) + (result === "win" ? 0.35 : result === "loss" ? -0.25 : 0) + goals * 1.1 + moraleBonus + fatigueBonus + staminaBonus + clutchBonus + captainBonus + chemBonus, 3.5, 9.8);
+      const { attackDelta, defenseDelta } = developmentDeltas(pl, rating);
       matchReport.ratings.push({ id: pl.id, name: pl.name, pos: pl.pos, rating: Math.round(rating * 10) / 10, goals });
       const gotInjured = injuredPlayer && injuredPlayer.id === pl.id;
       const baseInjuryWeeks = gotInjured ? pick([1, 1, 2, 2, 3, 5, 8]) : pl.injuryWeeks;
       const injuryWeeks = gotInjured ? Math.max(1, Math.round(baseInjuryWeeks * (1 - physioLevel * 0.06))) : baseInjuryWeeks;
+      if (gotInjured) pushNews(`${pl.name} skadades i matchen — borta i ca ${injuryWeeks} omgångar.`, "Skada");
       const card = cardEvents[pl.id];
       let yellowCards = pl.yellowCards, suspendedMatches = pl.suspendedMatches;
       if (card === "red") { suspendedMatches += rndInt(1, 2); }
       else if (card === "yellow") { yellowCards += 1; if (yellowCards >= 5) { suspendedMatches += 1; yellowCards -= 5; } }
-      const newStamina = clamp(staminaNow - rndInt(4, 8), 0, 100);
+      const fitnessCoachLevel = staff.fitnessCoach ? staff.fitnessCoach.level : 0;
+      const newStamina = clamp(staminaNow - Math.max(1, rndInt(4, 8) - fitnessCoachLevel * 0.4), 0, 100);
       const outOfPos = (pl.personality === "Ambitiös" && (cellFitByPlayer[pl.id] ?? 1) < 0.6) ? 1 : 0;
-      return { ...pl, apps: pl.apps + 1, goals: pl.goals + goals, assists: (pl.assists || 0) + assists, ratingSum: pl.ratingSum + rating, attack: clamp(pl.attack + attackDelta, 20, 99), injuryWeeks, yellowCards, suspendedMatches, fatigued: false, stamina: newStamina, outOfPositionApps: (pl.outOfPositionApps || 0) + outOfPos };
+      return { ...pl, apps: pl.apps + 1, goals: pl.goals + goals, assists: (pl.assists || 0) + assists, ratingSum: pl.ratingSum + rating, attack: clamp(pl.attack + attackDelta, 15, 99), defense: clamp(pl.defense + defenseDelta, 15, 99), injuryWeeks, yellowCards, suspendedMatches, fatigued: false, stamina: newStamina, outOfPositionApps: (pl.outOfPositionApps || 0) + outOfPos };
     });
     matchReport.ratings.sort((a, b) => b.rating - a.rating);
     matchReport.motm = matchReport.ratings[0] || null;
@@ -2181,8 +2600,16 @@ export default function TranarbankenApp() {
       userIsHome: p.userIsHome, tickets: incomeTickets, restaurant: incomeRestaurant, shop: incomeShop,
       sponsorsAndTv: incomeSponsring + incomeSponsorDeals + incomeTv, income, wageBill, total: delta,
     };
+    const matchFinanceRecord = {
+      round: g.round, oppName: p.oppName, userIsHome: p.userIsHome, ticketPrice: g.ticketPrice,
+      attendance, income: Math.round(incomeTickets + incomeRestaurant + incomeShop + incomeSponsring + incomeSponsorDeals + incomeTv),
+    };
     const newRound = g.round + 1;
     const isSeasonEnd = newRound >= g.schedule.length;
+    const halfwayRound = Math.floor(g.schedule.length / 2);
+    if (newRound === halfwayRound) {
+      g.squad.filter(pl => pl.contractYears === 1).forEach(pl => pushNews(`${pl.name}s kontrakt går ut efter den här säsongen — dags att förhandla förlängning eller planera vidare.`, "Kontrakt"));
+    }
     const windowJustOpened = TRANSFER_WINDOWS.some(([a]) => a === newRound);
     const newIncomingOffers = windowJustOpened ? generateIncomingOffers(newSquad, updatedClubs, g.userClubId, g.reputation) : g.incomingOffers;
     const newLoanOffers = windowJustOpened ? generatePlayerLoanOffers(updatedClubs, g.userClubId, userClub.division) : (g.loanOffers || []);
@@ -2209,8 +2636,20 @@ export default function TranarbankenApp() {
     const finalIncomingOffers = eventResult.newOffers;
     const eventToast = eventResult.messages.length ? eventResult.messages.slice(0, 2).join(" ") : null;
     const eventBudgetDelta = eventResult.budgetDelta || 0;
+    (eventResult.importantEvents || []).forEach(ev => pushNews(ev.text, ev.category));
+    if (windowJustOpened && newIncomingOffers.length > (g.incomingOffers || []).length) {
+      newIncomingOffers.slice((g.incomingOffers || []).length).forEach(o => pushNews(`${o.buyerName} har lagt ett bud på ${o.playerName}: ${formatMoney(o.offer)}.`, "Övergångar"));
+    }
+    if (userGoals - oppGoals >= 3 || (isDerby && result === "win")) {
+      pushNews(`Stor seger mot ${p.oppName}, ${userGoals}-${oppGoals}! Fansen jublar.`, "Klubben");
+    }
+    if (Math.random() < 0.45) {
+      const worldItem = generateWorldNews(g.clubs, g.userClubId, g.leagueId, g.cups);
+      if (worldItem) pushNews(worldItem.text, worldItem.category);
+    }
 
-    let cup = g.cup, cupQueue = g.cupQueue || [];
+    let cups = { ...g.cups };
+    const qualifiedCupTypes = g.qualifiedCupTypes || [];
     let lastSeasonSummary = g.lastSeasonSummary, seasonEndSnapshot = g.seasonEndSnapshot;
     if (isSeasonEnd) {
       const worldStandings = {};
@@ -2230,20 +2669,30 @@ export default function TranarbankenApp() {
       const target = boardTargetLabel(userClub.archetype, userClub.division);
       lastSeasonSummary = { season: g.season, pos: finalPos, division: userClub.division, leagueName: countryName, domesticCupResult: null, domesticCupWon: false, domesticCupWinnerId: null, cup1Result: null, cup2Result: null, prizeTotal: 0, boardTargetLabel: target.label, boardTargetMet: target.check(finalPos) };
       seasonEndSnapshot = { worldStandings, otherCupWinners };
-    } else if (!cup && cupQueue.length > 0) {
-      // A cup competition is due for its next step this round, interleaved with the league.
-      const base = { ...g, clubs: updatedClubs, lastSeasonSummary, seasonEndSnapshot, season1Qualifiers: g.season === 1 ? g.season1Qualifiers : null };
-      cup = setupCup(cupQueue[0], base);
-      cupQueue = cupQueue.slice(1);
+    } else {
+      // Every qualified cup competition activates independently once its own launch round arrives —
+      // they now run in parallel, interleaved with the league, instead of one finishing before the next begins.
+      qualifiedCupTypes.forEach(type => {
+        if (!cups[type] && newRound >= (CUP_LAUNCH_ROUND[type] ?? 0)) {
+          const base = { ...g, clubs: updatedClubs, lastSeasonSummary, seasonEndSnapshot, season1Qualifiers: g.season === 1 ? g.season1Qualifiers : null };
+          cups[type] = setupCup(type, base);
+        }
+      });
     }
-    const hasCupBusiness = !isSeasonEnd && !!cup;
+    const pendingCupTypes = qualifiedCupTypes.filter(type => cups[type] && !cups[type].champion && !cups[type].eliminated);
+    const dueCupTypes = pendingCupTypes.filter(type => newRound >= cupDueRoundNow(cups[type]));
+    const hasCupBusiness = dueCupTypes.length > 0;
+    const nextActiveCupType = hasCupBusiness ? dueCupTypes.sort((a, b) => cupDueRoundNow(cups[a]) - cupDueRoundNow(cups[b]))[0] : null;
 
     let scoutMission = g.scoutMission;
     let scoutToast = null;
-    if (scoutMission && !scoutMission.complete) {
+    if (scoutMission && scoutMission.cancelling) {
+      scoutMission = null;
+      scoutToast = "Scouten är hemma igen.";
+    } else if (scoutMission && !scoutMission.complete) {
       const roundsElapsed = scoutMission.roundsElapsed + 1;
       if (roundsElapsed >= scoutMission.roundsTotal) {
-        const candidate = generateScoutCandidate(scoutMission, g.staff.scout?.level || 0, updatedClubs, userClub.division);
+        const candidate = generateScoutCandidate(scoutMission, g.staff.scout?.level || 0, updatedClubs, userClub.division, g.userClubId);
         scoutMission = { ...scoutMission, roundsElapsed, complete: true, result: candidate };
         scoutToast = candidate ? `Scoutuppdraget är klart — ${candidate.name} har hittats.` : "Scoutuppdraget är klart, men ingen spelare matchade kriterierna. Försök med bredare filter.";
       } else {
@@ -2268,13 +2717,24 @@ export default function TranarbankenApp() {
 
     setG(prev => {
       const newRep = clamp(prev.reputation + repFromBreak + derbyRep, 0, 100);
-      const ticketFanAdj = p.userIsHome ? (TICKET_TIERS[prev.ticketPrice] || TICKET_TIERS.medel).fanAdj : 0;
+      const ticketFanAdj = p.userIsHome ? (TICKET_TIERS[prev.ticketPrice] || TICKET_TIERS.t3).fanAdj : 0;
       const newFan = clamp(prev.fanbase + derbyFan + ticketFanAdj, 0, 100);
       return {
         ...prev, clubs: updatedClubs, schedule: finalSchedule, squad: finalSquad,
         startingXI: prev.startingXI.filter(id => finalSquad.some(p => p.id === id)),
         youthSquad: finalYouthSquad, sponsors: finalSponsors,
         budget: prev.budget + delta + eventBudgetDelta, lastDelta: delta, round: newRound,
+        staffCandidates: refreshStaffCandidates(prev.staffCandidates, newRound, prev.clubs[prev.userClubId].league),
+        recentMatchFinances: [matchFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10),
+        allSchedules: simulateOtherDivisionsRound(prev.allSchedules, updatedClubs, g.round, `${g.leagueId}_d${userClub.division}`),
+        seasonStaffImpact: {
+          ...prev.seasonStaffImpact,
+          physio: (prev.seasonStaffImpact?.physio || 0) + physioImpactDelta + physioTrainingImpactDelta,
+          assistant: (prev.seasonStaffImpact?.assistant || 0) + assistantImpactDelta,
+          analyst: (prev.seasonStaffImpact?.analyst || 0) + analystImpactDelta,
+          gkCoach: (prev.seasonStaffImpact?.gkCoach || 0) + gkCoachImpactDelta,
+          fitnessCoach: (prev.seasonStaffImpact?.fitnessCoach || 0) + fitnessImpactDelta,
+        },
         seasonIncomeTotal: (prev.seasonIncomeTotal || 0) + income, seasonWageTotal: (prev.seasonWageTotal || 0) + wageBill,
         reputation: newRep, fanbase: newFan,
         repHistory: [...(prev.repHistory || []), newRep].slice(-12),
@@ -2282,152 +2742,137 @@ export default function TranarbankenApp() {
         formationFamiliarity: newFamiliarity, restedForMatch: false,
         lastMatchReport: matchReport, view: "result", pendingRound: null, pendingLateGame: null, pendingMidGame: null,
         pendingAfterResult: hasCupBusiness ? "cup" : "home",
-        cup, cupQueue, lastSeasonSummary, seasonEndSnapshot, incomingOffers: finalIncomingOffers, scoutMission, loanOffers: newLoanOffers, chemistryPairs: newChemistryPairs,
+        cups, activeCupType: nextActiveCupType, qualifiedCupTypes, lastSeasonSummary, seasonEndSnapshot, incomingOffers: finalIncomingOffers, scoutMission, loanOffers: newLoanOffers, chemistryPairs: newChemistryPairs,
         arenaConstruction, arenaStands, dev: { ...prev.dev, arena: devArena },
         _toast: [breakToast, eventToast, scoutToast, constructionToast, trainingInjuryNames.length ? `Skada på träning: ${trainingInjuryNames.join(", ")}.` : null, loanReturnHomeMsg].filter(Boolean).join(" ") || null,
       };
     });
   }
 
-  function resolveSecondHalf(boost) {
-    const p = g.pendingRound;
-    const staff = g.staff;
-
-    let secondHalfXiIds = p.xiIds;
-    let subText = null;
-    if (g.plannedSub && p.h1User < p.h1Opp) {
-      const outPlayer = g.squad.find(pl => pl.id === g.plannedSub.outId);
-      const inPlayer = g.squad.find(pl => pl.id === g.plannedSub.inId);
-      if (outPlayer && inPlayer && p.xiIds.includes(outPlayer.id) && !inPlayer.injuryWeeks && !inPlayer.suspendedMatches && !inPlayer.internationalDuty) {
-        secondHalfXiIds = p.xiIds.filter(id => id !== outPlayer.id).concat([inPlayer.id]);
-        subText = `Byte i paus: ${outPlayer.name} → ${inPlayer.name}`;
-      }
-    }
-    const secondHalfXi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
-    const assistantBonus = staff.assistant ? 1 + staff.assistant.level * 0.01 : 1;
-    const talk = TEAM_TALK_OPTIONS[g.teamTalk] || TEAM_TALK_OPTIONS.neutral;
-    const famBonus = 1 + familiarityBonus(g.formationFamiliarity);
-    const strength2 = userStrength(secondHalfXi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad));
-    const lambdaUserFull = expectedGoals(strength2.attack * assistantBonus * talk.atkMult * famBonus, p.oppStrength, p.userIsHome) * p.weather.mult * (boost ? 1.35 : 1) / 2;
-    const lambdaOppFull = expectedGoals(p.oppStrength, strength2.defense * assistantBonus * talk.defMult * famBonus, !p.userIsHome) * p.weather.mult * (boost ? 0.85 : 1) / 2;
-    const lambdaUserEarly = lambdaUserFull * 14 / 45, lambdaOppEarly = lambdaOppFull * 14 / 45;
-    const lambdaUserMid = lambdaUserFull * 14 / 45, lambdaOppMid = lambdaOppFull * 14 / 45;
-    const lambdaUserLate = lambdaUserFull * 17 / 45, lambdaOppLate = lambdaOppFull * 17 / 45;
-    const h2aUser = poisson(lambdaUserEarly), h2aOpp = poisson(lambdaOppEarly);
-    const runningUser = p.h1User + h2aUser, runningOpp = p.h1Opp + h2aOpp;
-
-    setG(prev => ({
-      ...prev, view: "midgame",
-      pendingMidGame: { p, secondHalfXiIds, subText, runningUser, runningOpp, lambdaUserMid, lambdaOppMid, lambdaUserLate, lambdaOppLate },
-    }));
-  }
-
-  function resolveMidGame(choice) {
-    const mg = g.pendingMidGame;
-    if (!mg) return;
-    const mods = {
-      press: { atk: 1.16, def: 0.92, note: "Ni lade om till högre press efter timmen." },
-      consolidate: { atk: 0.88, def: 1.15, note: "Ni stramade åt och byggde tryggare försvarsspel." },
-      neutral: { atk: 1, def: 1, note: null },
-    }[choice] || { atk: 1, def: 1, note: null };
-    const h2bUser = poisson(mg.lambdaUserMid * mods.atk);
-    const h2bOpp = poisson(mg.lambdaOppMid * mods.def);
-    const runningUser2 = mg.runningUser + h2bUser, runningOpp2 = mg.runningOpp + h2bOpp;
-    const closeGame = Math.abs(runningUser2 - runningOpp2) <= 1;
-
-    if (closeGame) {
-      setG(prev => ({
-        ...prev, view: "lategame", pendingMidGame: null,
-        pendingLateGame: { p: mg.p, secondHalfXiIds: mg.secondHalfXiIds, subText: mg.subText, runningUser: runningUser2, runningOpp: runningOpp2, lambdaUserLate: mg.lambdaUserLate, lambdaOppLate: mg.lambdaOppLate, midNote: mods.note },
-      }));
-      return;
-    }
-    const h2cUser = poisson(mg.lambdaUserLate), h2cOpp = poisson(mg.lambdaOppLate);
-    finalizeMatch(mg.p, mg.secondHalfXiIds, mg.subText, runningUser2 + h2cUser, runningOpp2 + h2cOpp, mods.note);
-  }
-
-  function resolveLateGame(choice) {
-    const lg = g.pendingLateGame;
-    if (!lg) return;
-    const mods = {
-      push: { atk: 1.28, def: 0.82, note: "Ni gick all-in i slutminuterna." },
-      park: { atk: 0.8, def: 1.22, note: "Ni parkerade bussen i slutminuterna." },
-      neutral: { atk: 1, def: 1, note: null },
-    }[choice] || { atk: 1, def: 1, note: null };
-    const h2bUser = poisson(lg.lambdaUserLate * mods.atk);
-    const h2bOpp = poisson(lg.lambdaOppLate * mods.def);
-    const combinedNote = [lg.midNote, mods.note].filter(Boolean).join(" ") || null;
-    finalizeMatch(lg.p, lg.secondHalfXiIds, lg.subText, lg.runningUser + h2bUser, lg.runningOpp + h2bOpp, combinedNote);
-  }
-
   // --- domestic cup handlers ---
   function playDomesticCupRound() {
-    const { winners, userReport } = processDomesticCupRound(g.cup.teams, g.clubs, g.userClubId, g.squad, g.tactic, g.spelide, g.startingXI, g.tacticalSettings);
-    setG(prev => ({ ...prev, cup: { ...prev.cup, pendingWinners: winners, userReport } }));
+    const cup = g.cups.domestic;
+    const list = [...cup.teams];
+    const winners = [];
+    if (list.length % 2 === 1) { const idx = rndInt(0, list.length - 1); winners.push(list[idx]); list.splice(idx, 1); }
+    let userOppId = null;
+    for (let i = 0; i < list.length; i += 2) {
+      const a = list[i], b = list[i + 1];
+      if (a === g.userClubId || b === g.userClubId) { userOppId = a === g.userClubId ? b : a; continue; }
+      const A = g.clubs[a], B = g.clubs[b];
+      const ag = poisson(expectedGoals(A.strength, B.strength, false)), bg = poisson(expectedGoals(B.strength, A.strength, false));
+      winners.push(ag === bg ? pick([a, b]) : (ag > bg ? a : b));
+    }
+    const opp = g.clubs[userOppId];
+    const xi = getXI(g.squad, g.startingXI);
+    const { attack, defense } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff);
+    const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}domestic${cup.roundIndex || 1}`);
+    const pending = { oppId: userOppId, oppName: opp.name, oppStrength: opp.strength, userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
+    setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "domesticRound", winners } }));
+  }
+  function finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals) {
+    const p = g.pendingRound, ctx = g.pendingCupContext;
+    const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
+    let penalties = null, userWon;
+    if (userGoals === oppGoals) {
+      const { attack } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings);
+      const winProb = clamp(0.5 + (attack - p.oppStrength) / 200, 0.3, 0.7);
+      userWon = Math.random() < winProb;
+      penalties = userWon ? `${rndInt(4, 6)}-${rndInt(2, 4)}` : `${rndInt(2, 4)}-${rndInt(4, 6)}`;
+    } else userWon = userGoals > oppGoals;
+    const scorers = pickScorer(xi, userGoals).map(pl => pl.name);
+    const ratings = ratingsForResult(xi, scorers, userWon ? "win" : "loss");
+    const winnerId = userWon ? g.userClubId : p.oppId;
+    const winners = [...ctx.winners, winnerId];
+    const userReport = { oppName: p.oppName, userGoals, oppGoals, penalties, result: userWon ? "win" : "loss", ratings };
+    setG(prev => ({ ...prev, view: "cup", activeCupType: "domestic", pendingRound: null, pendingCupContext: null, cups: { ...prev.cups, domestic: { ...prev.cups.domestic, pendingWinners: winners, userReport } } }));
   }
   function continueDomesticCupRound() {
-    const cup = g.cup;
+    const cup = g.cups.domestic;
     if (!cup.userReport) return;
-    if (cup.userReport.result !== "win") { setG(prev => ({ ...prev, cup: { ...prev.cup, eliminated: true, userReport: null } })); return; }
+    if (cup.userReport.result !== "win") { setG(prev => ({ ...prev, cups: { ...prev.cups, domestic: { ...prev.cups.domestic, eliminated: true, userReport: null } } })); return; }
     const nextTeams = cup.pendingWinners;
-    if (nextTeams.length === 1) { setG(prev => ({ ...prev, cup: { ...prev.cup, champion: nextTeams[0], userReport: null } })); return; }
+    if (nextTeams.length === 1) { setG(prev => ({ ...prev, cups: { ...prev.cups, domestic: { ...prev.cups.domestic, champion: nextTeams[0], userReport: null } } })); return; }
     const newRoundIndex = (cup.roundIndex || 1) + 1;
-    setG(prev => ({ ...prev, cup: { ...prev.cup, teams: nextTeams, roundIndex: newRoundIndex, roundName: nextTeams.length <= 4 ? bracketName(nextTeams.length) : `Omgång ${newRoundIndex}`, userReport: null, pendingWinners: null } }));
+    setG(prev => ({ ...prev, cups: { ...prev.cups, domestic: { ...prev.cups.domestic, teams: nextTeams, roundIndex: newRoundIndex, roundName: nextTeams.length <= 4 ? bracketName(nextTeams.length) : `Omgång ${newRoundIndex}`, userReport: null, pendingWinners: null, dueIndex: (prev.cups.domestic.dueIndex ?? 0) + 1 } } }));
   }
 
   // --- cup1 group stage handlers ---
   function playGroupMatch() {
-    const cup = g.cup;
-    const xi = getXI(g.squad, g.startingXI);
-    let capturedReport = null;
-    const newGroupSchedule = cup.groupSchedule.map((r, ri) => {
-      if (ri !== cup.groupRound) return r;
-      return r.map(f => {
-        const isUser = f.home === g.userClubId || f.away === g.userClubId;
-        if (isUser) {
-          const userIsHome = f.home === g.userClubId;
-          const oppId2 = userIsHome ? f.away : f.home;
-          const opp = g.clubs[oppId2];
-          const { attack, defense } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad));
-          const userGoals = poisson(expectedGoals(attack, opp.strength, userIsHome)), oppGoals = poisson(expectedGoals(opp.strength, defense, !userIsHome));
-          const result = userGoals > oppGoals ? "win" : userGoals < oppGoals ? "loss" : "draw";
-          const scorers = pickScorer(xi, userGoals).map(p => p.name);
-          const ratings = ratingsForResult(xi, scorers, result);
-          capturedReport = { oppName: opp.name, userIsHome, userGoals, oppGoals, result, ratings };
-          return { ...f, homeGoals: userIsHome ? userGoals : oppGoals, awayGoals: userIsHome ? oppGoals : userGoals };
-        }
-        const home = g.clubs[f.home], away = g.clubs[f.away];
-        return { ...f, homeGoals: poisson(expectedGoals(home.strength, away.strength, true)), awayGoals: poisson(expectedGoals(away.strength, home.strength, false)) };
-      });
+    const cup = g.cups.cup1;
+    const round = cup.groupSchedule[cup.groupRound];
+    let userIsHome = null, oppId2 = null;
+    const resolvedOthers = round.map(f => {
+      const isUser = f.home === g.userClubId || f.away === g.userClubId;
+      if (isUser) { userIsHome = f.home === g.userClubId; oppId2 = userIsHome ? f.away : f.home; return f; }
+      const home = g.clubs[f.home], away = g.clubs[f.away];
+      return { ...f, homeGoals: poisson(expectedGoals(home.strength, away.strength, true)), awayGoals: poisson(expectedGoals(away.strength, home.strength, false)) };
     });
-    setG(prev => ({ ...prev, cup: { ...prev.cup, groupSchedule: newGroupSchedule, pendingReport: capturedReport } }));
+    const opp = g.clubs[oppId2];
+    const xi = getXI(g.squad, g.startingXI);
+    const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}cup1group${cup.groupRound}`);
+    const pending = { oppId: oppId2, oppName: opp.name, oppStrength: opp.strength, userIsHome, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
+    setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "groupMatch", resolvedOthers } }));
+  }
+  function finalizeGroupMatch(secondHalfXiIds, subText, userGoals, oppGoals) {
+    const p = g.pendingRound, ctx = g.pendingCupContext;
+    const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
+    const result = userGoals > oppGoals ? "win" : userGoals < oppGoals ? "loss" : "draw";
+    const scorers = pickScorer(xi, userGoals).map(pl => pl.name);
+    const ratings = ratingsForResult(xi, scorers, result);
+    const capturedReport = { oppName: p.oppName, userIsHome: p.userIsHome, userGoals, oppGoals, result, ratings };
+    setG(prev => {
+      const cup = prev.cups.cup1;
+      const newGroupSchedule = cup.groupSchedule.map((r, ri) => {
+        if (ri !== cup.groupRound) return r;
+        return ctx.resolvedOthers.map(f => {
+          const isUser = f.home === prev.userClubId || f.away === prev.userClubId;
+          if (!isUser) return f;
+          return { ...f, homeGoals: p.userIsHome ? userGoals : oppGoals, awayGoals: p.userIsHome ? oppGoals : userGoals };
+        });
+      });
+      return { ...prev, view: "cup", activeCupType: "cup1", pendingRound: null, pendingCupContext: null, cups: { ...prev.cups, cup1: { ...cup, groupSchedule: newGroupSchedule, pendingReport: capturedReport } } };
+    });
   }
   function continueGroupRound() {
-    const cup = g.cup;
+    const cup = g.cups.cup1;
     const newGroupRound = cup.groupRound + 1;
-    if (newGroupRound < 3) { setG(prev => ({ ...prev, cup: { ...prev.cup, groupRound: newGroupRound, pendingReport: null } })); return; }
+    if (newGroupRound < cup.groupSchedule.length) { setG(prev => ({ ...prev, cups: { ...prev.cups, cup1: { ...prev.cups.cup1, groupRound: newGroupRound, pendingReport: null } } })); return; }
     const standings = computeStandings(cup.groupSchedule, cup.groups[cup.userGroupIndex]);
     const userGroupPos = standings.findIndex(s => s.id === g.userClubId) + 1;
-    if (userGroupPos > 2) { setG(prev => ({ ...prev, cup: { ...prev.cup, groupRound: newGroupRound, pendingReport: null, eliminated: true, roundName: "Gruppspelet" } })); return; }
+    if (userGroupPos > 2) { setG(prev => ({ ...prev, cups: { ...prev.cups, cup1: { ...prev.cups.cup1, groupRound: newGroupRound, pendingReport: null, eliminated: true, roundName: "Gruppspelet" } } })); return; }
     const advancing = standings.slice(0, 2).map(s => s.id);
     const eight = shuffle([...cup.otherGroupsQualifiers, ...advancing]);
     const { pendingOtherWinners, tie } = setupKnockoutRound(eight, g.clubs, g.userClubId);
-    setG(prev => ({ ...prev, cup: { ...prev.cup, phase: "knockout", roundName: "Kvartsfinal", teams: eight, pendingOtherWinners, tie, pendingReport: null, groupRound: newGroupRound } }));
+    setG(prev => ({ ...prev, cups: { ...prev.cups, cup1: { ...prev.cups.cup1, phase: "knockout", roundName: "Kvartsfinal", teams: eight, pendingOtherWinners, tie, pendingReport: null, groupRound: newGroupRound, dueIndex: 0 } } }));
   }
 
-  // --- two-legged knockout handlers (cup1 QF/SF, cup2 R16/QF/SF) ---
+  // --- two-legged knockout handlers (cup1 QF/SF, cup2 R16/QF/SF) — target whichever cup is currently active ---
   function playCupLeg() {
-    const cup = g.cup;
+    const cupType = g.activeCupType;
+    const cup = g.cups[cupType];
     const opp = g.clubs[cup.tie.oppId];
     const userIsHomeThisLeg = cup.tie.leg === 1 ? cup.tie.userHomeLeg1 : !cup.tie.userHomeLeg1;
-    const legResult = simulateUserDecisiveLeg(opp.strength, g.squad, g.tactic, g.spelide, userIsHomeThisLeg, g.startingXI, g.tacticalSettings);
-    const report = { oppName: opp.name, userIsHome: true, userGoals: legResult.userGoals, oppGoals: legResult.oppGoals, penalties: legResult.penalties, result: legResult.userWon ? "win" : "loss", ratings: legResult.ratings };
-    const legKey = cup.tie.leg === 1 ? "leg1" : "leg2";
-    setG(prev => ({ ...prev, cup: { ...prev.cup, tie: { ...prev.cup.tie, [legKey]: legResult }, pendingReport: report } }));
+    const xi = getXI(g.squad, g.startingXI);
+    const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}${cupType}leg${cup.tie.leg}`);
+    const pending = { oppId: cup.tie.oppId, oppName: opp.name, oppStrength: opp.strength, userIsHome: userIsHomeThisLeg, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
+    setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "leg", cupType, legNum: cup.tie.leg } }));
+  }
+  function finalizeCupLeg(secondHalfXiIds, subText, userGoals, oppGoals) {
+    const p = g.pendingRound, ctx = g.pendingCupContext;
+    const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
+    const result = userGoals > oppGoals ? "win" : userGoals < oppGoals ? "loss" : "draw";
+    const scorers = pickScorer(xi, userGoals).map(pl => pl.name);
+    const ratings = ratingsForResult(xi, scorers, result);
+    const legResult = { userGoals, oppGoals, userWon: userGoals > oppGoals, ratings };
+    const report = { oppName: p.oppName, userIsHome: true, userGoals, oppGoals, penalties: null, result, ratings };
+    const legKey = ctx.legNum === 1 ? "leg1" : "leg2";
+    setG(prev => ({ ...prev, view: "cup", activeCupType: ctx.cupType, pendingRound: null, pendingCupContext: null, cups: { ...prev.cups, [ctx.cupType]: { ...prev.cups[ctx.cupType], tie: { ...prev.cups[ctx.cupType].tie, [legKey]: legResult }, pendingReport: report } } }));
   }
   function continueCupLeg() {
-    const cup = g.cup;
-    if (cup.tie.leg === 1) { setG(prev => ({ ...prev, cup: { ...prev.cup, tie: { ...prev.cup.tie, leg: 2 }, pendingReport: null } })); return; }
+    const cupType = g.activeCupType;
+    const cup = g.cups[cupType];
+    if (cup.tie.leg === 1) { setG(prev => ({ ...prev, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], tie: { ...prev.cups[cupType].tie, leg: 2 }, pendingReport: null, dueIndex: (prev.cups[cupType].dueIndex ?? 0) + 1 } } })); return; }
     const { leg1, leg2 } = cup.tie;
     const userGoalsAgg = leg1.userGoals + leg2.userGoals, oppGoalsAgg = leg1.oppGoals + leg2.oppGoals;
     const userLegWins = (leg1.userWon ? 1 : 0) + (leg2.userWon ? 1 : 0);
@@ -2447,31 +2892,51 @@ export default function TranarbankenApp() {
     }
 
     if (shootoutNote) showToast(shootoutNote);
-    if (!advanced) { setG(prev => ({ ...prev, cup: { ...prev.cup, eliminated: true, pendingReport: null } })); return; }
+    if (!advanced) { setG(prev => ({ ...prev, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], eliminated: true, pendingReport: null } } })); return; }
     const nextTeams = [...cup.pendingOtherWinners, g.userClubId];
     if (nextTeams.length === 2) {
       const finalOpponentId = nextTeams.find(id => id !== g.userClubId);
-      setG(prev => ({ ...prev, cup: { ...prev.cup, phase: "final", finalOpponentId, tie: null, pendingReport: null, roundName: "Final" } }));
+      setG(prev => ({ ...prev, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], phase: "final", finalOpponentId, tie: null, pendingReport: null, roundName: "Final", dueIndex: (prev.cups[cupType].dueIndex ?? 0) + 1 } } }));
       return;
     }
     const { pendingOtherWinners, tie } = setupKnockoutRound(nextTeams, g.clubs, g.userClubId);
-    setG(prev => ({ ...prev, cup: { ...prev.cup, teams: nextTeams, pendingOtherWinners, tie, pendingReport: null, roundName: bracketName(nextTeams.length) } }));
+    setG(prev => ({ ...prev, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], teams: nextTeams, pendingOtherWinners, tie, pendingReport: null, roundName: bracketName(nextTeams.length), dueIndex: (prev.cups[cupType].dueIndex ?? 0) + 1 } } }));
   }
   function playCupFinal() {
-    const cup = g.cup;
+    const cupType = g.activeCupType;
+    const cup = g.cups[cupType];
     const opp = g.clubs[cup.finalOpponentId];
-    const result = simulateUserDecisiveLeg(opp.strength, g.squad, g.tactic, g.spelide, Math.random() < 0.5, g.startingXI, g.tacticalSettings);
-    const report = { oppName: opp.name, userIsHome: true, userGoals: result.userGoals, oppGoals: result.oppGoals, penalties: result.penalties, result: result.userWon ? "win" : "loss", ratings: result.ratings };
-    setG(prev => ({ ...prev, cup: { ...prev.cup, pendingReport: report, finalWon: result.userWon } }));
+    const xi = getXI(g.squad, g.startingXI);
+    const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}${cupType}final`);
+    const pending = { oppId: cup.finalOpponentId, oppName: opp.name, oppStrength: opp.strength, userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
+    setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "final", cupType } }));
+  }
+  function finalizeCupFinal(secondHalfXiIds, subText, userGoals, oppGoals) {
+    const p = g.pendingRound, ctx = g.pendingCupContext;
+    const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
+    let penalties = null, userWon;
+    if (userGoals === oppGoals) {
+      const { attack } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings);
+      const winProb = clamp(0.5 + (attack - p.oppStrength) / 200, 0.3, 0.7);
+      userWon = Math.random() < winProb;
+      penalties = userWon ? `${rndInt(4, 6)}-${rndInt(2, 4)}` : `${rndInt(2, 4)}-${rndInt(4, 6)}`;
+    } else userWon = userGoals > oppGoals;
+    const result = userWon ? "win" : "loss";
+    const scorers = pickScorer(xi, userGoals).map(pl => pl.name);
+    const ratings = ratingsForResult(xi, scorers, result);
+    const report = { oppName: p.oppName, userIsHome: true, userGoals, oppGoals, penalties, result, ratings };
+    setG(prev => ({ ...prev, view: "cup", activeCupType: ctx.cupType, pendingRound: null, pendingCupContext: null, cups: { ...prev.cups, [ctx.cupType]: { ...prev.cups[ctx.cupType], pendingReport: report, finalWon: userWon } } }));
   }
   function continueCupFinal() {
-    const cup = g.cup;
-    if (cup.finalWon) setG(prev => ({ ...prev, cup: { ...prev.cup, champion: prev.userClubId, pendingReport: null } }));
-    else setG(prev => ({ ...prev, cup: { ...prev.cup, eliminated: true, pendingReport: null } }));
+    const cupType = g.activeCupType;
+    const cup = g.cups[cupType];
+    if (cup.finalWon) setG(prev => ({ ...prev, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], champion: prev.userClubId, pendingReport: null } } }));
+    else setG(prev => ({ ...prev, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], eliminated: true, pendingReport: null } } }));
   }
 
   function finishCup() {
-    const cup = g.cup;
+    const cupType = g.activeCupType;
+    const cup = g.cups[cupType];
     const milestone = cup.champion ? "winner" : milestoneFromRoundName(cup.roundName);
     const prizeTable = cup.type === "cup1" ? CUP1_PRIZES : cup.type === "cup2" ? CUP2_PRIZES : DOMESTIC_PRIZES;
     const prize = prizeTable[milestone] || 0;
@@ -2484,12 +2949,12 @@ export default function TranarbankenApp() {
       else { summary.cup2Result = text; if (cup.champion) lastCup2ChampionId = prev.userClubId; }
       summary.prizeTotal = (summary.prizeTotal || 0) + prize;
 
-      let newQueue = prev.cupQueue || [];
-      if (cup.type === "domestic" && summary.domesticCupWon && summary.cup2Result == null && !newQueue.includes("cup2")) {
-        newQueue = [...newQueue, "cup2"];
+      let newQualified = prev.qualifiedCupTypes || [];
+      if (cup.type === "domestic" && summary.domesticCupWon && summary.cup2Result == null && !newQualified.includes("cup2")) {
+        newQualified = [...newQualified, "cup2"];
       }
 
-      return { ...prev, budget: prev.budget + prize, view: "home", activeTab: "home", pendingAfterResult: "home", lastSeasonSummary: summary, cup: null, cupQueue: newQueue, lastCup2ChampionId };
+      return { ...prev, budget: prev.budget + prize, view: "home", activeTab: "home", pendingAfterResult: "home", lastSeasonSummary: summary, activeCupType: null, qualifiedCupTypes: newQualified, lastCup2ChampionId };
     });
   }
 
@@ -2509,6 +2974,7 @@ export default function TranarbankenApp() {
     setG(prev => ({
       ...prev, budget: prev.budget - price, squad: [...prev.squad, signedPlayer],
       market: { ...prev.market, [region]: prev.market[region].filter(p => p.id !== player.id).concat([makeScoutPlayer(pick(POS_ORDER), region, effectiveScoutRating(prev.dev, prev.reputation, prev.scoutingParts.analys + (prev.staff.scout?.level || 0) * 0.5), prev.clubs)]) },
+      clubGoodwill: player.clubId ? { ...prev.clubGoodwill, [player.clubId]: clamp((prev.clubGoodwill[player.clubId] ?? 50) + 5, 0, 100) } : prev.clubGoodwill,
     }));
     showToast(hasSellOn ? `${player.name} skrev på för ${formatMoney(price)} — ${sellOnPct}% billigare mot att ${signedPlayer.sellOnClubName} får ${sellOnPct}% vid en framtida vidareförsäljning.` : `${player.name} skrev på för ${formatMoney(price)} (${formatMoney(wage)}/omg i lön)!`);
   }
@@ -2519,8 +2985,28 @@ export default function TranarbankenApp() {
     setG(prev => ({ ...prev, scoutMission: { ...filters, roundsTotal, roundsElapsed: 0, complete: false, result: null } }));
     showToast(`Scouten skickas ut — klart om ca ${roundsTotal} omgångar.`);
   }
+  function cancelScoutMission() {
+    setG(prev => ({ ...prev, scoutMission: prev.scoutMission ? { ...prev.scoutMission, cancelling: true } : null }));
+    showToast("Scouten kallas hem — tillbaka om en omgång.");
+  }
   function dismissScoutMission() {
     setG(prev => ({ ...prev, scoutMission: null }));
+  }
+  function finalizeClubBrowseTransfer(player, agreedPrice, agreedWage) {
+    if (!transferWindowOpen(g.round)) { showToast("Transferfönstret är stängt just nu."); return; }
+    if (g.budget < agreedPrice) { showToast("Inte tillräcklig budget."); return; }
+    if (g.boardConfidence < 40 && agreedPrice > g.budget * 0.4) { showToast("Styrelsen blockerar värvningen — för dyr given det svaga förtroendet just nu."); return; }
+    const wage = agreedWage || player.wage;
+    const cap = wageBudgetCap(g.reputation, g.clubs[g.userClubId].division, g.dev.sponsring);
+    if (totalWageBill(g.squad) + wage > cap * 1.15) { showToast("Löneutrymmet räcker inte — Financial Fair Play stoppar värvningen."); return; }
+    const fromClubName = g.clubs[player.clubId]?.name || "en annan klubb";
+    const signedPlayer = { ...player, clubId: null, contractYears: rndInt(3, 5), wage, number: assignSquadNumber(g.squad), joinedInfo: { text: `Värvades från ${fromClubName} för ${formatMoney(agreedPrice)} i säsong ${g.season}.` } };
+    setG(prev => ({
+      ...prev, budget: prev.budget - agreedPrice, squad: [...prev.squad, signedPlayer],
+      clubs: player.clubId && prev.clubs[player.clubId]?.squad ? { ...prev.clubs, [player.clubId]: { ...prev.clubs[player.clubId], squad: prev.clubs[player.clubId].squad.filter(p => p.id !== player.id) } } : prev.clubs,
+      clubGoodwill: player.clubId ? { ...prev.clubGoodwill, [player.clubId]: clamp((prev.clubGoodwill[player.clubId] ?? 50) + 5, 0, 100) } : prev.clubGoodwill,
+    }));
+    showToast(`${player.name} skrev på för ${formatMoney(agreedPrice)} (${formatMoney(wage)}/omg i lön)!`);
   }
   function finalizeScoutSignee(agreedPrice, agreedWage) {
     const player = g.scoutMission?.result;
@@ -2533,7 +3019,10 @@ export default function TranarbankenApp() {
     if (totalWageBill(g.squad) + wage > cap * 1.15) { showToast("Löneutrymmet räcker inte — Financial Fair Play stoppar värvningen."); return; }
     const fromClubName = g.clubs[player.clubId]?.name || "en annan klubb";
     const signedPlayer = { ...player, clubId: null, contractYears: rndInt(3, 5), wage, number: assignSquadNumber(g.squad), joinedInfo: { text: `Värvades från ${fromClubName} för ${formatMoney(agreedPrice)} i säsong ${g.season}, efter att ha upptäckts av scouten.` }, scoutReports: [{ season: g.season, comment: scoutComment(player), source: "scout" }] };
-    setG(prev => ({ ...prev, budget: prev.budget - agreedPrice, squad: [...prev.squad, signedPlayer], scoutMission: null }));
+    setG(prev => ({
+      ...prev, budget: prev.budget - agreedPrice, squad: [...prev.squad, signedPlayer], scoutMission: null,
+      clubs: player.clubId && prev.clubs[player.clubId]?.squad ? { ...prev.clubs, [player.clubId]: { ...prev.clubs[player.clubId], squad: prev.clubs[player.clubId].squad.filter(p => p.id !== player.id) } } : prev.clubs,
+    }));
     showToast(`${player.name} skrev på för ${formatMoney(agreedPrice)} (${formatMoney(wage)}/omg i lön)!`);
   }
   function respondIncomingOffer(offerId, action) {
@@ -2651,6 +3140,7 @@ export default function TranarbankenApp() {
   }
   function setTeamTalk(key) { setG(prev => ({ ...prev, teamTalk: key })); }
   function setTicketPrice(tier) { setG(prev => ({ ...prev, ticketPrice: tier })); }
+  function setMerchandisePricing(tier) { setG(prev => ({ ...prev, merchandisePricing: tier })); }
   function restStars() {
     if (g.restedForMatch) return;
     const xi = getXI(g.squad, g.startingXI);
@@ -2708,6 +3198,22 @@ export default function TranarbankenApp() {
     });
     showToast(includeClause ? "Nytt kontrakt med utköpsklausul signerat!" : "Nytt kontrakt signerat!");
   }
+  function requestFromOwner(type) {
+    const owner = g.owner;
+    const cooldownRoundsLeft = (g.ownerRequestCooldownRound || 0) - g.round;
+    if (cooldownRoundsLeft > 0) { showToast(`${owner.name} vill inte bli tillfrågad igen så snart — vänta ${cooldownRoundsLeft} omgångar till.`); return; }
+    const chance = ownerRequestChance(owner, type);
+    const granted = Math.random() < chance;
+    setG(prev => {
+      const next = { ...prev, ownerRequestCooldownRound: prev.round + 6 };
+      if (!granted) { next.owner = { ...prev.owner, patience: clamp(prev.owner.patience - rnd(4, 10), 0, 100) }; }
+      if (granted && type === "budget") { const amount = Math.round(800 + owner.patience * 12); next.budget = prev.budget + amount; next._toast = `${owner.name} går med på er förfrågan: +${formatMoney(amount)} extra i transferbudget.`; }
+      else if (granted && type === "patience") { next.boardConfidence = clamp(prev.boardConfidence + rnd(12, 22), 0, 100); next._toast = `${owner.name} pratar med styrelsen å era vägnar — förtroendet stiger.`; }
+      else { next._toast = `${owner.name} avvisar förfrågan: "${pick(["Inte just nu.", "Vi behöver se mer först.", "Det är inte läge för det."])}"`; }
+      return next;
+    });
+  }
+
   function respondTakeoverBid(action) {
     const bid = g.takeoverBid;
     if (!bid) return;
@@ -2759,8 +3265,10 @@ export default function TranarbankenApp() {
   function startTour(offer) {
     if (g.budget < offer.cost) { showToast("Inte tillräcklig budget."); return; }
     const income = rndInt(offer.incomeMin, offer.incomeMax);
-    setG(prev => ({ ...prev, budget: prev.budget - offer.cost + income, reputation: clamp(prev.reputation + offer.repBonus, 0, 100), tourOffers: null, tourCompletedThisOffseason: true }));
-    showToast(`${offer.name} genomförd! Nettoresultat: ${formatMoney(income - offer.cost)}. Turnén fungerar också som försäsongsträning.`);
+    const matches = simulateTourMatches(offer);
+    const wins = matches.filter(m => m.us > m.them).length;
+    setG(prev => ({ ...prev, budget: prev.budget - offer.cost + income, reputation: clamp(prev.reputation + offer.repBonus, 0, 100), tourOffers: null, tourCompletedThisOffseason: true, lastTourResult: { name: offer.name, matches, income, cost: offer.cost } }));
+    pushNews(`${offer.name} avslutad: ${wins}/4 vinster på turnén, nettoresultat ${formatMoney(income - offer.cost)}.`, "Klubben");
   }
   function openTourOffers() {
     setG(prev => ({ ...prev, tourOffers: generateTourOffers(prev.reputation) }));
@@ -2768,7 +3276,9 @@ export default function TranarbankenApp() {
   function upgradeDev(key) {
     const level = g.dev[key];
     if (level >= 5) return;
-    const cost = Math.round({ arena: 900, akademi: 600, scouting: 750, sponsring: 450 }[key] * Math.pow(level, 1.6));
+    const exponent = key === "scouting" ? 1.85 : 1.6;
+    const base = { arena: 900, akademi: 600, scouting: 820, sponsring: 450 }[key];
+    const cost = Math.round(base * Math.pow(level, exponent));
     if (g.budget < cost) { showToast("Inte tillräcklig budget."); return; }
     setG(prev => ({ ...prev, budget: prev.budget - cost, dev: { ...prev.dev, [key]: prev.dev[key] + 1 } }));
     const names = { arena: "Arenan", akademi: "Akademin", scouting: "Scoutnätverket", sponsring: "Sponsringen" };
@@ -2800,15 +3310,42 @@ export default function TranarbankenApp() {
     setG(prev => ({ ...prev, budget: prev.budget + offer.bonus, sponsors: { ...prev.sponsors, [slot]: { name: offer.name, income: offer.income } } }));
     showToast(`${offer.name} är nu er sponsor! (+${formatMoney(offer.bonus)} signeringsbonus)`);
   }
+  function refreshStaffCandidates(current, newRound, homeCountry) {
+    if (!current) return current;
+    const next = { ...current };
+    Object.keys(next).forEach(role => {
+      if (next[role] && newRound >= next[role].nextRefreshRound) {
+        next[role] = { list: generateStaffOffers(role, homeCountry), nextRefreshRound: newRound + rndInt(2, 4) };
+      }
+    });
+    return next;
+  }
+  function openStaffCandidates(role) {
+    setG(prev => {
+      if (prev.staffCandidates?.[role]) return prev;
+      const homeCountry = prev.clubs[prev.userClubId].league;
+      return { ...prev, staffCandidates: { ...prev.staffCandidates, [role]: { list: generateStaffOffers(role, homeCountry), nextRefreshRound: prev.round + rndInt(2, 4) } } };
+    });
+  }
   function hireStaff(role, candidate) {
-    setG(prev => ({ ...prev, staff: { ...prev.staff, [role]: { name: candidate.name, nationality: candidate.nationality, level: candidate.level, wage: candidate.wage } } }));
-    showToast(`${candidate.name} är nu er ${STAFF_ROLE_LABEL[role].toLowerCase()}!`);
+    let severanceMsg = "";
+    setG(prev => {
+      const current = prev.staff[role];
+      const severance = current && (current.contractYears || 0) > 0 ? Math.round(current.wage * 15 * current.contractYears) : 0;
+      if (severance > 0) severanceMsg = ` ${current.name} friställdes mot ${formatMoney(severance)} i avgångsvederlag.`;
+      return {
+        ...prev, budget: prev.budget - severance,
+        staff: { ...prev.staff, [role]: { name: candidate.name, nationality: candidate.nationality, level: candidate.level, wage: candidate.wage, contractYears: rndInt(2, 4), satisfaction: 70 } },
+        staffCandidates: { ...prev.staffCandidates, [role]: undefined },
+      };
+    });
+    showToast(`${candidate.name} är nu er ${STAFF_ROLE_LABEL[role].toLowerCase()}!${severanceMsg}`);
   }
   function renegotiateStaffWage(role, accept) {
     const member = g.staff[role];
     if (!member) return;
     const fair = staffFairWage(member.level);
-    setG(prev => ({ ...prev, staff: { ...prev.staff, [role]: { ...prev.staff[role], wage: accept ? fair : prev.staff[role].wage, needsRaise: false } } }));
+    setG(prev => ({ ...prev, staff: { ...prev.staff, [role]: { ...prev.staff[role], wage: accept ? fair : prev.staff[role].wage, needsRaise: false, satisfaction: accept ? clamp((prev.staff[role].satisfaction ?? 70) + 20, 0, 100) : prev.staff[role].satisfaction } } }));
     showToast(accept ? `${member.name} fick sin nya lön: ${formatMoney(fair)}/omg.` : `${member.name} accepterar att vänta, men trivseln kan påverkas över tid.`);
   }
   function takeLoan(offer) {
@@ -2824,6 +3361,19 @@ export default function TranarbankenApp() {
     setG(prev => ({ ...prev, view: "home", boardConfidence: 25 }));
   }
   function setSpelide(key) { setG(prev => ({ ...prev, spelide: key })); }
+  function setCaptain(id) { setG(prev => ({ ...prev, captainId: prev.captainId === id ? null : id })); }
+  function failNegotiation(player, club, severity) {
+    setG(prev => {
+      const goodwillDelta = severity === "rival" ? -6 : severity === "wage" ? -8 : -14;
+      const cooldown = rndInt(8, 18);
+      const turnNow = prev.season * 38 + prev.round;
+      return {
+        ...prev,
+        clubGoodwill: club ? { ...prev.clubGoodwill, [club.id]: clamp((prev.clubGoodwill[club.id] ?? 50) + goodwillDelta, 0, 100) } : prev.clubGoodwill,
+        blacklistedPlayers: { ...prev.blacklistedPlayers, [player.id]: turnNow + cooldown },
+      };
+    });
+  }
   function saveClubName() {
     const name = nameDraft.trim() || userClub.name;
     setG(prev => ({ ...prev, clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], name } } }));
@@ -2956,18 +3506,31 @@ export default function TranarbankenApp() {
       }
 
       // Staff can grow in ability over time; if their wage falls behind their new level, they'll ask for a raise.
+      // Very unhappy, long-ignored staff can also quit outright.
       const newStaff = { ...prev.staff };
       const raiseRequests = [];
+      const staffDepartures = [];
       Object.keys(newStaff).forEach(role => {
         const member = newStaff[role];
         if (!member) return;
         let updated = { ...member };
         if (updated.level < 5 && Math.random() < 0.16) updated.level += 1;
         const fair = staffFairWage(updated.level);
-        if (updated.wage < fair * 0.85) { updated.needsRaise = true; raiseRequests.push(STAFF_ROLE_LABEL[role] || role); }
+        const wasUnfair = updated.wage < fair * 0.85;
+        updated.satisfaction = clamp((updated.satisfaction ?? 70) + (wasUnfair ? -16 : 4), 0, 100);
+        updated.contractYears = Math.max(0, (updated.contractYears ?? 2) - 1);
+        if (wasUnfair) { updated.needsRaise = true; raiseRequests.push(STAFF_ROLE_LABEL[role] || role); }
+        if (updated.satisfaction <= 15 && Math.random() < 0.3) {
+          staffDepartures.push(`${updated.name} (${STAFF_ROLE_LABEL[role] || role})`);
+          newStaff[role] = null;
+          return;
+        }
         newStaff[role] = updated;
       });
-      const staffMsg = raiseRequests.length ? `${raiseRequests.join(", ")} vill omförhandla sin lön.` : null;
+      const staffMsg = [
+        raiseRequests.length ? `${raiseRequests.join(", ")} vill omförhandla sin lön.` : null,
+        staffDepartures.length ? `${staffDepartures.join(", ")} sa upp sig efter långvarigt missnöje.` : null,
+      ].filter(Boolean).join(" ") || null;
 
       // Queue this season's cup competitions to be played interleaved with the new season's rounds,
       // instead of all at once in the gap between seasons.
@@ -2990,14 +3553,15 @@ export default function TranarbankenApp() {
 
       return {
         ...prev, season: prev.season + 1, round: 0, clubs: newClubs,
-        schedule: generateSchedule(userPoolIds), squad: newSquad, youthSquad: newYouth,
+        schedule: generateSchedule(userPoolIds), allSchedules: generateAllSchedules(newClubs), squad: newSquad, youthSquad: newYouth,
         startingXI: prev.startingXI.filter(id => !departedIds.has(id)),
         reputation: newReputation, fanbase: newFanbase, boardConfidence: newBoardConfidence, plannedSub: null,
         budget: prev.budget - loanPayment + ownerEvent.cashDelta, loans: newLoans,
         owner: newOwner, takeoverBid: newTakeoverBid, tourOffers: null, manager: newManager, staff: newStaff,
         lastMatchReport: null, view: boardCrisis ? "boardcrisis" : "home", activeTab: "home", pendingAfterResult: "home",
-        cup: null, cupQueue, lastCup2ChampionId: newCup2ChampionId, outgoingLoans: [], formationFamiliarity: offSeasonFamiliarity, sillySeasonWeeksLeft: 4,
+        cups: { domestic: null, cup1: null, cup2: null }, activeCupType: null, qualifiedCupTypes: cupQueue, lastCup2ChampionId: newCup2ChampionId, outgoingLoans: [], formationFamiliarity: offSeasonFamiliarity, sillySeasonWeeksLeft: 4,
         seasonIncomeTotal: 0, seasonWageTotal: 0, clubRecords,
+        seasonStaffImpact: { physio: 0, assistant: 0, analyst: 0, gkCoach: 0, fitnessCoach: 0 }, lastSeasonStaffImpact: prev.seasonStaffImpact,
         lastSeasonSummary: s, seasonEndSnapshot: prev.seasonEndSnapshot, history,
         _toast: boardCrisis ? null : (combinedToast || null),
       };
@@ -3007,10 +3571,13 @@ export default function TranarbankenApp() {
     setG(prev => {
       let scoutMission = prev.scoutMission;
       let scoutToast = null;
-      if (scoutMission && !scoutMission.complete) {
+      if (scoutMission && scoutMission.cancelling) {
+        scoutMission = null;
+        scoutToast = "Scouten är hemma igen.";
+      } else if (scoutMission && !scoutMission.complete) {
         const roundsElapsed = scoutMission.roundsElapsed + 1;
         if (roundsElapsed >= scoutMission.roundsTotal) {
-          const candidate = generateScoutCandidate(scoutMission, prev.staff.scout?.level || 0, prev.clubs, prev.clubs[prev.userClubId].division);
+          const candidate = generateScoutCandidate(scoutMission, prev.staff.scout?.level || 0, prev.clubs, prev.clubs[prev.userClubId].division, prev.userClubId);
           scoutMission = { ...scoutMission, roundsElapsed, complete: true, result: candidate };
           scoutToast = candidate ? `Scoutuppdraget är klart — ${candidate.name} har hittats.` : "Scoutuppdraget är klart, men ingen spelare matchade kriterierna.";
         } else {
@@ -3061,9 +3628,10 @@ export default function TranarbankenApp() {
   }
 
   const NAV_TABS = [
-    { key: "home", label: "Hem", icon: Home }, { key: "table", label: "Tabell", icon: Trophy },
+    { key: "news", label: "Nyheter", icon: Bell }, { key: "home", label: "Hem", icon: Home }, { key: "table", label: "Tabell", icon: Trophy },
     { key: "fixtures", label: "Matcher", icon: CalendarDays }, { key: "squad", label: "Trupp", icon: Users },
     { key: "transfers", label: "Övergångar", icon: ArrowLeftRight }, { key: "club", label: "Klubb", icon: Building2 },
+    { key: "ekonomi", label: "Ekonomi", icon: Landmark }, { key: "personal", label: "Personal", icon: UserCog },
   ];
 
   return (
@@ -3117,9 +3685,9 @@ export default function TranarbankenApp() {
             <span style={{ position: "absolute", bottom: -2, right: -2, width: 14, height: 14, borderRadius: "50%", background: C.turfDeep, border: `1px solid ${C.gold}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Pencil size={7} color={C.goldSoft} /></span>
           </button>
           {NAV_TABS.map(({ key, label, icon: Icon }) => {
-            const active = g.activeTab === key && !["result", "cup", "press", "trophies", "manager", "matchprep", "halftime", "midgame", "lategame", "boardcrisis"].includes(g.view);
+            const active = g.activeTab === key && !["result", "cup", "press", "trophies", "manager", "matchprep", "livematch", "boardcrisis"].includes(g.view);
             return (
-              <button key={key} onClick={() => setG(prev => ({ ...prev, activeTab: key, view: "tab" }))} className="tabbtn flex flex-col items-center gap-1 py-2.5 w-full"
+              <button key={key} onClick={() => { setG(prev => ({ ...prev, activeTab: key, view: "tab" })); if (key === "news") markNewsRead(); }} className="tabbtn flex flex-col items-center gap-1 py-2.5 w-full"
                 style={{ background: active ? "rgba(201,154,62,0.14)" : "transparent", position: "relative" }}>
                 {NAV_NOTIFS[key] && <div className="notif-dot" />}
                 <Icon size={18} color={active ? C.goldSoft : C.paperDim} strokeWidth={active ? 2.4 : 2} />
@@ -3160,7 +3728,7 @@ export default function TranarbankenApp() {
                   </button>
                 )}
                 <div className="font-mono text-10 mt-0.5" style={{ color: C.paperDim }}>
-                  {countryName} · D{userClub.division} · S{g.season} · {seasonOver ? "Säsongen avslutad" : `Omg ${g.round + 1}/${totalRounds}`} · Plats {userPos || "–"}
+                  {countryName} · D{userClub.division} · {seasonLabel(g.season)} · {seasonOver ? "Säsongen avslutad" : `Omg ${g.round + 1}/${totalRounds} · ${formatGameDateShort(roundDate(g.season, g.round))}`} · Plats {userPos || "–"}
                 </div>
               </div>
               <div className="text-right shrink-0">
@@ -3193,12 +3761,18 @@ export default function TranarbankenApp() {
 
               {g.view === "boardcrisis" ? (
                 <BoardCrisisView clubName={userClub.name} onAcknowledge={acknowledgeBoardCrisis} />
-              ) : g.view === "halftime" && g.pendingRound ? (
-                <HalftimeView pending={g.pendingRound} userClub={userClub} oppClub={g.clubs[g.pendingRound.oppId]} onContinue={boost => resolveSecondHalf(boost)} />
-              ) : g.view === "midgame" && g.pendingMidGame ? (
-                <MidGameView pending={g.pendingMidGame} userClub={userClub} oppClub={g.clubs[g.pendingMidGame.p.oppId]} onChoose={choice => resolveMidGame(choice)} />
-              ) : g.view === "lategame" && g.pendingLateGame ? (
-                <LateGameView pending={g.pendingLateGame} userClub={userClub} oppClub={g.clubs[g.pendingLateGame.p.oppId]} onChoose={choice => resolveLateGame(choice)} />
+              ) : g.view === "livematch" && g.pendingRound ? (
+                <LiveMatchView pending={g.pendingRound} userClub={userClub} oppClub={g.clubs[g.pendingRound.oppId]} squad={g.squad}
+                  tactic={g.tactic} spelide={g.spelide} tacticalSettings={g.tacticalSettings} lineupCells={g.lineupCells} staff={g.staff}
+                  formationFamiliarity={g.formationFamiliarity} teamTalk={g.teamTalk}
+                  onFinalize={(secondHalfXiIds, subText, userGoals, oppGoals, note) => {
+                    const ctxType = g.pendingCupContext?.type;
+                    if (ctxType === "domesticRound") finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals);
+                    else if (ctxType === "groupMatch") finalizeGroupMatch(secondHalfXiIds, subText, userGoals, oppGoals);
+                    else if (ctxType === "leg") finalizeCupLeg(secondHalfXiIds, subText, userGoals, oppGoals);
+                    else if (ctxType === "final") finalizeCupFinal(secondHalfXiIds, subText, userGoals, oppGoals);
+                    else finalizeMatch(g.pendingRound, secondHalfXiIds, subText, userGoals, oppGoals, note);
+                  }} />
               ) : g.view === "result" && g.lastMatchReport ? (
                 <MatchResultView report={g.lastMatchReport} userTeamName={userClub.name} competitionLabel="Ligamatch"
                   onContinue={() => setG(prev => ({ ...prev, view: "press" }))} />
@@ -3213,50 +3787,65 @@ export default function TranarbankenApp() {
               ) : g.view === "matchprep" ? (
                 <MatchPrepView g={g} userClub={userClub} oppClub={oppClub} countryName={countryName} isHome={nextFixture ? nextFixture.home === g.userClubId : true}
                   onBack={() => setG(prev => ({ ...prev, view: "home" }))}
-                  onTactic={t => setG(prev => ({ ...prev, tactic: t }))} onSetPlannedSub={setPlannedSub} onSetTactical={setTacticalOption}
+                  onSetPlannedSub={setPlannedSub}
                   onSetTeamTalk={setTeamTalk} onRestStars={restStars} onSetTicketPrice={setTicketPrice}
                   onGotoSquad={() => setG(prev => ({ ...prev, activeTab: "squad", view: "tab" }))} onPlay={beginRound} />
-              ) : g.view === "cup" && g.cup ? (
-                <CupView cup={g.cup} clubs={g.clubs} userClubId={g.userClubId} userTeamName={userClub.name}
+              ) : g.view === "cup" && g.activeCupType && g.cups[g.activeCupType] ? (
+                <CupView cup={g.cups[g.activeCupType]} clubs={g.clubs} userClubId={g.userClubId} userTeamName={userClub.name} currentRound={g.round}
                   onPlayDomestic={playDomesticCupRound} onContinueDomestic={continueDomesticCupRound}
                   onPlayGroup={playGroupMatch} onContinueGroup={continueGroupRound}
                   onPlayLeg={playCupLeg} onContinueLeg={continueCupLeg}
                   onPlayFinal={playCupFinal} onContinueFinal={continueCupFinal}
-                  onFinish={finishCup} />
+                  onFinish={finishCup} onBackToHome={() => setG(prev => ({ ...prev, view: "home" }))} />
+              ) : g.activeTab === "news" ? (
+                <NewsTab newsFeed={g.newsFeed} />
               ) : g.activeTab === "home" ? (
                 <HomeTab g={g} userClub={userClub} oppClub={oppClub} countryName={countryName} standings={standings} userPos={userPos} userRow={userRow}
                   nextFixture={nextFixture} seasonOver={seasonOver}
-                  onTactic={t => setG(prev => ({ ...prev, tactic: t }))} onPlay={beginRound} onNewSeason={newSeason}
-                  onGotoCup={() => setG(prev => ({ ...prev, view: "cup" }))} onSetPlannedSub={setPlannedSub} onSetTactical={setTacticalOption}
+                  onPlay={beginRound} onNewSeason={newSeason}
+                  onGotoCup={() => setG(prev => ({ ...prev, view: "cup" }))} onSetPlannedSub={setPlannedSub}
                   onSetTeamTalk={setTeamTalk} onRestStars={restStars} onGotoPrep={() => setG(prev => ({ ...prev, view: "matchprep" }))}
                   onAdvanceSillySeason={advanceSillySeasonWeek} onFinishSillySeason={finishSillySeason} />
               ) : g.activeTab === "table" ? (
-                <TableTab standings={standings} clubs={g.clubs} userClubId={g.userClubId} division={userClub.division} cup={g.cup} nextFixture={nextFixture} />
+                <TableTab standings={standings} clubs={g.clubs} userClubId={g.userClubId} division={userClub.division} cup={g.activeCupType ? g.cups[g.activeCupType] : null} nextFixture={nextFixture} allSchedules={g.allSchedules} leagueId={g.leagueId} season={g.season} currentRound={g.round} />
               ) : g.activeTab === "fixtures" ? (
-                <FixturesTab schedule={g.schedule} clubs={g.clubs} currentRound={g.round} userClubId={g.userClubId} cup={g.cup} />
+                <FixturesTab schedule={g.schedule} clubs={g.clubs} currentRound={g.round} userClubId={g.userClubId} cup={g.activeCupType ? g.cups[g.activeCupType] : null} season={g.season}
+                  budget={g.budget} tourOffers={g.tourOffers} lastTourResult={g.lastTourResult} onOpenTours={openTourOffers} onStartTour={startTour}
+                  allSchedules={g.allSchedules} leagueId={g.leagueId} />
               ) : g.activeTab === "squad" ? (
                 <SquadTab squad={g.squad} startingXI={g.startingXI} onToggleStarter={toggleStarter} confirmSell={confirmSell} setConfirmSell={setConfirmSell} onSell={sellPlayer} onToggleListed={toggleTransferListed} onRenew={renewContract}
                   formationCode={g.formationCode} lineupCells={g.lineupCells} onSaveFormation={saveFormation} onChat={chatWithPlayer}
                   clubs={g.clubs} round={g.round} onSendLoan={sendPlayerOnLoan} outgoingLoans={g.outgoingLoans}
-                  setPieceTakers={g.setPieceTakers} onSetSetPieceTakers={setSetPieceTakers} chemistryPairs={g.chemistryPairs} onAssessPlayer={assessPlayer} />
+                  setPieceTakers={g.setPieceTakers} onSetSetPieceTakers={setSetPieceTakers} chemistryPairs={g.chemistryPairs} onAssessPlayer={assessPlayer}
+                  tactic={g.tactic} onTactic={t => setG(prev => ({ ...prev, tactic: t }))} tacticalSettings={g.tacticalSettings} onSetTactical={setTacticalOption}
+                  spelide={g.spelide} onSetSpelide={setSpelide} captainId={g.captainId} onSetCaptain={setCaptain}
+                  dev={g.dev} budget={g.budget} akademiParts={g.akademiParts} youthSquad={g.youthSquad} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSellYouth={sellYouth} onPromoteYouth={promoteYouth} />
               ) : g.activeTab === "club" ? (
                 <ClubTab club={userClub} dev={g.dev} budget={g.budget} history={g.history} reputation={g.reputation} fanbase={g.fanbase}
-                  spelide={g.spelide} onSetSpelide={setSpelide} youthSquad={g.youthSquad} onUpgrade={upgradeDev} onSellYouth={sellYouth} onPromoteYouth={promoteYouth}
-                  arenaStands={g.arenaStands} arenaFacilities={g.arenaFacilities} arenaConstruction={g.arenaConstruction} onStartConstruction={startArenaConstruction} akademiParts={g.akademiParts} scoutingParts={g.scoutingParts}
-                  sponsors={g.sponsors} onUpgradePart={upgradePart} onSignSponsor={signSponsor}
-                  staff={g.staff} onHireStaff={hireStaff} onRenegotiateStaff={renegotiateStaffWage} boardConfidence={g.boardConfidence} boardTarget={boardTargetLabel(userClub.archetype, userClub.division).label}
-                  loans={g.loans} onTakeLoan={takeLoan}
-                  squad={g.squad} owner={g.owner} takeoverBid={g.takeoverBid} tourOffers={g.tourOffers}
-                  onRespondTakeover={respondTakeoverBid} onOpenTours={openTourOffers} onStartTour={startTour}
+                  sponsors={g.sponsors} staff={g.staff} boardConfidence={g.boardConfidence} boardTarget={boardTargetLabel(userClub.archetype, userClub.division).label}
+                  squad={g.squad} owner={g.owner} takeoverBid={g.takeoverBid} tourOffers={g.tourOffers} shopLevel={g.arenaFacilities.shop} division={userClub.division}
+                  onRespondTakeover={respondTakeoverBid} onOpenTours={openTourOffers} onStartTour={startTour} onRequestOwner={requestFromOwner}
+                  merchandisePricing={g.merchandisePricing} onSetMerchandisePricing={setMerchandisePricing}
                   repHistory={g.repHistory} fanHistory={g.fanHistory} />
+              ) : g.activeTab === "ekonomi" ? (
+                <EconomyTab budget={g.budget} reputation={g.reputation} division={userClub.division} sponsringLevel={g.dev.sponsring} squad={g.squad} history={g.history}
+                  season={g.season} round={g.round} totalRounds={g.schedule.length} seasonIncomeTotal={g.seasonIncomeTotal || 0} seasonWageTotal={g.seasonWageTotal || 0}
+                  ticketPrice={g.ticketPrice} onSetTicketPrice={setTicketPrice}
+                  loans={g.loans} onTakeLoan={takeLoan} sponsors={g.sponsors} dev={g.dev} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSignSponsor={signSponsor}
+                  club={userClub} arenaStands={g.arenaStands} arenaFacilities={g.arenaFacilities} arenaConstruction={g.arenaConstruction} onStartConstruction={startArenaConstruction} recentMatchFinances={g.recentMatchFinances} />
+              ) : g.activeTab === "personal" ? (
+                <PersonalTab budget={g.budget} staff={g.staff} reputation={g.reputation} homeCountry={userClub.league} staffCandidates={g.staffCandidates}
+                  onOpenStaffCandidates={openStaffCandidates} onHireStaff={hireStaff} onRenegotiateStaff={renegotiateStaffWage}
+                  dev={g.dev} scoutingParts={g.scoutingParts} onUpgrade={upgradeDev} onUpgradePart={upgradePart} seasonStaffImpact={g.seasonStaffImpact} />
               ) : (
-                <TransfersTab market={g.market} budget={g.budget} scoutingLevel={g.dev.scouting} kontakterLevel={g.scoutingParts.kontakter} youthSquad={g.youthSquad} youthMarket={g.youthMarket} round={g.round}
-                  clubs={g.clubs} reputation={g.reputation} incomingOffers={g.incomingOffers}
+                <TransfersTab market={g.market} budget={g.budget} scoutingLevel={g.dev.scouting} kontakterLevel={g.scoutingParts.kontakter} youthSquad={g.youthSquad} youthMarket={g.youthMarket} round={g.round} season={g.season}
+                  clubs={g.clubs} reputation={g.reputation} incomingOffers={g.incomingOffers} clubGoodwill={g.clubGoodwill} blacklistedPlayers={g.blacklistedPlayers} onNegotiationFailed={failNegotiation}
                   onFinalizeTransfer={finalizeTransfer} onBuyYouth={buyYouth} onRespondOffer={respondIncomingOffer}
                   scoutMission={g.scoutMission} scoutLevel={g.staff.scout?.level || 0}
-                  onStartScoutMission={startScoutMission} onDismissScoutMission={dismissScoutMission} onFinalizeScoutSignee={finalizeScoutSignee}
+                  onStartScoutMission={startScoutMission} onDismissScoutMission={dismissScoutMission} onCancelScoutMission={cancelScoutMission} onFinalizeScoutSignee={finalizeScoutSignee}
                   loanOffers={g.loanOffers} onAcceptLoan={acceptLoanOffer} onDeclineLoan={declineLoanOffer} difficulty={g.difficulty}
-                  squad={g.squad} savedScoutProfiles={g.savedScoutProfiles} onSaveScoutProfile={saveScoutProfile} onDeleteScoutProfile={deleteScoutProfile} />
+                  squad={g.squad} savedScoutProfiles={g.savedScoutProfiles} onSaveScoutProfile={saveScoutProfile} onDeleteScoutProfile={deleteScoutProfile}
+                  userClubId={g.userClubId} leagueId={g.leagueId} onFinalizeClubBrowseTransfer={finalizeClubBrowseTransfer} />
               )}
             </div>
           </div>
@@ -3346,7 +3935,7 @@ function Onboarding({ world, onConfirm, onCancel }) {
     return (
       <OnboardingWrap>
         <div className="max-w-md mx-auto w-full px-5 pt-10 pb-6">
-          {onCancel && <button onClick={onCancel} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till dina karriärer</button>}
+          {onCancel && <button onClick={onCancel} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till dina karriärer</button>}
           <div className="font-display text-3xl" style={{ color: C.goldSoft }}>TRÄNARBÄNKEN</div>
           <div className="text-sm mt-1" style={{ color: C.paperDim }}>Välj land att starta din managerkarriär i.</div>
         </div>
@@ -3466,6 +4055,7 @@ function Onboarding({ world, onConfirm, onCancel }) {
                 <div className="flex gap-0.5">{[1, 2, 3, 4, 5].map(n => <Star key={n} size={12} fill={n <= stars ? C.gold : "none"} color={n <= stars ? C.gold : C.paperDim} />)}</div>
                 <span className="font-mono text-11" style={{ color: C.inkSoft }}>Startbudget: {formatMoney(Math.round(arche.startBudget * divMult))}</span>
               </div>
+              <div className="text-10 font-mono mt-1" style={{ color: C.inkSoft }}>Arenakapacitet: {arenaCapacityForClub(c, division).toLocaleString("sv-SE")} åskådare</div>
               {selected && (
                 <div className="mt-3 pt-3 grid grid-cols-2 gap-3" style={{ borderTop: `1px dashed ${C.paperDim}` }}>
                   <div>
@@ -3496,12 +4086,69 @@ function Onboarding({ world, onConfirm, onCancel }) {
 }
 
 function cupStatusText(cup) {
-  if (cup.phase === "groups") return `Gruppspel · Omgång ${cup.groupRound + 1}/3`;
+  if (cup.phase === "groups") return `Gruppspel · Omgång ${cup.groupRound + 1}/${cup.groupSchedule.length}`;
   if (cup.phase === "final") return "Final";
   return cup.roundName;
 }
 
-function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRow, nextFixture, seasonOver, onTactic, onPlay, onNewSeason, onGotoCup, onSetPlannedSub, onSetTactical, onSetTeamTalk, onRestStars, onGotoPrep, onAdvanceSillySeason, onFinishSillySeason }) {
+function generateWorldNews(clubs, userClubId, userLeagueId, cups) {
+  const rand = Math.random();
+  if (rand < 0.55) {
+    const candidates = Object.values(clubs).filter(c => c.id !== userClubId && c.league === userLeagueId);
+    if (!candidates.length) return null;
+    const club = pick(candidates);
+    const templates = [
+      () => ({ text: `Rykten: ${club.name} sägs vara intresserade av att förstärka truppen inför nästa transferfönster.`, category: "Ligan" }),
+      () => ({ text: `${club.name} imponerade stort i senaste omgången — fansen firar en stark insats.`, category: "Ligan" }),
+      () => ({ text: `Tunga tider för ${club.name} efter en svag period — supportrarna börjar ifrågasätta ledningen.`, category: "Ligan" }),
+      () => ({ text: `${club.name} förhandlar enligt uppgift med en spelare från en rivaliserande klubb.`, category: "Övergångar" }),
+      () => ({ text: `Spekulationer om att ${club.name}s tränare kan få lämna sin post om resultaten inte vänder.`, category: "Ligan" }),
+      () => ({ text: `${club.name} meddelar en ny sponsoraffär som stärker klubbens ekonomi.`, category: "Ligan" }),
+    ];
+    return pick(templates)();
+  }
+  const activeCups = ["domestic", "cup1", "cup2"].map(t => cups?.[t]).filter(c => c && !c.champion && !c.eliminated);
+  if (activeCups.length) {
+    const cup = pick(activeCups);
+    const templates = [
+      () => ({ text: `${cup.label}: flera överraskande resultat i den senaste omgången skakar om turneringen.`, category: "Cup" }),
+      () => ({ text: `${cup.label} fortsätter att bjuda på dramatik — flera favoritlag har fått det tufft.`, category: "Cup" }),
+      () => ({ text: `Experterna diskuterar vilka lag som är favoriter att gå långt i ${cup.label}.`, category: "Cup" }),
+    ];
+    return pick(templates)();
+  }
+  return null;
+}
+const NEWS_CATEGORY_COLOR = {
+  Skada: C.loss, Övergångar: C.win, Styrelse: C.gold, Scouting: "#3F74A8", Kontrakt: C.gold, Arena: "#3F74A8", Klubben: C.inkSoft, Ligan: "#7A5FB0", Cup: C.gold,
+};
+function NewsTab({ newsFeed }) {
+  const items = newsFeed || [];
+  return (
+    <div className="rise-in space-y-2.5">
+      <PaperCard>
+        <div className="font-display text-xl">Nyheter</div>
+        <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Allt som hänt i klubben, senaste överst.</div>
+      </PaperCard>
+      {items.length === 0 && (
+        <PaperCard><div className="text-sm text-center py-4" style={{ color: C.inkSoft }}>Inga nyheter ännu — de dyker upp här allteftersom säsongen rullar på.</div></PaperCard>
+      )}
+      {items.map(n => {
+        const color = NEWS_CATEGORY_COLOR[n.category] || C.inkSoft;
+        return (
+          <PaperCard key={n.id}>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-9 font-bold uppercase tracking-wide px-2 py-0.5 rounded-full" style={{ background: `${color}26`, color }}>{n.category}</span>
+              <span className="text-10 font-mono" style={{ color: C.inkSoft }}>S{n.season} · Omg {n.round + 1}</span>
+            </div>
+            <div className="text-sm">{n.text}</div>
+          </PaperCard>
+        );
+      })}
+    </div>
+  );
+}
+function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRow, nextFixture, seasonOver, onPlay, onNewSeason, onGotoCup, onSetPlannedSub, onSetTeamTalk, onRestStars, onGotoPrep, onAdvanceSillySeason, onFinishSillySeason }) {
   const form = recentForm(g.schedule, g.round, g.userClubId);
   const isHome = nextFixture ? nextFixture.home === g.userClubId : true;
   const n = standings.length;
@@ -3513,6 +4160,7 @@ function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRo
           <div className="text-center py-3">
             <Landmark size={30} color={C.gold} className="mx-auto mb-2" />
             <div className="font-display text-xl">SILLY SEASON</div>
+            <div className="text-11 font-mono mt-0.5" style={{ color: C.gold }}>{formatGameDate(preSeasonStartDate(g.season))} — försäsong {seasonLabel(g.season)}</div>
             <div className="text-sm mt-1" style={{ color: C.inkSoft }}>Transferfönstret är öppet inför den nya säsongen. Scouta spelare, värva, förhandla kontrakt och bygg upp arena, akademi och organisation innan försäsongen drar igång.</div>
           </div>
         </PaperCard>
@@ -3529,14 +4177,18 @@ function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRo
     );
   }
 
-  if (g.cup && !g.cup.champion && !g.cup.eliminated) {
+  const pendingCupCount = ["domestic", "cup1", "cup2"].filter(t => g.cups?.[t] && !g.cups[t].champion && !g.cups[t].eliminated && g.round >= cupDueRoundNow(g.cups[t])).length;
+  const activeCup = g.activeCupType ? g.cups[g.activeCupType] : null;
+  const activeCupIsDue = activeCup && g.round >= cupDueRoundNow(activeCup);
+  if (activeCup && !activeCup.champion && !activeCup.eliminated && activeCupIsDue) {
     return (
       <div className="rise-in space-y-2.5">
         <PaperCard>
           <div className="text-center py-3">
             <Swords size={30} color={C.gold} className="mx-auto mb-2" />
-            <div className="font-display text-xl">{g.cup.label.toUpperCase()} PÅGÅR</div>
-            <div className="text-sm mt-1" style={{ color: C.inkSoft }}>{cupStatusText(g.cup)}</div>
+            <div className="font-display text-xl">{activeCup.label.toUpperCase()} PÅGÅR</div>
+            <div className="text-sm mt-1" style={{ color: C.inkSoft }}>{cupStatusText(activeCup)}</div>
+            {pendingCupCount > 1 && <div className="text-11 mt-1.5" style={{ color: C.gold }}>+{pendingCupCount - 1} till cup{pendingCupCount > 2 ? "er" : ""} pågår parallellt</div>}
           </div>
         </PaperCard>
         <button onClick={onGotoCup} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep }}>FORTSÄTT I CUPEN</button>
@@ -3571,7 +4223,7 @@ function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRo
   }
 
   const xiPreview = getXI(g.squad, g.startingXI);
-  const strengthPreview = userStrength(xiPreview, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad));
+  const strengthPreview = userStrength(xiPreview, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff);
   const report = oppClub ? scoutingReport(strengthPreview.attack, strengthPreview.defense, oppClub) : null;
   const weatherPreview = weatherForMatch(`weather${g.round}${g.userClubId}`);
   const benchOptions = g.squad.filter(p => !xiPreview.some(x => x.id === p.id) && !p.injuryWeeks && !p.suspendedMatches && !p.internationalDuty);
@@ -3585,7 +4237,7 @@ function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRo
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <Swords size={12} color={C.gold} />
-            <span className="text-9 uppercase tracking-wide font-bold" style={{ color: C.gold }}>Seriematch · {countryName}</span>
+            <span className="text-9 uppercase tracking-wide font-bold" style={{ color: C.gold }}>Seriematch · {countryName} · {formatGameDateShort(roundDate(g.season, g.round))}</span>
           </div>
           {isRivalMatch && <div className="text-9 font-bold uppercase tracking-wide px-2 py-0.5 rounded-full" style={{ background: C.gold, color: C.turfDeep }}>Lokal rival!</div>}
         </div>
@@ -3651,15 +4303,15 @@ function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRo
   );
 }
 
-function MatchPrepView({ g, userClub, oppClub, countryName, isHome, onBack, onTactic, onSetPlannedSub, onSetTactical, onSetTeamTalk, onRestStars, onSetTicketPrice, onGotoSquad, onPlay }) {
+function MatchPrepView({ g, userClub, oppClub, countryName, isHome, onBack, onSetPlannedSub, onSetTeamTalk, onRestStars, onSetTicketPrice, onGotoSquad, onPlay }) {
   const xiPreview = getXI(g.squad, g.startingXI);
-  const strengthPreview = userStrength(xiPreview, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad));
+  const strengthPreview = userStrength(xiPreview, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff);
   const report = oppClub ? scoutingReport(strengthPreview.attack, strengthPreview.defense, oppClub) : null;
   const weatherPreview = weatherForMatch(`weather${g.round}${g.userClubId}`);
   const benchOptions = g.squad.filter(p => !xiPreview.some(x => x.id === p.id) && !p.injuryWeeks && !p.suspendedMatches && !p.internationalDuty);
   const foreignOpp = oppClub && oppClub.league !== userClub.league;
   const xiReady = g.startingXI.length === 11;
-  const currentTier = TICKET_TIERS[g.ticketPrice] || TICKET_TIERS.medel;
+  const currentTier = TICKET_TIERS[g.ticketPrice] || TICKET_TIERS.t3;
   const isDerbyPrep = oppClub && userClub.rivalId === oppClub.id;
   const form5Prep = recentForm(g.schedule, g.round, g.userClubId);
   const onForm = form5Prep.filter(r => r === "win").length >= 3;
@@ -3669,12 +4321,12 @@ function MatchPrepView({ g, userClub, oppClub, countryName, isHome, onBack, onTa
 
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka</button>
 
       <PaperCard>
         <div className="flex items-center gap-1.5 mb-2">
           <Swords size={12} color={C.gold} />
-          <span className="text-9 uppercase tracking-wide font-bold" style={{ color: C.gold }}>Seriematch · {countryName}</span>
+          <span className="text-9 uppercase tracking-wide font-bold" style={{ color: C.gold }}>Seriematch · {countryName} · {formatGameDateShort(roundDate(g.season, g.round))}</span>
         </div>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -3738,31 +4390,7 @@ function MatchPrepView({ g, userClub, oppClub, countryName, isHome, onBack, onTa
         </div>
       </PaperCard>
 
-      <PaperCard>
-        <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Taktik</div>
-        <div className="grid grid-cols-3 gap-2">
-          {[["anfall", "Anfall"], ["balanserad", "Balanserad"], ["forsvar", "Försvar"]].map(([key, label]) => (
-            <button key={key} onClick={() => onTactic(key)} className="py-2 rounded-xl text-xs font-semibold border"
-              style={g.tactic === key ? { background: C.turf, color: C.paper, borderColor: C.turf } : { background: "transparent", color: C.inkSoft, borderColor: C.paperDim }}>{label}</button>
-          ))}
-        </div>
-        <div className="mt-3">
-          <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Taktiska instruktioner</div>
-          <div className="space-y-1.5">
-            {TACTICAL_DIALS.map(dial => (
-              <div key={dial.key}>
-                <div className="text-10 mb-1 font-semibold" style={{ color: C.inkSoft }}>{dial.label}</div>
-                <div className="grid grid-cols-3 gap-2">
-                  {Object.entries(dial.options).map(([key, opt]) => (
-                    <button key={key} onClick={() => onSetTactical(dial.key, key)} className="py-1.5 rounded-xl text-9 font-semibold border"
-                      style={g.tacticalSettings?.[dial.key] === key ? { background: C.turf, color: C.paper, borderColor: C.turf } : { background: "transparent", color: C.inkSoft, borderColor: C.paperDim }}>{opt.label}</button>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </PaperCard>
+      <div className="text-11 px-1 py-2 text-center" style={{ color: C.paperDim }}>Taktik, spelidé och kapten ställs in under <b>Trupp</b>, tillsammans med startelvan.</div>
 
       <PaperCard>
         <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Planerat byte vid paus (om ni ligger under)</div>
@@ -3782,22 +4410,10 @@ function MatchPrepView({ g, userClub, oppClub, countryName, isHome, onBack, onTa
         </button>
       </PaperCard>
 
-      {isHome && (
-        <PaperCard>
-          <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Biljettpriser</div>
-          {bigDraw && (
-            <div className="text-11 mb-2 px-2.5 py-1.5 rounded-lg font-semibold" style={{ background: "rgba(201,154,62,0.15)", color: C.gold }}>
-              🎟️ Storpublik väntas — {isDerbyPrep ? "lokal rivalmatch!" : oppClub && oppClub.strength >= 75 ? "starkt motstånd drar folk!" : "formstarkt lag lockar publik!"}
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-2">
-            {Object.entries(TICKET_TIERS).map(([key, tier]) => (
-              <button key={key} onClick={() => onSetTicketPrice(key)} className="py-2 rounded-xl text-xs font-semibold border text-left px-3"
-                style={g.ticketPrice === key ? { background: C.turf, color: C.paper, borderColor: C.turf } : { background: "transparent", color: C.inkSoft, borderColor: C.paperDim }}>{tier.label}</button>
-            ))}
-          </div>
-          <div className="text-11 mt-2" style={{ color: C.inkSoft }}>{currentTier.desc}</div>
-        </PaperCard>
+      {isHome && bigDraw && (
+        <div className="text-11 px-2.5 py-1.5 rounded-lg font-semibold" style={{ background: "rgba(201,154,62,0.15)", color: C.gold }}>
+          🎟️ Storpublik väntas — {isDerbyPrep ? "lokal rivalmatch!" : oppClub && oppClub.strength >= 75 ? "starkt motstånd drar folk!" : "formstarkt lag lockar publik!"} (Biljettpris ställs in under Ekonomi.)
+        </div>
       )}
 
       <button onClick={onPlay} className="pulse-cta w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-2" style={{ background: C.gold, color: C.turfDeep }}>
@@ -3808,30 +4424,16 @@ function MatchPrepView({ g, userClub, oppClub, countryName, isHome, onBack, onTa
 }
 
 function MatchResultView({ report, userTeamName, competitionLabel, onContinue }) {
-  const { oppName, userIsHome, userGoals, oppGoals, result, ratings, penalties, weather, keyMoments, isDerby, timeline, stats, motm } = report;
-  const hasTicker = timeline && timeline.length > 0;
-  const [revealCount, setRevealCount] = useState(0);
-  const [skipped, setSkipped] = useState(!hasTicker);
-
-  useEffect(() => {
-    if (!hasTicker || skipped || revealCount >= timeline.length) return;
-    const t = setTimeout(() => setRevealCount(c => c + 1), 1250);
-    return () => clearTimeout(t);
-  }, [revealCount, hasTicker, skipped, timeline]);
-
-  const showingFinal = !hasTicker || skipped || revealCount >= timeline.length;
-  const revealed = hasTicker ? timeline.slice(0, revealCount) : [];
-  const runningUser = revealed.filter(e => e.type === "goal-user").length;
-  const runningOpp = revealed.filter(e => e.type === "goal-opp").length;
+  const { oppName, userIsHome, userGoals, oppGoals, result, ratings, penalties, weather, keyMoments, isDerby, stats, motm } = report;
+  const showingFinal = true;
 
   const resultLabel = { win: "SEGER", draw: "OAVGJORT", loss: "FÖRLUST" }[result];
   const resultColor = { win: C.win, draw: C.draw, loss: C.loss }[result];
   const homeIsUser = userIsHome === undefined ? true : userIsHome;
-  const homeScore = showingFinal ? (homeIsUser ? userGoals : oppGoals) : (homeIsUser ? runningUser : runningOpp);
-  const awayScore = showingFinal ? (homeIsUser ? oppGoals : userGoals) : (homeIsUser ? runningOpp : runningUser);
+  const homeScore = homeIsUser ? userGoals : oppGoals;
+  const awayScore = homeIsUser ? oppGoals : userGoals;
   const homeName = homeIsUser ? userTeamName : oppName;
   const awayName = homeIsUser ? oppName : userTeamName;
-  const lastEvent = revealed.length ? revealed[revealed.length - 1] : null;
 
   return (
     <div className="rise-in space-y-2.5">
@@ -3839,18 +4441,15 @@ function MatchResultView({ report, userTeamName, competitionLabel, onContinue })
         <div className="px-4 pt-4 pb-3 text-center">
           {isDerby && <div className="text-9 font-bold uppercase tracking-wide inline-block px-2 py-0.5 rounded-full mb-1.5" style={{ background: C.gold, color: C.turfDeep }}>Lokal derby</div>}
           <div className="text-10 tracking-20 uppercase font-semibold" style={{ color: C.inkSoft }}>
-            {competitionLabel || "Matchbiljett"} · {showingFinal ? "Slutresultat" : `${lastEvent ? lastEvent.minute : 0}'`}{weather ? ` · ${weather.icon} ${weather.name}` : ""}
+            {competitionLabel || "Matchbiljett"} · Slutresultat{weather ? ` · ${weather.icon} ${weather.name}` : ""}
           </div>
-          {showingFinal && <div className="font-display text-sm mt-2" style={{ color: resultColor }}>{resultLabel}</div>}
+          <div className="font-display text-sm mt-2" style={{ color: resultColor }}>{resultLabel}</div>
           <div className="flex items-center justify-center gap-4 mt-2">
             <span className="text-sm font-medium w-24 text-right truncate">{homeName}</span>
-            <span className="font-display text-4xl tabular-nums"><AnimatedNumber value={homeScore} duration={300} /> – <AnimatedNumber value={awayScore} duration={300} /></span>
+            <span className="font-display text-4xl tabular-nums">{homeScore} – {awayScore}</span>
             <span className="text-sm font-medium w-24 text-left truncate">{awayName}</span>
           </div>
-          {showingFinal && penalties && <div className="text-xs mt-1.5 font-mono" style={{ color: C.inkSoft }}>Straffar: {penalties}</div>}
-          {!showingFinal && lastEvent && (
-            <div className="text-11 mt-2 rise-in" key={revealCount} style={{ color: C.ink }}>{lastEvent.text}</div>
-          )}
+          {penalties && <div className="text-xs mt-1.5 font-mono" style={{ color: C.inkSoft }}>Straffar: {penalties}</div>}
         </div>
         {showingFinal && keyMoments && keyMoments.length > 0 && (
           <>
@@ -3945,15 +4544,9 @@ function MatchResultView({ report, userTeamName, competitionLabel, onContinue })
           </>
         )}
       </div>
-      {showingFinal ? (
-        <button onClick={onContinue} className="pulse-cta w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-1" style={{ background: C.gold, color: C.turfDeep }}>
-          FORTSÄTT <ChevronRight size={16} />
-        </button>
-      ) : (
-        <button onClick={() => setSkipped(true)} className="w-full py-2.5 rounded-2xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.turfLine}`, color: C.paperDim }}>
-          Hoppa till resultat
-        </button>
-      )}
+      <button onClick={onContinue} className="pulse-cta w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-1" style={{ background: C.gold, color: C.turfDeep }}>
+        FORTSÄTT <ChevronRight size={16} />
+      </button>
     </div>
   );
 }
@@ -3989,7 +4582,7 @@ function ManagerProfileView({ manager, assistantManager, staff, g, userClub, onR
 
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka</button>
       <PaperCard>
         <div className="flex items-center gap-3">
           <div className="w-14 h-14 rounded-full flex items-center justify-center font-display text-xl shrink-0" style={{ background: C.gold, color: C.turfDeep }}>
@@ -4118,7 +4711,7 @@ function TrophyCabinetView({ history, club, season, clubRecords, onBack }) {
   const totalPrize = history.reduce((sum, s) => sum + (s.prizeTotal || 0), 0);
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka</button>
       <PaperCard>
         <div className="flex items-center gap-3">
           <Medal size={30} color={C.gold} />
@@ -4190,101 +4783,200 @@ function BoardCrisisView({ clubName, onAcknowledge }) {
   );
 }
 
-function HalftimeView({ pending, userClub, oppClub, onContinue }) {
+const MATCH_SEGMENTS = [[0, 15], [15, 30], [30, 45], [45, 60], [60, 75], [75, 90]];
+function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tacticalSettings, lineupCells, staff, formationFamiliarity, teamTalk, onFinalize }) {
+  const [segmentIdx, setSegmentIdx] = useState(0);
+  const [log, setLog] = useState([]);
+  const [userGoals, setUserGoals] = useState(0);
+  const [oppGoals, setOppGoals] = useState(0);
+  const [currentXiIds, setCurrentXiIds] = useState(pending.xiIds);
+  const [localTactic, setLocalTactic] = useState(tactic);
+  const [subLog, setSubLog] = useState([]);
+  const [panelMode, setPanelMode] = useState(null); // null | "tactics" | "subs" | "ratings"
+  const [subOutId, setSubOutId] = useState(null);
+  const [stats, setStats] = useState({ shotsUser: 0, shotsOpp: 0, possessionSum: 0, segmentsPlayed: 0 });
+  const [ratings, setRatings] = useState(() => Object.fromEntries(pending.xiIds.map(id => [id, 6.0])));
+
+  const done = segmentIdx >= MATCH_SEGMENTS.length;
   const homeIsUser = pending.userIsHome;
-  const homeScore = homeIsUser ? pending.h1User : pending.h1Opp;
-  const awayScore = homeIsUser ? pending.h1Opp : pending.h1User;
+  const homeGoals = homeIsUser ? userGoals : oppGoals;
+  const awayGoals = homeIsUser ? oppGoals : userGoals;
   const homeName = homeIsUser ? userClub.name : oppClub.name;
   const awayName = homeIsUser ? oppClub.name : userClub.name;
-  const userBehindOrLevel = pending.h1User <= pending.h1Opp;
+  const minuteLabel = done ? "Full tid" : `${MATCH_SEGMENTS[segmentIdx][0]}'`;
+  const possessionUser = stats.segmentsPlayed > 0 ? Math.round(stats.possessionSum / stats.segmentsPlayed) : 50;
+
+  function playSegment() {
+    const xi = squad.filter(p => currentXiIds.includes(p.id));
+    const { attack, defense } = userStrength(xi, localTactic, spelide, tacticalSettings, teamPositionFit(lineupCells, squad), staff);
+    const talk = TEAM_TALK_OPTIONS[teamTalk] || TEAM_TALK_OPTIONS.neutral;
+    const famBonus = 1 + familiarityBonus(formationFamiliarity);
+    const [start, end] = MATCH_SEGMENTS[segmentIdx];
+    const segLen = end - start;
+    const lambdaUser = expectedGoals(attack * talk.atkMult * famBonus, pending.oppStrength, pending.userIsHome) * pending.weather.mult * (segLen / 90);
+    const lambdaOpp = expectedGoals(pending.oppStrength, defense * talk.defMult * famBonus, !pending.userIsHome) * pending.weather.mult * (segLen / 90);
+    const segUser = poisson(lambdaUser), segOpp = poisson(lambdaOpp);
+    const entries = [];
+    const attackers = xi.filter(p => p.pos !== "MV");
+    const scorerIds = [];
+    for (let i = 0; i < segUser; i++) { const scorer = pick(attackers) || xi[0]; if (scorer) scorerIds.push(scorer.id); entries.push({ minute: rndInt(start + 1, end), text: `⚽ MÅL! ${scorer?.name || userClub.name} sätter dit den för ${userClub.name}!`, goal: true, isUser: true }); }
+    for (let i = 0; i < segOpp; i++) entries.push({ minute: rndInt(start + 1, end), text: `⚽ Mål för ${oppClub.name}.`, goal: true, isUser: false });
+    if (!entries.length) {
+      const flavor = pick(["Jämnt spel i mittfältet.", "Inget att notera just nu — bollen cirkulerar.", `${Math.random() < 0.5 ? userClub.name : oppClub.name} testar från distans, utan framgång.`, "Ett par avbrutna anfall, men ingenting farligt."]);
+      entries.push({ minute: rndInt(start + 1, end), text: flavor, goal: false });
+    }
+    entries.sort((a, b) => a.minute - b.minute);
+    setLog(l => [...l, ...entries]);
+    setUserGoals(v => v + segUser);
+    setOppGoals(v => v + segOpp);
+
+    // live stats: shots roughly track chance volume, possession tracks relative strength this segment
+    const segShotsUser = segUser * 2 + rndInt(0, 2) + (Math.random() < 0.5 ? 1 : 0);
+    const segShotsOpp = segOpp * 2 + rndInt(0, 2) + (Math.random() < 0.5 ? 1 : 0);
+    const tacticalMods = combinedTacticalMods(tacticalSettings);
+    const possThisSeg = clamp(50 + (attack - pending.oppStrength) / 2.6 + (segUser - segOpp) * 4 + tacticalMods.possBias + rnd(-4, 4), 18, 82);
+    setStats(s => ({ shotsUser: s.shotsUser + segShotsUser, shotsOpp: s.shotsOpp + segShotsOpp, possessionSum: s.possessionSum + possThisSeg, segmentsPlayed: s.segmentsPlayed + 1 }));
+
+    // live ratings: nudge each player on the pitch based on team performance this segment, bonus for scoring
+    setRatings(r => {
+      const next = { ...r };
+      const teamDelta = segUser > segOpp ? rnd(0.05, 0.18) : segUser < segOpp ? -rnd(0.05, 0.2) : rnd(-0.03, 0.05);
+      xi.forEach(p => { next[p.id] = clamp((next[p.id] ?? 6.0) + teamDelta + rnd(-0.05, 0.08), 3.5, 9.8); });
+      scorerIds.forEach(id => { next[id] = clamp((next[id] ?? 6.0) + 0.45, 3.5, 9.8); });
+      return next;
+    });
+    setSegmentIdx(i => i + 1);
+  }
+
+  function handleFinish() {
+    onFinalize(currentXiIds, subLog.length ? subLog.join("; ") : null, userGoals, oppGoals, null);
+  }
+
+  const xiPlayers = squad.filter(p => currentXiIds.includes(p.id));
+  const benchPlayers = squad.filter(p => !currentXiIds.includes(p.id) && !p.injuryWeeks && !p.suspendedMatches);
+  function makeSub(outId, inId) {
+    const outP = squad.find(p => p.id === outId), inP = squad.find(p => p.id === inId);
+    if (!outP || !inP) return;
+    setCurrentXiIds(ids => ids.filter(id => id !== outId).concat([inId]));
+    setSubLog(s => [...s, `${outP.name} → ${inP.name} (${MATCH_SEGMENTS[Math.min(segmentIdx, 5)][0]}')`]);
+    setRatings(r => ({ ...r, [inId]: 6.0 }));
+    setSubOutId(null);
+    setPanelMode(null);
+  }
+
   return (
     <div className="rise-in space-y-2.5">
       <div className="ticket rounded-2xl overflow-hidden" style={{ background: C.paper, color: C.ink }}>
-        <div className="px-4 pt-4 pb-4 text-center">
-          <div className="text-10 tracking-20 uppercase font-semibold" style={{ color: C.inkSoft }}>Halvtid · {pending.weather.icon} {pending.weather.name}</div>
-          <div className="flex items-center justify-center gap-4 mt-2">
+        <div className="px-4 pt-3 pb-3 text-center">
+          <div className="text-10 tracking-20 uppercase font-semibold" style={{ color: C.inkSoft }}>{minuteLabel} · {pending.weather.icon} {pending.weather.name}</div>
+          <div className="flex items-center justify-center gap-4 mt-1">
             <span className="text-sm font-medium w-24 text-right truncate">{homeName}</span>
-            <span className="font-display text-4xl tabular-nums">{homeScore} – {awayScore}</span>
+            <span className="font-display text-3xl tabular-nums">{homeGoals} – {awayGoals}</span>
             <span className="text-sm font-medium w-24 text-left truncate">{awayName}</span>
           </div>
+          {subLog.length > 0 && <div className="text-10 mt-1" style={{ color: C.inkSoft }}>{subLog.length} byte{subLog.length > 1 ? "n" : ""} gjorda · Taktik: {localTactic}</div>}
+        </div>
+        <div className="border-t px-4 py-2 grid grid-cols-3 gap-2 text-center" style={{ borderColor: C.paperDim }}>
+          <div>
+            <div className="font-mono text-sm font-bold">{homeIsUser ? stats.shotsUser : stats.shotsOpp}–{homeIsUser ? stats.shotsOpp : stats.shotsUser}</div>
+            <div className="text-9 uppercase" style={{ color: C.inkSoft }}>Skott</div>
+          </div>
+          <div>
+            <div className="font-mono text-sm font-bold">{homeIsUser ? possessionUser : 100 - possessionUser}%–{homeIsUser ? 100 - possessionUser : possessionUser}%</div>
+            <div className="text-9 uppercase" style={{ color: C.inkSoft }}>Bollinnehav</div>
+          </div>
+          <button onClick={() => setPanelMode(panelMode === "ratings" ? null : "ratings")} className="text-9 uppercase font-semibold rounded-lg py-1" style={{ color: C.gold, background: "rgba(201,154,62,0.12)" }}>Se betyg</button>
         </div>
       </div>
-      {userBehindOrLevel ? (
-        <div className="space-y-2">
-          <div className="text-11 text-center" style={{ color: C.paperDim }}>Ni ligger inte över — byt till en mer offensiv inställning för andra halvlek?</div>
-          <button onClick={() => onContinue(true)} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-2" style={{ background: C.gold, color: C.turfDeep }}>
-            <Play size={16} fill={C.turfDeep} /> KÖR PÅ OFFENSIVT
-          </button>
-          <button onClick={() => onContinue(false)} className="w-full py-2.5 rounded-2xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.turfLine}`, color: C.paperDim }}>Behåll taktiken</button>
+
+      <PaperCard style={{ maxHeight: 260, overflowY: "auto" }}>
+        <div className="space-y-1.5">
+          {log.length === 0 && <div className="text-12 text-center py-2" style={{ color: C.inkSoft }}>Matchen är igång...</div>}
+          {log.slice().reverse().map((e, i) => (
+            <div key={i} className="text-12 flex gap-2" style={{ fontWeight: e.goal ? 700 : 400, color: e.goal ? (e.isUser ? C.win : C.loss) : C.ink }}>
+              <span className="font-mono shrink-0" style={{ color: C.inkSoft }}>{e.minute}'</span>
+              <span>{e.text}</span>
+            </div>
+          ))}
         </div>
+      </PaperCard>
+
+      {panelMode === "ratings" ? (
+        <PaperCard>
+          <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Betyg just nu</div>
+          <div className="space-y-1">
+            {xiPlayers.slice().sort((a, b) => (ratings[b.id] ?? 6) - (ratings[a.id] ?? 6)).map(p => (
+              <div key={p.id} className="flex items-center justify-between text-sm">
+                <span className="truncate">{p.name} <span className="text-10" style={{ color: C.inkSoft }}>· {p.specificPosition}</span></span>
+                <span className="font-mono font-bold shrink-0 ml-2">{(ratings[p.id] ?? 6).toFixed(1)}</span>
+              </div>
+            ))}
+          </div>
+          <button onClick={() => setPanelMode(null)} className="w-full py-2 mt-2.5 rounded-xl text-xs font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Stäng</button>
+        </PaperCard>
+      ) : panelMode === "tactics" ? (
+        <PaperCard>
+          <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Justera taktik</div>
+          <div className="grid grid-cols-3 gap-2">
+            {[["anfall", "Anfall"], ["balanserad", "Balanserad"], ["forsvar", "Försvar"]].map(([key, label]) => (
+              <button key={key} onClick={() => setLocalTactic(key)} className="py-2 rounded-xl text-xs font-semibold border"
+                style={localTactic === key ? { background: C.turf, color: C.paper, borderColor: C.turf } : { background: "transparent", color: C.inkSoft, borderColor: C.paperDim }}>{label}</button>
+            ))}
+          </div>
+          <button onClick={() => setPanelMode(null)} className="w-full py-2 mt-2.5 rounded-xl text-xs font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Klar</button>
+        </PaperCard>
+      ) : panelMode === "subs" ? (
+        <PaperCard>
+          <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Byte {subOutId ? "— välj vem som kommer in" : "— välj vem som lämnar planen"}</div>
+          {!subOutId ? (
+            <div className="space-y-1">
+              {xiPlayers.map(p => (
+                <button key={p.id} onClick={() => setSubOutId(p.id)} className="w-full text-left px-3 py-2 rounded-xl text-sm" style={{ background: C.paperDim, color: C.ink }}>{p.name} · {p.specificPosition}</button>
+              ))}
+              <button onClick={() => setPanelMode(null)} className="w-full py-2 mt-1 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.inkSoft }}>Stäng</button>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {benchPlayers.length === 0 && <div className="text-sm" style={{ color: C.inkSoft }}>Ingen tillgänglig på bänken.</div>}
+              {benchPlayers.map(p => (
+                <button key={p.id} onClick={() => makeSub(subOutId, p.id)} className="w-full text-left px-3 py-2 rounded-xl text-sm" style={{ background: C.paperDim, color: C.ink }}>{p.name} · {p.specificPosition}</button>
+              ))}
+              <button onClick={() => setSubOutId(null)} className="w-full py-2 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.inkSoft }}>Avbryt</button>
+            </div>
+          )}
+        </PaperCard>
       ) : (
-        <button onClick={() => onContinue(false)} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-2" style={{ background: C.gold, color: C.turfDeep }}>
-          <Play size={16} fill={C.turfDeep} /> SPELA ANDRA HALVLEK
-        </button>
+        <div className="space-y-2">
+          {!done ? (
+            <>
+              <button onClick={playSegment} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-2" style={{ background: C.gold, color: C.turfDeep }}>
+                <Play size={16} fill={C.turfDeep} /> SPELA VIDARE ({MATCH_SEGMENTS[segmentIdx][0]}'–{MATCH_SEGMENTS[segmentIdx][1]}')
+              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={() => setPanelMode("tactics")} className="py-2 rounded-xl text-xs font-semibold" style={{ background: C.paperDim, color: C.ink }}>PAUSA — justera taktik</button>
+                <button onClick={() => setPanelMode("subs")} disabled={subLog.length >= 5} className="py-2 rounded-xl text-xs font-semibold" style={{ background: C.paperDim, color: subLog.length >= 5 ? C.inkSoft : C.ink, opacity: subLog.length >= 5 ? 0.5 : 1 }}>PAUSA — gör byte {subLog.length >= 5 ? "(max)" : ""}</button>
+              </div>
+            </>
+          ) : (
+            <button onClick={handleFinish} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep }}>SE MATCHRAPPORT</button>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-function MidGameView({ pending, userClub, oppClub, onChoose }) {
-  const homeIsUser = pending.p.userIsHome;
-  const homeScore = homeIsUser ? pending.runningUser : pending.runningOpp;
-  const awayScore = homeIsUser ? pending.runningOpp : pending.runningUser;
-  const homeName = homeIsUser ? userClub.name : oppClub.name;
-  const awayName = homeIsUser ? oppClub.name : userClub.name;
-  return (
-    <div className="rise-in space-y-2.5">
-      <div className="ticket rounded-2xl overflow-hidden" style={{ background: C.paper, color: C.ink }}>
-        <div className="px-4 pt-4 pb-4 text-center">
-          <div className="text-10 tracking-20 uppercase font-semibold" style={{ color: C.inkSoft }}>60:e minuten · Läget just nu</div>
-          <div className="flex items-center justify-center gap-4 mt-2">
-            <span className="text-sm font-medium w-24 text-right truncate">{homeName}</span>
-            <span className="font-display text-4xl tabular-nums">{homeScore} – {awayScore}</span>
-            <span className="text-sm font-medium w-24 text-left truncate">{awayName}</span>
-          </div>
-        </div>
-      </div>
-      <div className="text-11 text-center" style={{ color: C.paperDim }}>Matchen går in i sin avgörande fas — hur vill ni angripa de kommande 15 minuterna?</div>
-      <div className="space-y-2">
-        <button onClick={() => onChoose("press")} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep }}>SÄTT PRESS</button>
-        <button onClick={() => onChoose("neutral")} className="w-full py-2.5 rounded-2xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.turfLine}`, color: C.paperDim }}>Håll linjen</button>
-        <button onClick={() => onChoose("consolidate")} className="w-full py-2.5 rounded-2xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.turfLine}`, color: C.paperDim }}>Konsolidera</button>
-      </div>
-    </div>
-  );
+function roundNameWithArticle(roundName) {
+  if (roundName === "Gruppspelet") return "i gruppspelet";
+  if (/^Omgång \d+$/.test(roundName)) return `i ${roundName.toLowerCase()}`;
+  return `i ${roundName.toLowerCase()}en`;
 }
-
-function LateGameView({ pending, userClub, oppClub, onChoose }) {
-  const homeIsUser = pending.p.userIsHome;
-  const homeScore = homeIsUser ? pending.runningUser : pending.runningOpp;
-  const awayScore = homeIsUser ? pending.runningOpp : pending.runningUser;
-  const homeName = homeIsUser ? userClub.name : oppClub.name;
-  const awayName = homeIsUser ? oppClub.name : userClub.name;
-  return (
-    <div className="rise-in space-y-2.5">
-      <div className="ticket rounded-2xl overflow-hidden" style={{ background: C.paper, color: C.ink }}>
-        <div className="px-4 pt-4 pb-4 text-center">
-          <div className="text-10 tracking-20 uppercase font-semibold" style={{ color: C.inkSoft }}>75:e minuten · Jämnt läge</div>
-          <div className="flex items-center justify-center gap-4 mt-2">
-            <span className="text-sm font-medium w-24 text-right truncate">{homeName}</span>
-            <span className="font-display text-4xl tabular-nums">{homeScore} – {awayScore}</span>
-            <span className="text-sm font-medium w-24 text-left truncate">{awayName}</span>
-          </div>
-        </div>
-      </div>
-      <div className="text-11 text-center" style={{ color: C.paperDim }}>Matchen är fortfarande öppen — hur vill ni spela de sista minuterna?</div>
-      <div className="space-y-2">
-        <button onClick={() => onChoose("push")} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-2" style={{ background: C.gold, color: C.turfDeep }}>
-          <Play size={16} fill={C.turfDeep} /> TRYCK FRAMÅT
-        </button>
-        <button onClick={() => onChoose("neutral")} className="w-full py-2.5 rounded-2xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.turfLine}`, color: C.paperDim }}>Fortsätt som vanligt</button>
-        <button onClick={() => onChoose("park")} className="w-full py-2.5 rounded-2xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.turfLine}`, color: C.paperDim }}>Håll ställningen</button>
-      </div>
-    </div>
-  );
+function cupDueRoundNow(cup) {
+  if (cup.phase === "groups") return cup.dueRounds?.[cup.groupRound] ?? 0;
+  const activeDueRounds = (cup.type === "cup1" && cup.phase !== "groups") ? cup.knockoutDueRounds : cup.dueRounds;
+  return activeDueRounds?.[cup.dueIndex ?? 0] ?? 0;
 }
-
-function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onContinueDomestic, onPlayGroup, onContinueGroup, onPlayLeg, onContinueLeg, onPlayFinal, onContinueFinal, onFinish }) {
+function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onContinueDomestic, onPlayGroup, onContinueGroup, onPlayLeg, onContinueLeg, onPlayFinal, onContinueFinal, onFinish, onBackToHome, currentRound }) {
   if (cup.champion) {
     return (
       <div className="rise-in space-y-2.5">
@@ -4303,10 +4995,27 @@ function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onConti
           <div className="text-center py-4">
             <Swords size={32} color={C.loss} className="mx-auto mb-2" />
             <div className="font-display text-2xl">UTSLAGNA</div>
-            <div className="text-sm mt-1" style={{ color: C.inkSoft }}>Er resa i {cup.label} slutade {cup.roundName === "Gruppspelet" ? "i gruppspelet" : `i ${cup.roundName.toLowerCase()}en`}.</div>
+            <div className="text-sm mt-1" style={{ color: C.inkSoft }}>Er resa i {cup.label} slutade {roundNameWithArticle(cup.roundName)}.</div>
           </div>
         </PaperCard>
         <button onClick={onFinish} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep }}>FORTSÄTT</button>
+      </div>
+    );
+  }
+
+  const hasPendingFixture = !!(cup.userReport || cup.pendingReport);
+  const dueRound = cupDueRoundNow(cup);
+  if (!hasPendingFixture && currentRound !== undefined && currentRound < dueRound) {
+    return (
+      <div className="rise-in space-y-2.5">
+        <PaperCard>
+          <div className="text-center py-4">
+            <CalendarDays size={30} color={C.gold} className="mx-auto mb-2" />
+            <div className="font-display text-lg">{cup.label}</div>
+            <div className="text-sm mt-1" style={{ color: C.inkSoft }}>Nästa match {roundNameWithArticle(cup.roundName)} spelas omgång {dueRound + 1}. Fortsätt med ligaspelet under tiden.</div>
+          </div>
+        </PaperCard>
+        <button onClick={onBackToHome} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep }}>TILLBAKA</button>
       </div>
     );
   }
@@ -4336,12 +5045,12 @@ function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onConti
     if (cup.pendingReport) return <MatchResultView report={cup.pendingReport} userTeamName={userTeamName} competitionLabel={`${cup.label} · Gruppspel`} onContinue={onContinueGroup} />;
     const groupIds = cup.groups[cup.userGroupIndex];
     const groupStandings = computeStandings(cup.groupSchedule, groupIds);
-    const nextFixture = cup.groupRound < 3 ? cup.groupSchedule[cup.groupRound].find(f => f.home === userClubId || f.away === userClubId) : null;
+    const nextFixture = cup.groupRound < cup.groupSchedule.length ? cup.groupSchedule[cup.groupRound].find(f => f.home === userClubId || f.away === userClubId) : null;
     const oppId = nextFixture ? (nextFixture.home === userClubId ? nextFixture.away : nextFixture.home) : null;
     return (
       <div className="rise-in space-y-2.5">
         <PaperCard>
-          <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{cup.label} · Gruppspel · Omgång {cup.groupRound + 1}/3</div>
+          <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{cup.label} · Gruppspel · Omgång {cup.groupRound + 1}/{cup.groupSchedule.length}</div>
           {oppId && <div className="flex items-center justify-center gap-3 mt-3"><span className="text-sm font-medium">{userTeamName}</span><span className="font-display text-xl" style={{ color: C.inkSoft }}>VS</span><span className="text-sm font-medium">{clubs[oppId].name}</span></div>}
           <button onClick={onPlayGroup} className="mt-4 w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-2" style={{ background: C.gold, color: C.turfDeep }}><Play size={16} fill={C.turfDeep} /> SPELA MATCH</button>
         </PaperCard>
@@ -4429,7 +5138,7 @@ function CupStandingsPanel({ cup, clubs, userClubId }) {
     const groupStandings = computeStandings(cup.groupSchedule, groupIds);
     return (
       <PaperCard style={{ padding: 0 }}>
-        <div className="px-3 pt-3 pb-2 text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{cup.label} · Gruppställning · Omgång {cup.groupRound + 1}/3</div>
+        <div className="px-3 pt-3 pb-2 text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{cup.label} · Gruppställning · Omgång {cup.groupRound + 1}/{cup.groupSchedule.length}</div>
         {groupStandings.map((row, i) => {
           const t = clubs[row.id]; const isUser = row.id === userClubId;
           return (
@@ -4495,13 +5204,262 @@ function CupFixturesPanel({ cup, clubs, userClubId }) {
   return <CupStandingsPanel cup={cup} clubs={clubs} userClubId={userClubId} />;
 }
 
-function TableTab({ standings, clubs, userClubId, division, cup, nextFixture }) {
+function StandingsTable({ standings, clubs, userClubId, division, nextOppId, hideZones }) {
+  const n = standings.length;
+  return (
+    <PaperCard style={{ padding: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: TABLE_COLS, columnGap: 4 }} className="px-3 pt-3 pb-2 text-9 uppercase font-semibold">
+        <span style={{ color: C.inkSoft }}>#</span>
+        <span style={{ color: C.inkSoft }}>Lag</span>
+        <span className="text-center" style={{ color: C.inkSoft }}>S</span>
+        <span className="text-center" style={{ color: C.inkSoft }}>V</span>
+        <span className="text-center" style={{ color: C.inkSoft }}>O</span>
+        <span className="text-center" style={{ color: C.inkSoft }}>F</span>
+        <span className="text-center" style={{ color: C.inkSoft }}>+/-</span>
+        <span className="text-right" style={{ color: C.inkSoft }}>P</span>
+      </div>
+      {standings.map((row, i) => {
+        const t = clubs[row.id];
+        if (!t) return null;
+        const isUser = row.id === userClubId;
+        const isNextOpp = row.id === nextOppId;
+        const promoZone = !hideZones && i < 3 && division > 1;
+        const relZone = !hideZones && i >= n - 3 && division < 3;
+        const diff = row.gf - row.ga;
+        return (
+          <div key={row.id} style={{ display: "grid", gridTemplateColumns: TABLE_COLS, columnGap: 4, background: isUser ? "rgba(201,154,62,0.18)" : isNextOpp ? "rgba(201,154,62,0.08)" : i % 2 ? "rgba(0,0,0,0.03)" : "transparent", borderLeft: promoZone ? `3px solid ${C.win}` : relZone ? `3px solid ${C.loss}` : "3px solid transparent" }}
+            className="px-3 py-2 items-center text-sm font-mono">
+            <span style={{ color: C.inkSoft }}>{i + 1}</span>
+            <span className="flex items-center gap-1.5 font-sans font-medium truncate min-w-0" style={{ fontWeight: isUser || isNextOpp ? 700 : 500 }}>
+              <ClubJersey club={t} size={16} /><span className="truncate">{t.name}</span>
+            </span>
+            <span className="text-center">{row.played}</span>
+            <span className="text-center">{row.won}</span>
+            <span className="text-center">{row.drawn}</span>
+            <span className="text-center">{row.lost}</span>
+            <span className="text-center">{diff > 0 ? "+" : ""}{diff}</span>
+            <span className="text-right font-semibold">{row.pts}</span>
+          </div>
+        );
+      })}
+    </PaperCard>
+  );
+}
+function bracketRoundLabel(n) {
+  if (n === 2) return "Final";
+  if (n === 4) return "Semifinal";
+  if (n === 8) return "Kvartsfinal";
+  if (n === 16) return "Åttondelsfinal";
+  return `Omgång (${n} lag)`;
+}
+function CupBracketList({ rounds, clubs, revealedRounds }) {
+  const shown = revealedRounds !== undefined ? rounds.slice(0, revealedRounds) : rounds;
+  return (
+    <div className="space-y-2.5">
+      {shown.length === 0 && (
+        <PaperCard><div className="text-sm text-center py-4" style={{ color: C.inkSoft }}>Turneringen har inte börjat spelas ännu.</div></PaperCard>
+      )}
+      {shown.map((round, ri) => (
+        <PaperCard key={ri} style={{ padding: 0 }}>
+          <div className="px-3 pt-3 pb-2 text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{bracketRoundLabel(round.length * 2)}</div>
+          <div className="divide-y" style={{ borderColor: C.paperDim }}>
+            {round.map((m, mi) => {
+              const home = clubs[m.home], away = m.away ? clubs[m.away] : null;
+              if (!home) return null;
+              return (
+                <div key={mi} className="flex items-center justify-between px-3 py-2 text-11">
+                  <span className="truncate flex-1" style={{ fontWeight: m.winner === m.home ? 700 : 400 }}>{home.name}</span>
+                  <span className="text-9 px-2" style={{ color: C.inkSoft }}>vs</span>
+                  <span className="truncate flex-1 text-right" style={{ fontWeight: m.winner === m.away ? 700 : 400 }}>{away ? away.name : "Frilott"}</span>
+                </div>
+              );
+            })}
+          </div>
+        </PaperCard>
+      ))}
+    </div>
+  );
+}
+function CupBrowserView({ clubs, homeLeagueId, season, currentRound, onBack }) {
+  const [selected, setSelected] = useState("domestic");
+  const domesticField = withSeededRandom(`${homeLeagueId}_domestic_${season}`, () => domesticCupField(homeLeagueId, clubs));
+  const domesticDue = cupDueSchedule("domestic", domesticField.length);
+  const domesticRevealed = domesticDue.filter(r => currentRound >= r).length;
+  const domesticRounds = seededResolveBracket(domesticField, clubs, `${homeLeagueId}_domestic_${season}_bracket`);
+
+  const allDiv1 = LEAGUES.flatMap(l => clubsInPool(l.id, 1, clubs).map(c => c.id));
+  const rankedDiv1 = [...allDiv1].sort((a, b) => (clubs[b]?.strength || 0) - (clubs[a]?.strength || 0));
+  const cup1Field = rankedDiv1.slice(0, 16);
+  const cup2Field = rankedDiv1.slice(16, 32);
+  const cup1Groups = withSeededRandom(`cup1_${season}`, () => drawCup1Groups(cup1Field, clubs));
+  const cup1GroupDue = spreadRounds(3, 24, 6);
+  const cup1GroupRevealed = cup1GroupDue.filter(r => currentRound >= r).length;
+  const cup1GroupResults = cup1Groups.map((g2, gi) => seededResolveGroup(g2, clubs, `cup1_${season}_group${gi}`, cup1GroupRevealed));
+  const cup1Qualifiers = cup1GroupResults.flatMap(r => r.standings.slice(0, 2).map(row => row.id));
+  const cup1QualifiersShuffled = withSeededRandom(`cup1_${season}_ko`, () => shuffle(cup1Qualifiers));
+  const cup1KnockoutRounds = seededResolveBracket(cup1QualifiersShuffled, clubs, `cup1_${season}_ko_bracket`);
+  const cup1KoDue = cupDueSchedule("cup1knockout", 8);
+  const cup1KoCheckpoints = [cup1KoDue[1], cup1KoDue[3], cup1KoDue[4]];
+  const cup1KoRevealed = cup1GroupRevealed < 6 ? 0 : cup1KoCheckpoints.filter(r => currentRound >= r).length;
+
+  const cup2Due = cupDueSchedule("cup2", cup2Field.length);
+  const cup2Checkpoints = [cup2Due[1], cup2Due[3], cup2Due[5], cup2Due[6]];
+  const cup2Revealed = cup2Checkpoints.filter(r => currentRound >= r).length;
+  const cup2Rounds = seededResolveBracket(cup2Field, clubs, `cup2_${season}_bracket`);
+
+  const leagueName = LEAGUES.find(l => l.id === homeLeagueId)?.name || homeLeagueId;
+  return (
+    <div className="rise-in space-y-2.5">
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka</button>
+      <PaperCard>
+        <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Visar troliga tabeller/träd baserat på klubbarnas styrka, avslöjat i takt med säsongen — precis som er egen liga. Inte nödvändigtvis exakt den officiella gången i er egen aktiva cup.</div>
+        <div className="grid grid-cols-1 gap-1.5">
+          <button onClick={() => setSelected("domestic")} className="text-left px-3 py-2 rounded-xl text-sm font-semibold" style={selected === "domestic" ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.ink }}>{leagueName}s inhemska cup</button>
+          <button onClick={() => setSelected("cup1")} className="text-left px-3 py-2 rounded-xl text-sm font-semibold" style={selected === "cup1" ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.ink }}>Kimby Mästerskapet</button>
+          <button onClick={() => setSelected("cup2")} className="text-left px-3 py-2 rounded-xl text-sm font-semibold" style={selected === "cup2" ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.ink }}>Kimby Cupen</button>
+        </div>
+      </PaperCard>
+
+      {selected === "domestic" && <CupBracketList rounds={domesticRounds} clubs={clubs} revealedRounds={domesticRevealed} />}
+
+      {selected === "cup1" && (
+        <div className="space-y-2.5">
+          <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Gruppspel {cup1GroupRevealed === 0 && "(har inte börjat ännu)"}</div>
+          {cup1GroupResults.map((r, gi) => (
+            <PaperCard key={gi} style={{ padding: 0 }}>
+              <div className="px-3 pt-3 pb-2 text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Grupp {String.fromCharCode(65 + gi)}</div>
+              <StandingsTable standings={r.standings} clubs={clubs} userClubId={null} division={2} nextOppId={null} hideZones />
+            </PaperCard>
+          ))}
+          <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Slutspel</div>
+          <CupBracketList rounds={cup1KnockoutRounds} clubs={clubs} revealedRounds={cup1KoRevealed} />
+        </div>
+      )}
+
+      {selected === "cup2" && <CupBracketList rounds={cup2Rounds} clubs={clubs} revealedRounds={cup2Revealed} />}
+    </div>
+  );
+}
+function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputation, difficulty, clubGoodwill, onNegotiationFailed, onFinalize, onBack }) {
+  const [leagueId, setLeagueId] = useState(homeLeagueId);
+  const [division, setDivision] = useState(1);
+  const [clubId, setClubId] = useState(null);
+  const [negotiatingPlayer, setNegotiatingPlayer] = useState(null);
+  const clubOptions = clubsInPool(leagueId, division, clubs);
+  const selectedClub = clubId ? clubs[clubId] : null;
+
+  if (negotiatingPlayer) {
+    const sellClub = clubs[negotiatingPlayer.clubId];
+    return <NegotiationView player={negotiatingPlayer} club={sellClub ? { ...sellClub, goodwill: clubGoodwill?.[sellClub.id] ?? 50 } : sellClub} region="browse" budget={budget} reputation={reputation} difficulty={difficulty}
+      onNegotiationFailed={onNegotiationFailed}
+      onBack={() => setNegotiatingPlayer(null)} onFinalize={(r, p, price, wage) => { onFinalize(p, price, wage); setNegotiatingPlayer(null); }} />;
+  }
+
+  if (selectedClub) {
+    return (
+      <div className="rise-in space-y-2.5">
+        <button onClick={() => setClubId(null)} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till klubbar</button>
+        <PaperCard>
+          <div className="flex items-center gap-2">
+            <ClubJersey club={selectedClub} size={22} />
+            <div className="font-display text-lg">{selectedClub.name}</div>
+          </div>
+        </PaperCard>
+        <PaperCard style={{ padding: 0 }}>
+          <div className="divide-y" style={{ borderColor: C.paperDim }}>
+            {(selectedClub.squad || []).slice().sort((a, b) => overallOf(b) - overallOf(a)).map(p => (
+              <button key={p.id} onClick={() => setNegotiatingPlayer({ ...p, clubId })} className="w-full flex items-center justify-between px-3 py-2.5 text-left">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold truncate">{p.name}</div>
+                  <div className="text-10" style={{ color: C.inkSoft }}>{p.specificPosition} · {p.age} år · Potential {p.potential ?? "–"}</div>
+                </div>
+                <div className="text-right shrink-0 ml-2">
+                  <div className="font-mono text-sm font-bold">{overallOf(p)}</div>
+                  <div className="text-10 font-mono" style={{ color: C.inkSoft }}>{formatMoney(p.value)}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </PaperCard>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rise-in space-y-2.5">
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka</button>
+      <PaperCard>
+        <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Liga</div>
+        <div className="grid grid-cols-1 gap-1.5">
+          {LEAGUES.map(l => (
+            <button key={l.id} onClick={() => setLeagueId(l.id)} className="text-left px-3 py-2 rounded-xl text-sm font-semibold" style={leagueId === l.id ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.ink }}>{l.name}{l.id === homeLeagueId ? " (er liga)" : ""}</button>
+          ))}
+        </div>
+        <div className="text-xs uppercase tracking-wide font-semibold mt-3 mb-1.5" style={{ color: C.inkSoft }}>Division</div>
+        <div className="grid grid-cols-3 gap-1.5">
+          {[1, 2, 3].map(d => (
+            <button key={d} onClick={() => setDivision(d)} className="py-2 rounded-xl text-sm font-semibold" style={division === d ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.ink }}>Division {d}</button>
+          ))}
+        </div>
+      </PaperCard>
+      <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Klubbar</div>
+      <PaperCard style={{ padding: 0 }}>
+        <div className="divide-y" style={{ borderColor: C.paperDim }}>
+          {clubOptions.map(c => (
+            <button key={c.id} onClick={() => setClubId(c.id)} className="w-full flex items-center gap-2 px-3 py-2.5 text-left">
+              <ClubJersey club={c} size={18} />
+              <span className="text-sm font-semibold flex-1 truncate">{c.name}{c.id === userClubId ? " (ni)" : ""}</span>
+              <span className="text-10 font-mono" style={{ color: C.inkSoft }}>{c.squad?.length || 0} spelare</span>
+            </button>
+          ))}
+        </div>
+      </PaperCard>
+    </div>
+  );
+}
+function LeagueBrowserView({ allSchedules, clubs, userClubId, homeLeagueId, onBack }) {
+  const [leagueId, setLeagueId] = useState(homeLeagueId);
+  const [division, setDivision] = useState(1);
+  const key = `${leagueId}_d${division}`;
+  const schedule = allSchedules?.[key];
+  const ids = clubsInPool(leagueId, division, clubs).map(c => c.id);
+  const standings = schedule ? computeStandings(schedule, ids) : [];
+  const leagueName = LEAGUES.find(l => l.id === leagueId)?.name || leagueId;
+  return (
+    <div className="rise-in space-y-2.5">
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka</button>
+      <PaperCard>
+        <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Liga</div>
+        <div className="grid grid-cols-1 gap-1.5">
+          {LEAGUES.map(l => (
+            <button key={l.id} onClick={() => setLeagueId(l.id)} className="text-left px-3 py-2 rounded-xl text-sm font-semibold" style={leagueId === l.id ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.ink }}>{l.name}{l.id === homeLeagueId ? " (er liga)" : ""}</button>
+          ))}
+        </div>
+        <div className="text-xs uppercase tracking-wide font-semibold mt-3 mb-1.5" style={{ color: C.inkSoft }}>Division</div>
+        <div className="grid grid-cols-3 gap-1.5">
+          {[1, 2, 3].map(d => (
+            <button key={d} onClick={() => setDivision(d)} className="py-2 rounded-xl text-sm font-semibold" style={division === d ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.ink }}>Division {d}</button>
+          ))}
+        </div>
+      </PaperCard>
+      <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>{leagueName} · Division {division}</div>
+      {standings.length > 0 ? <StandingsTable standings={standings} clubs={clubs} userClubId={userClubId} division={division} nextOppId={null} /> : <PaperCard><div className="text-sm text-center py-4" style={{ color: C.inkSoft }}>Ingen data ännu.</div></PaperCard>}
+    </div>
+  );
+}
+function TableTab({ standings, clubs, userClubId, division, cup, nextFixture, allSchedules, leagueId, season, currentRound }) {
   const [subView, setSubView] = useState("league");
+  const [showBrowser, setShowBrowser] = useState(false);
+  const [showCupBrowser, setShowCupBrowser] = useState(false);
+  if (showBrowser) return <LeagueBrowserView allSchedules={allSchedules} clubs={clubs} userClubId={userClubId} homeLeagueId={leagueId} onBack={() => setShowBrowser(false)} />;
+  if (showCupBrowser) return <CupBrowserView clubs={clubs} homeLeagueId={leagueId} season={season} currentRound={currentRound} onBack={() => setShowCupBrowser(false)} />;
   const n = standings.length;
   const nextOppId = nextFixture ? (nextFixture.home === userClubId ? nextFixture.away : nextFixture.home) : null;
   const showCupTab = cup && !cup.champion && !cup.eliminated;
   return (
     <div className="rise-in">
+      <button onClick={() => setShowBrowser(true)} className="w-full py-2.5 rounded-xl text-xs font-semibold mb-2" style={{ background: C.gold, color: C.turfDeep }}>Bläddra alla ligor & divisioner</button>
+      <button onClick={() => setShowCupBrowser(true)} className="w-full py-2.5 rounded-xl text-xs font-semibold mb-2.5" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim }}>Bläddra cuper</button>
       {showCupTab && (
         <div className="flex gap-2 mb-3">
           {[["league", "Liga"], ["cup", cup.label]].map(([key, label]) => (
@@ -4558,21 +5516,104 @@ function TableTab({ standings, clubs, userClubId, division, cup, nextFixture }) 
   );
 }
 
-function FixturesTab({ schedule, clubs, currentRound, userClubId, cup }) {
+function ScheduleBrowserView({ allSchedules, clubs, homeLeagueId, season, onBack }) {
+  const [leagueId, setLeagueId] = useState(homeLeagueId);
+  const [division, setDivision] = useState(1);
+  const key = `${leagueId}_d${division}`;
+  const schedule = allSchedules?.[key] || [];
+  const leagueName = LEAGUES.find(l => l.id === leagueId)?.name || leagueId;
+  return (
+    <div className="rise-in space-y-2.5">
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka</button>
+      <PaperCard>
+        <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Liga</div>
+        <div className="grid grid-cols-1 gap-1.5">
+          {LEAGUES.map(l => (
+            <button key={l.id} onClick={() => setLeagueId(l.id)} className="text-left px-3 py-2 rounded-xl text-sm font-semibold" style={leagueId === l.id ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.ink }}>{l.name}{l.id === homeLeagueId ? " (er liga)" : ""}</button>
+          ))}
+        </div>
+        <div className="text-xs uppercase tracking-wide font-semibold mt-3 mb-1.5" style={{ color: C.inkSoft }}>Division</div>
+        <div className="grid grid-cols-3 gap-1.5">
+          {[1, 2, 3].map(d => (
+            <button key={d} onClick={() => setDivision(d)} className="py-2 rounded-xl text-sm font-semibold" style={division === d ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.ink }}>Division {d}</button>
+          ))}
+        </div>
+      </PaperCard>
+      <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>{leagueName} · Division {division}</div>
+      <PaperCard style={{ padding: 0 }}>
+        <div className="max-h-96 overflow-y-auto divide-y" style={{ borderColor: C.paperDim }}>
+          {schedule.map((round, ri) => round.map((f, fi) => {
+            const home = clubs[f.home], away = clubs[f.away];
+            if (!home || !away) return null;
+            const played = f.homeGoals !== null;
+            return (
+              <div key={`${ri}-${fi}`} className="flex items-center justify-between px-3 py-2 text-11">
+                <span className="font-mono w-14 shrink-0" style={{ color: C.inkSoft }}>{formatGameDateShort(roundDate(season, ri))}</span>
+                <span className="flex-1 truncate px-1">{home.name} – {away.name}</span>
+                {played ? <span className="font-mono font-semibold shrink-0">{f.homeGoals}–{f.awayGoals}</span> : <span className="font-mono shrink-0" style={{ color: C.inkSoft }}>–</span>}
+              </div>
+            );
+          })).flat().filter(Boolean).slice(0, 200)}
+        </div>
+      </PaperCard>
+    </div>
+  );
+}
+function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, tourOffers, lastTourResult, onOpenTours, onStartTour, season, allSchedules, leagueId }) {
   const [subView, setSubView] = useState("league");
+  const [showBrowser, setShowBrowser] = useState(false);
+  const [showCupBrowser, setShowCupBrowser] = useState(false);
   const rivalId = clubs[userClubId]?.rivalId;
   const showCupTab = cup && !cup.champion && !cup.eliminated;
+  if (showBrowser) return <ScheduleBrowserView allSchedules={allSchedules} clubs={clubs} homeLeagueId={leagueId} season={season} onBack={() => setShowBrowser(false)} />;
+  if (showCupBrowser) return <CupBrowserView clubs={clubs} homeLeagueId={leagueId} season={season} currentRound={currentRound} onBack={() => setShowCupBrowser(false)} />;
   return (
     <div className="rise-in">
+      <button onClick={() => setShowBrowser(true)} className="w-full py-2.5 rounded-xl text-xs font-semibold mb-2" style={{ background: C.gold, color: C.turfDeep }}>Bläddra alla spelscheman</button>
+      <button onClick={() => setShowCupBrowser(true)} className="w-full py-2.5 rounded-xl text-xs font-semibold mb-2.5" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim }}>Bläddra cuper</button>
+      <PaperCard>
+        <div className="text-xs uppercase tracking-wide font-semibold px-1 mb-1" style={{ color: C.inkSoft }}>Försäsongsturné</div>
+        <div className="text-11 px-1 mb-2" style={{ color: C.inkSoft }}>En turné innehåller 4 träningsmatcher mot lokala lag och skärper också effekten av försäsongen.</div>
+        {!tourOffers ? (
+          <>
+            <button onClick={onOpenTours} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Planera turné</button>
+            {lastTourResult && (
+              <div className="mt-2 p-2.5 rounded-xl" style={{ background: C.paperDim }}>
+                <div className="text-11 font-semibold mb-1">Senaste turné: {lastTourResult.name}</div>
+                {lastTourResult.matches.map((m, i) => (
+                  <div key={i} className="text-10 flex items-center justify-between" style={{ color: C.inkSoft }}>
+                    <span>vs {m.opponent}</span><span className="font-mono font-semibold" style={{ color: m.us > m.them ? C.win : m.us < m.them ? C.loss : C.inkSoft }}>{m.us}–{m.them}</span>
+                  </div>
+                ))}
+                <div className="text-10 mt-1 font-semibold" style={{ color: lastTourResult.income - lastTourResult.cost >= 0 ? C.win : C.loss }}>Nettoresultat: {formatMoney(lastTourResult.income - lastTourResult.cost)}</div>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="space-y-2">
+            {tourOffers.map(o => {
+              const affordable = budget >= o.cost;
+              return (
+                <div key={o.id} className="p-2.5 rounded-xl" style={{ background: C.paperDim }}>
+                  <div className="text-sm font-semibold">{o.name}</div>
+                  <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Kostnad {formatMoney(o.cost)} · Möjlig intäkt {formatMoney(o.incomeMin)}–{formatMoney(o.incomeMax)} · +{o.repBonus} rykte · 4 matcher</div>
+                  <button onClick={() => onStartTour(o)} disabled={!affordable} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={affordable ? { background: C.gold, color: C.turfDeep } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>{affordable ? "Genomför turné" : "Otillräcklig budget"}</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </PaperCard>
+
       {showCupTab && (
-        <div className="flex gap-2 mb-3">
+        <div className="flex gap-2 mb-3 mt-2.5">
           {[["league", "Liga"], ["cup", cup.label]].map(([key, label]) => (
             <button key={key} onClick={() => setSubView(key)} className="flex-1 py-2 rounded-xl text-11 font-semibold" style={subView === key ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>{label}</button>
           ))}
         </div>
       )}
       {subView === "cup" && showCupTab ? <CupFixturesPanel cup={cup} clubs={clubs} userClubId={userClubId} /> : (
-        <PaperCard style={{ padding: 0 }}>
+        <PaperCard style={{ padding: 0, marginTop: showCupTab ? 0 : 10 }}>
           <div className="max-h-70 overflow-y-auto divide-y" style={{ borderColor: C.paperDim }}>
             {schedule.map((round, ri) => {
               const f = round.find(x => x.home === userClubId || x.away === userClubId);
@@ -4589,7 +5630,7 @@ function FixturesTab({ schedule, clubs, currentRound, userClubId, cup }) {
               }
               return (
                 <div key={ri} className="flex items-center justify-between px-3 py-2.5 text-sm" style={{ background: isCurrent ? "rgba(201,154,62,0.15)" : "transparent" }}>
-                  <span className="font-mono text-xs w-16 shrink-0" style={{ color: C.inkSoft }}>Omg {ri + 1}</span>
+                  <span className="font-mono text-xs w-16 shrink-0" style={{ color: C.inkSoft }}>{formatGameDateShort(roundDate(season, ri))}</span>
                   <span className="flex-1 truncate px-1">{isRival && <Star size={11} fill={C.gold} color={C.gold} className="inline mr-1 mb-0.5" />}{userIsHome ? "vs" : "@"} {clubs[oppId].name}</span>
                   {played ? (
                     <span className="flex items-center gap-1.5 font-mono">{resultTag && <ResultChip result={resultTag} />}<span>{f.homeGoals} – {f.awayGoals}</span></span>
@@ -4608,11 +5649,20 @@ function FixturesTab({ schedule, clubs, currentRound, userClubId, cup }) {
 const PRESTIGE_KIT_OVERRIDES = {
   eng1: { pattern: "solid", trim: "#ffffff" },       // Liverpool Athletic
   eng2: { pattern: "solid", trim: "#ffffff" },       // Manchester Rovers
+  eng7: { pattern: "solid", trim: "#ffffff" },       // Trafford United
   eng3: { pattern: "solid", trim: "#1C87C9" },       // Thames Ironworks (claret + blue trim)
+  eng5: { pattern: "solid", trim: "#ffffff" },        // Millwall Rovers (navy + white trim)
+  eng10: { pattern: "solid", trim: "#132257" },       // White Hart Wanderers (white + navy trim)
+  eng11: { pattern: "solid", trim: "#FFCD00" },       // Elland Whites (white + yellow trim)
+  eng12: { pattern: "stripes", secondary: "#ffffff" }, // Tyneside Magpies (black/white stripes)
   ita1: { pattern: "solid", trim: "#F2C230" },       // Roma 1927 (red + gold)
   ita2: { pattern: "stripes", secondary: "#111111" }, // Milano 1899 (red/black stripes)
-  esp1: { pattern: "solid", trim: "#ffffff" },        // CF Madrid
+  ita3: { pattern: "stripes", secondary: "#111111" }, // Milano Nerazzurri (blue/black stripes)
+  ita4: { pattern: "stripes", secondary: "#ffffff" }, // Piemonte Bianconeri (black/white stripes)
+  esp1: { pattern: "solid", trim: "#1B458F" },        // CF Madrid (white + navy trim)
   esp2: { pattern: "stripes", secondary: "#A50044" }, // Deportivo Barcelona (blue/garnet)
+  esp3: { pattern: "stripes", secondary: "#ffffff" }, // Atlético Rojiblanco (red/white stripes)
+  esp9: { pattern: "stripes", secondary: "#ffffff" }, // Bilbao Vizcaya (red/white stripes)
   ger1: { pattern: "solid", trim: "#ffffff" },        // München 1900
   ger2: { pattern: "solid", trim: "#111111" },        // Dortmund 1909 (yellow + black trim)
   fra1: { pattern: "solid", trim: "#ffffff" },        // FC Paris
@@ -4844,7 +5894,7 @@ function FormationView({ squad, startingXI, formationCode, lineupCells, onBack, 
     const candidates = [...bench].sort((a, b) => positionFit(b.specificPosition, pCol, pRow) - positionFit(a.specificPosition, pCol, pRow));
     return (
       <div className="rise-in space-y-3">
-        <button onClick={() => setPickingCell(null)} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till planen</button>
+        <button onClick={() => setPickingCell(null)} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till planen</button>
         <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Välj spelare till rutan</div>
         {candidates.length === 0 && <PaperCard><div className="text-sm text-center py-3" style={{ color: C.inkSoft }}>Ingen ledig spelare på bänken.</div></PaperCard>}
         <div className="space-y-2">
@@ -4870,7 +5920,7 @@ function FormationView({ squad, startingXI, formationCode, lineupCells, onBack, 
 
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till truppen</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till truppen</button>
       <button onClick={() => { setLineup({}); setSelectedCell(null); }} className="text-11 self-start" style={{ color: C.loss }}>Rensa startelva</button>
       <div className="flex gap-1.5 overflow-x-auto pb-1">
         {FORMATION_CODES.map(fc => (
@@ -4977,17 +6027,77 @@ const CONTRACT_SORT_OPTIONS = [
   { key: "wage", label: "Kontraktsvärde" },
   { key: "value", label: "Marknadsvärde" },
 ];
-function SetPieceTakersPanel({ squad, setPieceTakers, onSave, onBack }) {
-  const [penalties, setPenalties] = useState(setPieceTakers.penalties || []);
-  const [freeKick, setFreeKick] = useState(setPieceTakers.freeKick || null);
-  const [cornerLeft, setCornerLeft] = useState(setPieceTakers.cornerLeft || null);
-  const [cornerRight, setCornerRight] = useState(setPieceTakers.cornerRight || null);
-  const outfield = squad.filter(p => p.pos !== "MV").sort((a, b) => overallOf(b) - overallOf(a));
-  function togglePenalty(id) {
-    setPenalties(prev => prev.includes(id) ? prev.filter(x => x !== id) : prev.length < 5 ? [...prev, id] : prev);
+function penaltyRating(player) {
+  const attrs = getAttrs(player);
+  const cf = clutchFactor(player);
+  return clamp(Math.round(attrs.shooting * 0.55 + (cf + 1) / 2 * 45), 8, 99);
+}
+function freekickRating(player) {
+  const attrs = getAttrs(player);
+  return clamp(Math.round(attrs.shooting * 0.5 + attrs.dribbling * 0.3 + weakFoot(player) * 3), 8, 99);
+}
+function cornerRating(player) {
+  const attrs = getAttrs(player);
+  return clamp(Math.round(attrs.passing * 0.75 + attrs.dribbling * 0.15), 8, 99);
+}
+function SetPieceRosterRow({ player, statLabel, statValue, dragId, dragOverId, onSelectPlayer, onRowPointerDown, onRowPointerMove, onRowPointerUp }) {
+  const isDragging = dragId === player.id;
+  const isDragOver = dragOverId === player.id && dragId && dragId !== player.id;
+  return (
+    <div data-setpiece-row={player.id}
+      style={{ borderTop: "1px solid rgba(255,255,255,0.07)", opacity: isDragging ? 0.4 : 1, boxShadow: isDragOver ? `inset 0 0 0 2px ${C.gold}` : "none" }}
+      className="flex items-center gap-2 py-1.5 px-1">
+      <span onPointerDown={e => onRowPointerDown(e, player.id)} onPointerMove={onRowPointerMove} onPointerUp={onRowPointerUp} onPointerCancel={onRowPointerUp}
+        style={{ touchAction: "none", cursor: "grab", color: "rgba(255,255,255,0.5)", width: 26, height: 32, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 15, lineHeight: 1 }}>⠿⠿</span>
+      <button onClick={() => onSelectPlayer(player.id)} className="flex-1 min-w-0 text-left">
+        <span className="text-11 font-semibold truncate" style={{ display: "block", color: C.paper }}>{player.name}</span>
+        <span className="text-9" style={{ color: C.paperDim }}>{player.specificPosition} · {POS_LABEL[player.pos]}</span>
+      </button>
+      <span className="font-mono text-11 font-bold shrink-0" style={{ color: C.goldSoft, width: 26, textAlign: "center" }}>{statValue}</span>
+    </div>
+  );
+}
+function SetPieceDropSlot({ label, player, onRemove, isDragOver }) {
+  return (
+    <div data-setpiece-slot={label} style={{ background: "rgba(255,255,255,0.05)", border: `1.5px dashed ${isDragOver ? C.gold : "rgba(255,255,255,0.15)"}`, borderRadius: 10, padding: "8px 10px", minHeight: 40 }} className="flex items-center justify-between">
+      {player ? (
+        <>
+          <span className="text-11 font-semibold" style={{ color: C.paper }}>{player.name}</span>
+          <button onClick={onRemove} className="text-9 px-1.5" style={{ color: C.loss }}>×</button>
+        </>
+      ) : <span className="text-9" style={{ color: C.paperDim }}>Släpp en spelare här</span>}
+    </div>
+  );
+}
+function SetPieceSection({ title, desc, outfield, statFn, statLabel, mode, value, onChange, onSelectPlayer }) {
+  const [dragId, setDragId] = useState(null);
+  const [dragOverKey, setDragOverKey] = useState(null);
+  const dragState = useRef({ id: null });
+  const sorted = [...outfield].sort((a, b) => statFn(b) - statFn(a));
+  function onRowPointerDown(e, playerId) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    dragState.current = { id: playerId };
+    setDragId(playerId);
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
   }
+  function onRowPointerMove(e) {
+    if (!dragState.current.id) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const slotEl = el && el.closest("[data-setpiece-slot]");
+    setDragOverKey(slotEl ? slotEl.getAttribute("data-setpiece-slot") : null);
+  }
+  function onRowPointerUp() {
+    if (dragState.current.id && dragOverKey) {
+      if (mode === "ranked") onChange(prev => prev.includes(dragState.current.id) ? prev : prev.length < 5 ? [...prev, dragState.current.id] : prev);
+      else onChange(dragState.current.id);
+    }
+    dragState.current = { id: null };
+    setDragId(null);
+    setDragOverKey(null);
+  }
+  const rankedPlayers = mode === "ranked" ? value.map(id => outfield.find(p => p.id === id)).filter(Boolean) : [];
   function movePenalty(id, dir) {
-    setPenalties(prev => {
+    onChange(prev => {
       const i = prev.indexOf(id);
       const j = i + dir;
       if (j < 0 || j >= prev.length) return prev;
@@ -4996,83 +6106,265 @@ function SetPieceTakersPanel({ squad, setPieceTakers, onSave, onBack }) {
       return next;
     });
   }
-  function singleSelectButton(playerId, current, setter) {
-    return (
-      <button onClick={() => setter(current === playerId ? null : playerId)} className="px-2.5 py-1 rounded-full text-9 font-semibold shrink-0"
-        style={current === playerId ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>
-        {current === playerId ? "Vald" : "Välj"}
-      </button>
-    );
-  }
+  return (
+    <PaperCard style={{ background: C.turf }}>
+      <div className="text-xs uppercase tracking-wide font-semibold mb-0.5" style={{ color: C.paperDim }}>{title}</div>
+      <div className="text-10 mb-2" style={{ color: "rgba(255,255,255,0.45)" }}>{desc}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 8, alignItems: "start" }}>
+        <div>
+          <div className="flex items-center justify-between px-1 pb-1 text-9 uppercase font-semibold" style={{ color: "rgba(255,255,255,0.4)" }}>
+            <span>Spelare</span><span>{statLabel}</span>
+          </div>
+          {sorted.map(p => <SetPieceRosterRow key={p.id} player={p} statValue={statFn(p)} dragId={dragId} dragOverId={dragOverKey === "slot" ? null : (mode === "ranked" ? null : null)} onSelectPlayer={onSelectPlayer} onRowPointerDown={onRowPointerDown} onRowPointerMove={onRowPointerMove} onRowPointerUp={onRowPointerUp} />)}
+        </div>
+        <div className="space-y-1.5">
+          {mode === "ranked" ? (
+            <>
+              {rankedPlayers.map((p, i) => (
+                <div key={p.id} data-setpiece-slot={`rank-${i}`} style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: "6px 8px" }} className="flex items-center gap-1.5">
+                  <span className="font-display text-11 shrink-0" style={{ color: C.gold }}>{i + 1}</span>
+                  <span className="text-10 font-semibold flex-1 truncate" style={{ color: C.paper }}>{p.name}</span>
+                  <button onClick={() => movePenalty(p.id, -1)} disabled={i === 0} className="text-9 px-1" style={{ color: i === 0 ? "rgba(255,255,255,0.2)" : C.paperDim }}>↑</button>
+                  <button onClick={() => movePenalty(p.id, 1)} disabled={i === rankedPlayers.length - 1} className="text-9 px-1" style={{ color: i === rankedPlayers.length - 1 ? "rgba(255,255,255,0.2)" : C.paperDim }}>↓</button>
+                  <button onClick={() => onChange(prev => prev.filter(x => x !== p.id))} className="text-9 px-1" style={{ color: C.loss }}>×</button>
+                </div>
+              ))}
+              {rankedPlayers.length < 5 && <div data-setpiece-slot="slot" style={{ background: "rgba(255,255,255,0.05)", border: `1.5px dashed ${dragOverKey === "slot" ? C.gold : "rgba(255,255,255,0.15)"}`, borderRadius: 10, padding: "8px 10px", minHeight: 36 }} className="flex items-center"><span className="text-9" style={{ color: C.paperDim }}>Släpp här ({rankedPlayers.length}/5)</span></div>}
+            </>
+          ) : (
+            <div data-setpiece-slot="slot">
+              <SetPieceDropSlot label="slot" player={value ? outfield.find(p => p.id === value) : null} onRemove={() => onChange(null)} isDragOver={dragOverKey === "slot"} />
+            </div>
+          )}
+        </div>
+      </div>
+    </PaperCard>
+  );
+}
+function SetPieceTakersPanel({ squad, setPieceTakers, onSave, onBack, onSelectPlayer }) {
+  const [penalties, setPenalties] = useState(setPieceTakers.penalties || []);
+  const [freeKick, setFreeKick] = useState(setPieceTakers.freeKick || null);
+  const [cornerLeft, setCornerLeft] = useState(setPieceTakers.cornerLeft || null);
+  const [cornerRight, setCornerRight] = useState(setPieceTakers.cornerRight || null);
+  const outfield = squad.filter(p => p.pos !== "MV");
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till truppen</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till truppen</button>
       <PaperCard>
         <div className="font-display text-lg">Standardsituationer</div>
-        <div className="text-11 mt-1" style={{ color: C.inkSoft }}>Utses spelare inte i startelvan tas nästa tillgängliga i prioritetsordning automatiskt över.</div>
+        <div className="text-11 mt-1" style={{ color: C.inkSoft }}>Dra en spelare till en ruta för att utse dem. Tryck på en spelare för att se profilen. Utses ingen tas nästa tillgängliga i prioritetsordning automatiskt över.</div>
       </PaperCard>
+      <SetPieceSection title="Straffskyttar (prioritetsordning, max 5)" desc="Straffsäkerhet byggd på avslut och lugn i pressade lägen." outfield={outfield} statFn={penaltyRating} statLabel="Straff" mode="ranked" value={penalties} onChange={setPenalties} onSelectPlayer={onSelectPlayer} />
+      <SetPieceSection title="Frisparksskytt" desc="Frisparksträffsäkerhet byggd på avslut, dribbling och starkast fot." outfield={outfield} statFn={freekickRating} statLabel="Frispark" mode="single" value={freeKick} onChange={setFreeKick} onSelectPlayer={onSelectPlayer} />
+      <SetPieceSection title="Hörnläggare vänster" desc="Inläggsprecision byggd på passningsförmåga." outfield={outfield} statFn={cornerRating} statLabel="Hörna" mode="single" value={cornerLeft} onChange={setCornerLeft} onSelectPlayer={onSelectPlayer} />
+      <SetPieceSection title="Hörnläggare höger" desc="Inläggsprecision byggd på passningsförmåga." outfield={outfield} statFn={cornerRating} statLabel="Hörna" mode="single" value={cornerRight} onChange={setCornerRight} onSelectPlayer={onSelectPlayer} />
+      <button onClick={() => onSave({ penalties, freeKick, cornerLeft, cornerRight })} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep }}>SPARA STANDARDSITUATIONER</button>
+    </div>
+  );
+}
+const LINEUP_TABLE_POS_TINT = { MV: "rgba(217,169,75,0.16)", FÖ: "rgba(63,143,107,0.14)", MF: "rgba(63,116,168,0.12)", AN: "rgba(180,68,59,0.12)" };
+function LineupTablePlayerRow({ player, posCode, cellCol, cellRow, dragId, dragOverId, tapSwapId, onHandleTap, onSelectPlayer, onRowPointerDown, onRowPointerMove, onRowPointerUp }) {
+  const overall = overallOf(player);
+  const fit = cellCol !== undefined ? positionFit(player.specificPosition, cellCol, cellRow) : null;
+  const unavailable = player.injuryWeeks > 0 || player.suspendedMatches > 0 || player.internationalDuty;
+  const isDragging = dragId === player.id;
+  const isDragOver = dragOverId === player.id && dragId && dragId !== player.id;
+  const isTapSelected = tapSwapId === player.id;
+  const outOfPosition = posCode && posCode !== player.specificPosition;
+  const otherGood = [], otherLesser = [];
+  Object.keys(SPECIFIC_POSITION_LOOKUP).forEach(code => {
+    if (code === player.specificPosition) return;
+    const anchor = SPECIFIC_POSITION_LOOKUP[code];
+    const f = positionFit(player.specificPosition, anchor.col, anchor.row);
+    if (f >= 0.75) otherGood.push(code); else if (f >= 0.55) otherLesser.push(code);
+  });
+  return (
+    <div data-lineup-row={player.id}
+      style={{
+        background: isTapSelected ? "rgba(201,154,62,0.22)" : LINEUP_TABLE_POS_TINT[player.pos], borderTop: "1px solid rgba(30,42,34,0.08)",
+        opacity: unavailable ? 0.5 : isDragging ? 0.4 : 1,
+        boxShadow: isDragOver || isTapSelected ? `inset 0 0 0 2px ${C.gold}` : "none",
+      }} className="px-2.5 py-1.5">
+      <div className="flex items-center gap-2">
+        <span onClick={() => onHandleTap(player.id)} onPointerDown={e => onRowPointerDown(e, player.id)} onPointerMove={onRowPointerMove} onPointerUp={onRowPointerUp} onPointerCancel={onRowPointerUp}
+          style={{ touchAction: "none", cursor: "pointer", color: isTapSelected ? C.gold : C.inkSoft, width: 26, height: 32, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 15, lineHeight: 1 }}>⠿⠿</span>
+        <span className="font-mono text-9 shrink-0" style={{ color: C.inkSoft, width: 14 }}>{player.number}</span>
+        <button onClick={() => onSelectPlayer(player.id)} className="text-left flex-1 min-w-0">
+          <span className="font-semibold text-11 truncate" style={{ display: "block" }}>{player.name}</span>
+        </button>
+        <span className="shrink-0 text-center" style={{ width: 40 }}>
+          <span className="font-mono text-9 font-bold" style={{ color: C.ink }}>{player.specificPosition}</span>
+          {outOfPosition && <span className="font-mono text-9" style={{ color: C.loss }}> ({posCode})</span>}
+        </span>
+        <span className="font-mono text-11 font-bold shrink-0" style={{ width: 22, textAlign: "center" }}>{overall}</span>
+        <span className="font-mono text-9 shrink-0" style={{ color: C.inkSoft, width: 20, textAlign: "center" }}>{Math.round(player.attack)}</span>
+        <span className="font-mono text-9 shrink-0" style={{ color: C.inkSoft, width: 20, textAlign: "center" }}>{Math.round(player.defense)}</span>
+        <span className="shrink-0" style={{ width: 14, textAlign: "center", color: unavailable ? C.loss : "transparent" }}>!</span>
+      </div>
+      <div className="flex items-center mt-0.5" style={{ paddingLeft: 32 }}>
+        <div style={{ width: 84, flexShrink: 0, overflow: "hidden" }}><StarRating rating={overallToStars(overall)} size={7} showLabel={false} /></div>
+        <div style={{ width: 78, flexShrink: 0, textAlign: "center" }}>
+          {fit !== null && <span className="text-9 font-semibold" style={{ color: fit >= 0.8 ? C.win : fit >= 0.55 ? C.gold : C.loss }}>Passform {Math.round(fit * 100)}%</span>}
+        </div>
+        <div style={{ width: 62, flexShrink: 0, textAlign: "center" }}>
+          <span className="text-9 font-semibold" style={{ color: (player.stamina ?? 100) >= 60 ? C.win : (player.stamina ?? 100) >= 35 ? C.gold : C.loss }}>Ork {Math.round(player.stamina ?? 100)}%</span>
+        </div>
+        {(otherGood.length > 0 || otherLesser.length > 0) && (
+          <span className="text-9 truncate" style={{ color: C.inkSoft, flex: 1, minWidth: 0, textAlign: "center" }}>Även: {otherGood.join(", ")}{otherGood.length && otherLesser.length ? ", " : ""}{otherLesser.map(c => `(${c})`).join(", ")}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+function deriveFormationLabel(lineup, squad) {
+  const counts = { FÖ: 0, MF: 0, AN: 0 };
+  Object.values(lineup).forEach(id => {
+    if (!id) return;
+    const p = squad.find(x => x.id === id);
+    if (p && counts[p.pos] !== undefined) counts[p.pos]++;
+  });
+  return `${counts.FÖ}-${counts.MF}-${counts.AN}`;
+}
+function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSaveFormation, onSelectPlayer }) {
+  const [lineup, setLineup] = useState(() => initialLineup(squad, startingXI, formationCode, lineupCells));
+  const [dragId, setDragId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
+  const [dragOverCell, setDragOverCell] = useState(null);
+  const [tapSwapId, setTapSwapId] = useState(null);
+  const dragState = useRef({ id: null, moved: false });
+  const firstRun = useRef(true);
+
+  useEffect(() => {
+    if (firstRun.current) { firstRun.current = false; return; }
+    onSaveFormation(deriveFormationLabel(lineup, squad), Object.values(lineup).filter(Boolean), lineup);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lineup]);
+
+  function swapPlayers(idA, idB) {
+    if (!idA || !idB || idA === idB) return;
+    setLineup(prev => {
+      const keyA = Object.entries(prev).find(([, pid]) => pid === idA)?.[0];
+      const keyB = Object.entries(prev).find(([, pid]) => pid === idB)?.[0];
+      const next = { ...prev };
+      if (keyA && keyB) { next[keyA] = idB; next[keyB] = idA; }
+      else if (keyA && !keyB) { next[keyA] = idB; }
+      else if (!keyA && keyB) { next[keyB] = idA; }
+      return next;
+    });
+  }
+  function moveToCell(sourceId, targetCellKey) {
+    if (!sourceId || !targetCellKey) return;
+    setLineup(prev => {
+      const sourceKey = Object.entries(prev).find(([, pid]) => pid === sourceId)?.[0];
+      const targetPlayerId = prev[targetCellKey] || null;
+      if (sourceKey === targetCellKey) return prev;
+      const next = { ...prev };
+      if (sourceKey) next[sourceKey] = targetPlayerId;
+      next[targetCellKey] = sourceId;
+      return next;
+    });
+  }
+  function onHandleTap(playerId) {
+    if (!tapSwapId) { setTapSwapId(playerId); return; }
+    if (tapSwapId === playerId) { setTapSwapId(null); return; }
+    swapPlayers(tapSwapId, playerId);
+    setTapSwapId(null);
+  }
+  function onCellTap(cellKey) {
+    const occupantId = lineup[cellKey];
+    if (!tapSwapId) { if (occupantId) setTapSwapId(occupantId); return; }
+    moveToCell(tapSwapId, cellKey);
+    setTapSwapId(null);
+  }
+  function onRowPointerDown(e, playerId) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    dragState.current = { id: playerId, moved: false };
+    setDragId(playerId);
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
+  }
+  function onRowPointerMove(e) {
+    if (!dragState.current.id) return;
+    dragState.current.moved = true;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const cellEl = el && el.closest("[data-cell-key]");
+    if (cellEl) { setDragOverCell(cellEl.getAttribute("data-cell-key")); setDragOverId(null); return; }
+    const rowEl = el && el.closest("[data-lineup-row]");
+    setDragOverId(rowEl ? rowEl.getAttribute("data-lineup-row") : null);
+    setDragOverCell(null);
+  }
+  function onRowPointerUp() {
+    if (dragState.current.id && dragState.current.moved) {
+      if (dragOverCell) moveToCell(dragState.current.id, dragOverCell);
+      else if (dragOverId) swapPlayers(dragState.current.id, dragOverId);
+    }
+    dragState.current = { id: null, moved: false };
+    setDragId(null);
+    setDragOverId(null);
+    setDragOverCell(null);
+  }
+
+  const assignedIds = new Set(Object.values(lineup).filter(Boolean));
+  const starterRows = Object.entries(lineup).filter(([, id]) => id).map(([key, id]) => {
+    const [col, row] = key.split("-").map(Number);
+    return { key, col, row, player: squad.find(p => p.id === id) };
+  }).filter(r => r.player).sort((a, b) => (a.col - b.col) || (a.row - b.row));
+  const benchPlayers = squad.filter(p => !assignedIds.has(p.id));
+  const cellsGrid = [];
+  for (let row = 0; row < GRID_ROWS; row++) for (let col = 0; col < GRID_COLS; col++) cellsGrid.push({ col, row });
+  const rowProps = { dragId, dragOverId, tapSwapId, onHandleTap, onSelectPlayer, onRowPointerDown, onRowPointerMove, onRowPointerUp };
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 10, alignItems: "start" }}>
+      <div>
+        <PaperCard style={{ padding: 0 }}>
+          <div className="px-2.5 pt-2.5 pb-1 text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Startelva ({starterRows.length}/11) — dra handtaget (⠿⠿) eller tryck på två i rad för att byta</div>
+          <div className="flex items-center gap-2 px-2.5 pb-1 text-9 uppercase font-semibold" style={{ color: C.inkSoft }}>
+            <span style={{ width: 26 }}></span><span className="flex-1">Namn</span><span style={{ width: 40, textAlign: "center" }}>Pos</span>
+            <span style={{ width: 22, textAlign: "center" }}>Övr</span><span style={{ width: 20, textAlign: "center" }}>Anf</span><span style={{ width: 20, textAlign: "center" }}>För</span><span style={{ width: 14 }}></span>
+          </div>
+          {starterRows.map(r => <LineupTablePlayerRow key={r.player.id} player={r.player} posCode={nearestPositionForCell(r.col, r.row)} cellCol={r.col} cellRow={r.row} {...rowProps} />)}
+        </PaperCard>
+        <PaperCard style={{ padding: 0, marginTop: 10 }}>
+          <div className="px-2.5 pt-2.5 pb-1 text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Bänken & reserver</div>
+          {benchPlayers.map(p => <LineupTablePlayerRow key={p.id} player={p} {...rowProps} />)}
+        </PaperCard>
+      </div>
       <PaperCard>
-        <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Straffskyttar (prioritetsordning, max 5)</div>
-        {penalties.length > 0 && (
-          <div className="space-y-1.5 mb-2">
-            {penalties.map((id, i) => {
-              const p = squad.find(x => x.id === id);
-              if (!p) return null;
+        <div style={{ position: "relative", width: "100%", aspectRatio: "6/5", margin: "0 auto", background: "linear-gradient(180deg,#1B5E45,#134C39)", borderRadius: 12, overflow: "hidden", border: "2px solid rgba(255,255,255,0.2)" }}>
+          <PitchMarkings />
+          <div style={{ position: "absolute", inset: 0, display: "grid", gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`, gridTemplateRows: `repeat(${GRID_ROWS}, 1fr)` }}>
+            {cellsGrid.map(({ col, row }) => {
+              const key = cellKey(col, row);
+              const player = lineup[key] ? squad.find(p => p.id === lineup[key]) : null;
+              const fit = player ? positionFit(player.specificPosition, col, row) : null;
+              const fitColor = fit === null ? "#fff" : fit >= 0.8 ? C.win : fit >= 0.55 ? C.gold : C.loss;
+              const isDragOver = (player && dragOverId === player.id) || dragOverCell === key;
+              const isTapSelected = (player && tapSwapId === player.id) || (!player && tapSwapId && dragOverCell === key);
               return (
-                <div key={id} className="flex items-center gap-2 text-11">
-                  <span className="font-display w-4" style={{ color: C.gold }}>{i + 1}</span>
-                  <span className="flex-1">{p.name}</span>
-                  <button onClick={() => movePenalty(id, -1)} disabled={i === 0} className="px-1.5" style={{ color: i === 0 ? C.paperDim : C.inkSoft }}>↑</button>
-                  <button onClick={() => movePenalty(id, 1)} disabled={i === penalties.length - 1} className="px-1.5" style={{ color: i === penalties.length - 1 ? C.paperDim : C.inkSoft }}>↓</button>
-                  <button onClick={() => togglePenalty(id)} className="px-1.5" style={{ color: C.loss }}>×</button>
+                <div key={key}
+                  data-cell-key={key}
+                  data-lineup-row={player ? player.id : undefined}
+                  onClick={() => onCellTap(key)}
+                  onPointerDown={player ? e => onRowPointerDown(e, player.id) : undefined}
+                  onPointerMove={player ? onRowPointerMove : undefined}
+                  onPointerUp={player ? onRowPointerUp : undefined}
+                  onPointerCancel={player ? onRowPointerUp : undefined}
+                  style={{ border: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", justifyContent: "center", background: isDragOver ? "rgba(201,154,62,0.28)" : "transparent", touchAction: player ? "none" : "auto", cursor: "pointer" }}>
+                  {player ? (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: "100%", padding: "0 2px", opacity: dragId === player.id ? 0.4 : 1 }}>
+                      <div style={{ width: 22, height: 22, borderRadius: "50%", background: overallTier(overallOf(player)).color, border: `2.5px solid ${isTapSelected ? C.gold : fitColor}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <span className="font-display" style={{ fontSize: 7, color: overallTier(overallOf(player)).color === C.gold ? C.turfDeep : "#fff" }}>{nearestPositionForCell(col, row)}</span>
+                      </div>
+                      <div className="font-semibold" style={{ fontSize: 6.5, color: "#fff", background: "rgba(0,0,0,0.5)", padding: "0 2px", borderRadius: 3, maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "9px" }}>{player.name.split(" ").slice(-1)[0]}</div>
+                    </div>
+                  ) : <div style={{ width: 10, height: 10, borderRadius: "50%", border: `1.5px dashed ${isTapSelected ? C.gold : "rgba(255,255,255,0.3)"}` }} />}
                 </div>
               );
             })}
           </div>
-        )}
-        <div className="space-y-1.5">
-          {outfield.filter(p => !penalties.includes(p.id)).map(p => (
-            <div key={p.id} className="flex items-center justify-between text-11">
-              <span>{p.name} <span style={{ color: C.inkSoft }}>({POS_LABEL[p.pos]})</span></span>
-              <button onClick={() => togglePenalty(p.id)} disabled={penalties.length >= 5} className="px-2.5 py-1 rounded-full text-9 font-semibold" style={penalties.length >= 5 ? { background: "rgba(255,255,255,0.05)", color: C.paperDim } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>Lägg till</button>
-            </div>
-          ))}
         </div>
+        <div className="text-9 text-center mt-2" style={{ color: C.inkSoft }}>Ringens färg visar passform. Dra en spelare till en ny ruta (även tom) för att ändra formationen, eller tryck på två i rad.</div>
       </PaperCard>
-      <PaperCard>
-        <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Frisparksskytt</div>
-        <div className="space-y-1.5">
-          {outfield.map(p => (
-            <div key={p.id} className="flex items-center justify-between text-11">
-              <span>{p.name}</span>
-              {singleSelectButton(p.id, freeKick, setFreeKick)}
-            </div>
-          ))}
-        </div>
-      </PaperCard>
-      <PaperCard>
-        <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Hörnläggare vänster</div>
-        <div className="space-y-1.5">
-          {outfield.map(p => (
-            <div key={p.id} className="flex items-center justify-between text-11">
-              <span>{p.name}</span>
-              {singleSelectButton(p.id, cornerLeft, setCornerLeft)}
-            </div>
-          ))}
-        </div>
-      </PaperCard>
-      <PaperCard>
-        <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Hörnläggare höger</div>
-        <div className="space-y-1.5">
-          {outfield.map(p => (
-            <div key={p.id} className="flex items-center justify-between text-11">
-              <span>{p.name}</span>
-              {singleSelectButton(p.id, cornerRight, setCornerRight)}
-            </div>
-          ))}
-        </div>
-      </PaperCard>
-      <button onClick={() => onSave({ penalties, freeKick, cornerLeft, cornerRight })} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep }}>SPARA STANDARDSITUATIONER</button>
     </div>
   );
 }
@@ -5100,7 +6392,7 @@ function ContractsView({ squad, onBack, onSelectPlayer }) {
 
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till truppen</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till truppen</button>
       <div>
         <div className="text-xs uppercase tracking-wide font-semibold mb-2 px-1" style={{ color: C.paperDim }}>Sortera efter</div>
         <div className="flex flex-wrap gap-2">
@@ -5144,18 +6436,80 @@ function ContractsView({ squad, onBack, onSelectPlayer }) {
 }
 
 
-function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmSell, onSell, onToggleListed, onRenew, formationCode, lineupCells, onSaveFormation, onChat, clubs, round, onSendLoan, outgoingLoans, setPieceTakers, onSetSetPieceTakers, chemistryPairs, onAssessPlayer }) {
+function TacticsPanel({ squad, startingXI, tactic, onTactic, tacticalSettings, onSetTactical, spelide, onSetSpelide, captainId, onSetCaptain, onBack }) {
+  const starters = squad.filter(p => startingXI.includes(p.id));
+  const captain = squad.find(p => p.id === captainId);
+  return (
+    <div className="rise-in space-y-2.5">
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till truppen</button>
+      <PaperCard>
+        <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Taktik</div>
+        <div className="grid grid-cols-3 gap-2">
+          {[["anfall", "Anfall"], ["balanserad", "Balanserad"], ["forsvar", "Försvar"]].map(([key, label]) => (
+            <button key={key} onClick={() => onTactic(key)} className="py-2 rounded-xl text-xs font-semibold border"
+              style={tactic === key ? { background: C.turf, color: C.paper, borderColor: C.turf } : { background: "transparent", color: C.inkSoft, borderColor: C.paperDim }}>{label}</button>
+          ))}
+        </div>
+        <div className="mt-3">
+          <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Taktiska instruktioner</div>
+          <div className="space-y-1.5">
+            {TACTICAL_DIALS.map(dial => (
+              <div key={dial.key}>
+                <div className="text-10 mb-1 font-semibold" style={{ color: C.inkSoft }}>{dial.label}</div>
+                <div className="grid grid-cols-3 gap-2">
+                  {Object.entries(dial.options).map(([key, opt]) => (
+                    <button key={key} onClick={() => onSetTactical(dial.key, key)} className="py-1.5 rounded-xl text-9 font-semibold border"
+                      style={tacticalSettings?.[dial.key] === key ? { background: C.turf, color: C.paper, borderColor: C.turf } : { background: "transparent", color: C.inkSoft, borderColor: C.paperDim }}>{opt.label}</button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </PaperCard>
+      <PaperCard>
+        <div className="text-xs uppercase tracking-wide font-semibold mb-2" style={{ color: C.inkSoft }}>Spelidé</div>
+        <div className="grid grid-cols-2 gap-2">
+          {Object.entries(SPELIDE_LABELS).map(([key, label]) => (
+            <button key={key} onClick={() => onSetSpelide(key)} className="text-left p-2.5 rounded-xl border" style={spelide === key ? { background: C.turf, color: C.paper, borderColor: C.turf } : { background: "transparent", color: C.inkSoft, borderColor: C.paperDim }}>
+              <div className="text-xs font-semibold">{label}</div>
+            </button>
+          ))}
+        </div>
+        <div className="text-11 mt-2" style={{ color: C.inkSoft }}>{SPELIDE_DESC[spelide]}</div>
+      </PaperCard>
+      <PaperCard>
+        <div className="text-xs uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Kapten</div>
+        <div className="text-11 mb-2" style={{ color: C.inkSoft }}>En kapten på plan ger laget en liten extra stadga. Välj bland startelvan.</div>
+        {captain && <div className="text-sm font-semibold mb-2" style={{ color: C.gold }}>Nuvarande kapten: {captain.name}</div>}
+        <div className="space-y-1.5">
+          {starters.map(p => (
+            <button key={p.id} onClick={() => onSetCaptain(p.id)} className="w-full flex items-center justify-between px-3 py-2 rounded-xl border text-left"
+              style={captainId === p.id ? { background: C.turf, color: C.paper, borderColor: C.turf } : { background: "transparent", color: C.inkSoft, borderColor: C.paperDim }}>
+              <span className="text-sm font-semibold" style={{ color: captainId === p.id ? C.paper : C.ink }}>{p.name}{p.personality === "Ledare" ? " · Ledartyp" : ""}</span>
+              <span className="text-9 font-mono">{captainId === p.id ? "KAPTEN" : "Välj"}</span>
+            </button>
+          ))}
+        </div>
+      </PaperCard>
+    </div>
+  );
+}
+function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmSell, onSell, onToggleListed, onRenew, formationCode, lineupCells, onSaveFormation, onChat, clubs, round, onSendLoan, outgoingLoans, setPieceTakers, onSetSetPieceTakers, chemistryPairs, onAssessPlayer, tactic, onTactic, tacticalSettings, onSetTactical, spelide, onSetSpelide, captainId, onSetCaptain, dev, budget, akademiParts, youthSquad, onUpgrade, onUpgradePart, onSellYouth, onPromoteYouth }) {
   const [selectedId, setSelectedId] = useState(null);
-  const [showFormation, setShowFormation] = useState(false);
   const [showContracts, setShowContracts] = useState(false);
   const [showSetPieces, setShowSetPieces] = useState(false);
+  const [showTactics, setShowTactics] = useState(false);
+  const [showAkademi, setShowAkademi] = useState(false);
+  const [viewMode, setViewMode] = useState("tabell");
 
-  if (showFormation) {
-    return <FormationView squad={squad} startingXI={startingXI} formationCode={formationCode} lineupCells={lineupCells}
-      onBack={() => setShowFormation(false)}
-      onSave={(code, ids, cells) => { onSaveFormation(code, ids, cells); setShowFormation(false); }}
-      onToggleStarter={onToggleStarter} confirmSell={confirmSell} setConfirmSell={setConfirmSell} onSell={onSell} onToggleListed={onToggleListed} onRenew={onRenew} onChat={onChat}
-      clubs={clubs} round={round} onSendLoan={onSendLoan} chemistryPairs={chemistryPairs} onAssessPlayer={onAssessPlayer} />;
+  if (showTactics) {
+    return <TacticsPanel squad={squad} startingXI={startingXI} tactic={tactic} onTactic={onTactic} tacticalSettings={tacticalSettings} onSetTactical={onSetTactical}
+      spelide={spelide} onSetSpelide={onSetSpelide} captainId={captainId} onSetCaptain={onSetCaptain} onBack={() => setShowTactics(false)} />;
+  }
+
+  if (showAkademi) {
+    return <AkademiDetail dev={dev} budget={budget} akademiParts={akademiParts} youthSquad={youthSquad} onUpgrade={onUpgrade} onUpgradePart={onUpgradePart} onSellYouth={onSellYouth} onPromoteYouth={onPromoteYouth} onBack={() => setShowAkademi(false)} />;
   }
 
   if (showContracts) {
@@ -5163,7 +6517,7 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
   }
 
   if (showSetPieces) {
-    return <SetPieceTakersPanel squad={squad} setPieceTakers={setPieceTakers} onSave={next => { onSetSetPieceTakers(next); setShowSetPieces(false); }} onBack={() => setShowSetPieces(false)} />;
+    return <SetPieceTakersPanel squad={squad} setPieceTakers={setPieceTakers} onSave={next => { onSetSetPieceTakers(next); setShowSetPieces(false); }} onBack={() => setShowSetPieces(false)} onSelectPlayer={id => { setShowSetPieces(false); setSelectedId(id); }} />;
   }
 
   if (selectedId) {
@@ -5182,11 +6536,18 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
           <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Startelva · {formationCode}</div>
           <div className="font-mono text-sm font-semibold" style={{ color: startingXI.length === 11 ? C.win : C.loss }}>{startingXI.length}/11</div>
         </div>
-        <div className="text-11 mt-1" style={{ color: C.inkSoft }}>Tryck på en spelare för att se profilen, eller ställ upp laget visuellt på planen.</div>
-        <button onClick={() => setShowFormation(true)} className="mt-2.5 w-full py-2.5 rounded-xl text-xs font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Ställ upp laget på planen</button>
-        <button onClick={() => setShowContracts(true)} className="mt-2 w-full py-2.5 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Kontrakt</button>
+        <div className="text-11 mt-1" style={{ color: C.inkSoft }}>Tryck på en spelare för att se profilen, eller dra en spelare till en annan rad i tabellen för att byta plats.</div>
+        <button onClick={() => setShowContracts(true)} className="mt-2.5 w-full py-2.5 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Kontrakt</button>
+        <button onClick={() => setShowTactics(true)} className="mt-2.5 w-full py-2.5 rounded-xl text-xs font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Taktik, spelidé & kapten</button>
+        <button onClick={() => setShowAkademi(true)} className="mt-2 w-full py-2.5 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Ungdomsakademi</button>
         <button onClick={() => setShowSetPieces(true)} className="mt-2 w-full py-2.5 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Standardsituationer</button>
       </PaperCard>
+      <div className="grid grid-cols-2 gap-2">
+        {[["kort", "Kort"], ["tabell", "Tabell"]].map(([key, label]) => (
+          <button key={key} onClick={() => setViewMode(key)} className="py-2 rounded-xl text-xs font-semibold border"
+            style={viewMode === key ? { background: C.turf, color: C.paper, borderColor: C.turf } : { background: "transparent", color: C.inkSoft, borderColor: C.paperDim }}>{label}</button>
+        ))}
+      </div>
       {outgoingLoans && outgoingLoans.length > 0 && (
         <PaperCard>
           <div className="text-xs uppercase tracking-wide font-semibold mb-2" style={{ color: C.inkSoft }}>Utlånade spelare</div>
@@ -5200,6 +6561,10 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
           </div>
         </PaperCard>
       )}
+      {viewMode === "tabell" ? (
+        <LineupTableView squad={squad} startingXI={startingXI} formationCode={formationCode} lineupCells={lineupCells} onSaveFormation={onSaveFormation} onSelectPlayer={setSelectedId} />
+      ) : (
+        <>
       {grouped.map(({ pos, players }) => (
         <div key={pos}>
           <div className="text-xs uppercase tracking-wide font-semibold mb-2 px-1" style={{ color: C.paperDim }}>{POS_LABEL[pos]}</div>
@@ -5247,6 +6612,8 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
           </div>
         </div>
       ))}
+        </>
+      )}
     </div>
   );
 }
@@ -5304,7 +6671,7 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
   const [profileTab, setProfileTab] = useState("oversikt");
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till truppen</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till truppen</button>
       <PaperCard>
         <div className="flex items-center gap-3">
           <OverallBadge overall={overall} size={52} />
@@ -5588,29 +6955,109 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
   );
 }
 
-function NegotiationView({ player, club, region, budget, reputation, onBack, onFinalize, difficulty }) {
-  const [outcome, setOutcome] = useState(null);
+function NegotiationView({ player, club, region, budget, reputation, onBack, onFinalize, difficulty, onNegotiationFailed }) {
   const [agreedPrice, setAgreedPrice] = useState(null);
+  const [priceMessages, setPriceMessages] = useState(() => [{ from: "them", text: sellerOpeningLine(club, player) }]);
+  const [priceOutcome, setPriceOutcome] = useState(null);
+  const [priceAttempts, setPriceAttempts] = useState(0);
+  const [priceWalkedAway, setPriceWalkedAway] = useState(false);
+  const [rivalStole, setRivalStole] = useState(false);
+  const [wageMessages, setWageMessages] = useState(() => [{ from: "them", text: playerWageOpeningLine(player) }]);
   const [wageOutcome, setWageOutcome] = useState(null);
+  const [wageAttempts, setWageAttempts] = useState(0);
+  const [wageWalkedAway, setWageWalkedAway] = useState(false);
   const rivalMult = (DIFFICULTY_SETTINGS[difficulty] || DIFFICULTY_SETTINGS.normal).rivalMult;
   const [hasRival] = useState(() => region !== "scout" && seededRandom(`rival${player.id}${region}`)() < 0.3 * rivalMult);
+  const priceLeverage = negotiationLeverage(reputation, club.strength || 55);
+  const wageLeverage = negotiationLeverage(reputation, overallOf(player));
   function tryOffer(mult, label) {
-    const offerAmount = Math.round(player.value * mult);
-    const result = negotiateOffer(offerAmount, player.value, club, reputation, hasRival ? 1.12 : 1);
-    setOutcome({ ...result, offerAmount, label });
+    const driftedValue = negotiationDrift(player.value, priceAttempts);
+    const offerAmount = Math.round(driftedValue * mult);
+    if (priceAttempts === 0 && Math.random() < opportunityChance(priceLeverage)) {
+      setPriceMessages(prev => [...prev, { from: "you", text: `${label}: ${formatMoney(offerAmount)}` }, { from: "them", text: `Ärligt talat är vi imponerade av er klubb just nu — vi tackar ja utan krångel.` }]);
+      setPriceOutcome({ result: "accept", offerAmount });
+      setPriceAttempts(1);
+      return;
+    }
+    const result = negotiateOffer(offerAmount, driftedValue, club, reputation, hasRival ? 1.12 : 1);
+    const nextAttempts = priceAttempts + 1;
+    setPriceAttempts(nextAttempts);
+    if (result.result !== "accept") {
+      if (hasRival && Math.random() < rivalStealChance(nextAttempts, rivalMult)) {
+        setPriceMessages(prev => [...prev, { from: "you", text: `${label}: ${formatMoney(offerAmount)}` }, { from: "them", text: `Tyvärr — ${player.name.split(" ")[0]} skrev just på för en annan klubb medan vi förhandlade.` }]);
+        setRivalStole(true);
+        onNegotiationFailed?.(player, club, "rival");
+        return;
+      }
+      const goodwillPenalty = clamp((50 - (club.goodwill ?? 50)) / 300, 0, 0.16);
+      const walkChance = negotiationWalkAwayChance(offerAmount / driftedValue, reputation) + goodwillPenalty;
+      if (nextAttempts >= NEGOTIATION_MAX_ATTEMPTS || Math.random() < walkChance) {
+        const lowGoodwillNote = (club.goodwill ?? 50) < 35 ? ` ${club.name} minns fortfarande tidigare bud och är extra ovilliga.` : "";
+        setPriceMessages(prev => [...prev, { from: "you", text: `${label}: ${formatMoney(offerAmount)}` }, { from: "them", text: `${negoRejectLine(player)} Vi avslutar förhandlingen här.${lowGoodwillNote}` }]);
+        setPriceWalkedAway(true);
+        onNegotiationFailed?.(player, club, "lowball");
+        return;
+      }
+    }
+    const reply = result.result === "accept" ? negoAcceptLine() : result.result === "counter" ? negoCounterLine(result.counterPrice) : negoRejectLine(player);
+    setPriceMessages(prev => [...prev, { from: "you", text: `${label}: ${formatMoney(offerAmount)}` }, { from: "them", text: reply }]);
+    setPriceOutcome({ ...result, offerAmount });
   }
   function tryWage(mult) {
-    const target = wageDemand(player);
+    const target = negotiationDrift(wageDemand(player), wageAttempts);
     const offerWage = Math.round(target * mult);
+    if (wageAttempts === 0 && Math.random() < opportunityChance(wageLeverage)) {
+      setWageMessages(prev => [...prev, { from: "you", text: `Erbjuder ${formatMoney(offerWage)}/omg` }, { from: "them", text: `Er klubb känns som rätt nästa steg för mig — jag skriver på utan att krångla.` }]);
+      setWageOutcome({ result: "accept", offerWage });
+      setWageAttempts(1);
+      return;
+    }
     const result = negotiateWage(offerWage, target, reputation);
+    const nextAttempts = wageAttempts + 1;
+    setWageAttempts(nextAttempts);
+    if (result.result !== "accept") {
+      const walkChance = negotiationWalkAwayChance(offerWage / target, reputation);
+      if (nextAttempts >= NEGOTIATION_MAX_ATTEMPTS || Math.random() < walkChance) {
+        setWageMessages(prev => [...prev, { from: "you", text: `Erbjuder ${formatMoney(offerWage)}/omg` }, { from: "them", text: `${wageRejectLine()} Jag tackar nej till hela flytten.` }]);
+        setWageWalkedAway(true);
+        onNegotiationFailed?.(player, null, "wage");
+        return;
+      }
+    }
+    const reply = result.result === "accept" ? wageAcceptLine() : result.result === "counter" ? wageCounterLine(result.counterWage) : wageRejectLine();
+    setWageMessages(prev => [...prev, { from: "you", text: `Erbjuder ${formatMoney(offerWage)}/omg` }, { from: "them", text: reply }]);
     setWageOutcome({ ...result, offerWage });
   }
   const overall = overallOf(player);
+  const attemptsLeftBadge = (used) => <span className="text-9 font-mono" style={{ color: C.inkSoft }}>{NEGOTIATION_MAX_ATTEMPTS - used} försök kvar</span>;
+
+  if (rivalStole) {
+    return (
+      <div className="rise-in space-y-2.5">
+        <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till marknaden</button>
+        <PaperCard>
+          <div className="text-sm font-semibold" style={{ color: C.loss }}>{player.name} värvades av en annan klubb medan ni förhandlade.</div>
+          <div className="text-11 mt-1.5" style={{ color: C.inkSoft }}>Att dra ut på förhandlingar ger konkurrenter en chans att slå till. Nästa gång kan ett snabbare, mer bestämt bud vara värt att överväga.</div>
+        </PaperCard>
+      </div>
+    );
+  }
+  if (priceWalkedAway) {
+    return (
+      <div className="rise-in space-y-2.5">
+        <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till marknaden</button>
+        <PaperCard>
+          <div className="text-sm font-semibold" style={{ color: C.loss }}>{club.name} avslutade förhandlingen.</div>
+          <div className="text-11 mt-1.5" style={{ color: C.inkSoft }}>Alldeles för låga bud eller för många misslyckade försök kan få säljande klubb att dra sig ur helt. Ni får försöka igen en annan gång.</div>
+        </PaperCard>
+      </div>
+    );
+  }
 
   if (agreedPrice !== null) {
     return (
       <div className="rise-in space-y-2.5">
-        <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till marknaden</button>
+        <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till marknaden</button>
         <PaperCard>
           <div className="flex items-center gap-3">
             <OverallBadge overall={overall} size={44} />
@@ -5620,33 +7067,36 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
             </div>
           </div>
         </PaperCard>
-        {!wageOutcome ? (
+        {wageWalkedAway ? (
           <PaperCard>
-            <div className="text-xs uppercase tracking-wide font-semibold mb-2" style={{ color: C.inkSoft }}>Nu återstår lönen — vad erbjuder ni?</div>
-            <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Spelarens löneanspråk: ca {formatMoney(wageDemand(player))}/omgång</div>
-            <div className="space-y-2">
-              <button onClick={() => tryWage(0.85)} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.paperDim, color: C.ink }}>Lågt bud ({formatMoney(Math.round(wageDemand(player) * 0.85))}/omg)</button>
-              <button onClick={() => tryWage(1.0)} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Marknadsmässigt ({formatMoney(wageDemand(player))}/omg)</button>
-              <button onClick={() => tryWage(1.2)} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Generöst ({formatMoney(Math.round(wageDemand(player) * 1.2))}/omg)</button>
-            </div>
-          </PaperCard>
-        ) : wageOutcome.result === "accept" ? (
-          <PaperCard>
-            <div className="text-sm font-semibold" style={{ color: C.win }}>{player.name.split(" ")[0]} accepterar {formatMoney(wageOutcome.offerWage)}/omg!</div>
-            <button onClick={() => onFinalize(region, player, agreedPrice, wageOutcome.offerWage)} className="mt-2 w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Slutför övergången</button>
-          </PaperCard>
-        ) : wageOutcome.result === "counter" ? (
-          <PaperCard>
-            <div className="text-sm font-semibold" style={{ color: C.ink }}>{player.name.split(" ")[0]} vill ha {formatMoney(wageOutcome.counterWage)}/omg istället.</div>
-            <div className="flex gap-2 mt-2">
-              <button onClick={() => onFinalize(region, player, agreedPrice, wageOutcome.counterWage)} className="flex-1 py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Acceptera</button>
-              <button onClick={() => setWageOutcome(null)} className="flex-1 py-2.5 rounded-xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Avbryt</button>
-            </div>
+            <div className="text-sm font-semibold" style={{ color: C.loss }}>{player.name.split(" ")[0]} tackade nej till hela flytten.</div>
+            <div className="text-11 mt-1.5" style={{ color: C.inkSoft }}>Övergångssumman var klar, men löneförhandlingen gick i stöpet — affären faller i sin helhet.</div>
           </PaperCard>
         ) : (
           <PaperCard>
-            <div className="text-sm font-semibold" style={{ color: C.loss }}>{player.name.split(" ")[0]} tackar nej till lönebudet.</div>
-            <button onClick={() => setWageOutcome(null)} className="mt-2 w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Försök igen</button>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Löneförhandling med {player.name.split(" ")[0]}</div>
+              {attemptsLeftBadge(wageAttempts)}
+            </div>
+            <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Förväntat löneanspråk: ca {formatMoney(wageDemand(player))}/omgång</div>
+            <div className="mb-2"><LeverageBadge score={wageLeverage} /></div>
+            <NegotiationThread messages={wageMessages} />
+            {!wageOutcome ? (
+              <div className="space-y-2 mt-3">
+                <button onClick={() => tryWage(0.85)} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.paperDim, color: C.ink }}>Lågt bud ({formatMoney(Math.round(wageDemand(player) * 0.85))}/omg)</button>
+                <button onClick={() => tryWage(1.0)} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Marknadsmässigt ({formatMoney(wageDemand(player))}/omg)</button>
+                <button onClick={() => tryWage(1.2)} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Generöst ({formatMoney(Math.round(wageDemand(player) * 1.2))}/omg)</button>
+              </div>
+            ) : wageOutcome.result === "accept" ? (
+              <button onClick={() => onFinalize(region, player, agreedPrice, wageOutcome.offerWage)} className="mt-3 w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Slutför övergången</button>
+            ) : wageOutcome.result === "counter" ? (
+              <div className="flex gap-2 mt-3">
+                <button onClick={() => onFinalize(region, player, agreedPrice, wageOutcome.counterWage)} className="flex-1 py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Acceptera</button>
+                <button onClick={() => setWageOutcome(null)} className="flex-1 py-2.5 rounded-xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Nytt bud</button>
+              </div>
+            ) : (
+              <button onClick={() => setWageOutcome(null)} className="mt-3 w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Försök igen</button>
+            )}
           </PaperCard>
         )}
       </div>
@@ -5655,7 +7105,7 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
 
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till marknaden</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till marknaden</button>
       <PaperCard>
         <div className="flex items-center gap-3">
           <OverallBadge overall={overall} size={48} />
@@ -5674,44 +7124,47 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
 
       {hasRival && (
         <div className="text-11 px-3 py-2 rounded-xl font-semibold text-center" style={{ background: "rgba(180,68,59,0.15)", color: C.loss }}>
-          ⚔️ En annan klubb bevakar samma spelare — låga bud riskerar att avvisas.
+          ⚔️ En annan klubb bevakar samma spelare — dra ut på förhandlingen så riskerar ni att bli av med spelaren helt.
         </div>
       )}
 
-      {!outcome ? (
-        <PaperCard>
-          <div className="text-xs uppercase tracking-wide font-semibold mb-2" style={{ color: C.inkSoft }}>Lägg ett bud</div>
-          <div className="space-y-2">
-            <button onClick={() => tryOffer(0.85, "Lågt bud")} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.paperDim, color: C.ink }}>Lågt bud ({formatMoney(Math.round(player.value * 0.85))})</button>
-            <button onClick={() => tryOffer(1.05, "Rimligt bud")} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Rimligt bud ({formatMoney(Math.round(player.value * 1.05))})</button>
-            <button onClick={() => tryOffer(1.3, "Högt bud")} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Högt bud ({formatMoney(Math.round(player.value * 1.3))})</button>
+      <PaperCard>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Förhandling med {club.name}</div>
+          {attemptsLeftBadge(priceAttempts)}
+        </div>
+        <div className="mb-2"><LeverageBadge score={priceLeverage} /></div>
+        {(club.goodwill ?? 50) < 35 && (
+          <div className="text-11 px-3 py-2 rounded-xl font-semibold text-center mb-2" style={{ background: "rgba(180,68,59,0.12)", color: C.loss }}>Relationen med {club.name} är ansträngd efter tidigare förhandlingar — de är extra ovilliga att sälja billigt.</div>
+        )}
+        {(club.goodwill ?? 50) > 68 && (
+          <div className="text-11 px-3 py-2 rounded-xl font-semibold text-center mb-2" style={{ background: "rgba(63,143,107,0.12)", color: C.win }}>Ni har en god relation med {club.name} sedan tidigare — det gör förhandlingen lite lättare.</div>
+        )}
+        <NegotiationThread messages={priceMessages} />
+        {!priceOutcome ? (
+          <div className="space-y-2 mt-3">
+            <button onClick={() => tryOffer(0.85, "Lågt bud")} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.paperDim, color: C.ink }}>Lågt bud ({formatMoney(Math.round(negotiationDrift(player.value, priceAttempts) * 0.85))})</button>
+            <button onClick={() => tryOffer(1.05, "Rimligt bud")} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Rimligt bud ({formatMoney(Math.round(negotiationDrift(player.value, priceAttempts) * 1.05))})</button>
+            <button onClick={() => tryOffer(1.3, "Högt bud")} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Högt bud ({formatMoney(Math.round(negotiationDrift(player.value, priceAttempts) * 1.3))})</button>
           </div>
-        </PaperCard>
-      ) : outcome.result === "accept" ? (
-        <PaperCard>
-          <div className="text-sm font-semibold" style={{ color: C.win }}>{club.name} accepterar budet på {formatMoney(outcome.offerAmount)}!</div>
-          <button onClick={() => setAgreedPrice(outcome.offerAmount)} disabled={budget < outcome.offerAmount} className="mt-2 w-full py-2.5 rounded-xl text-sm font-semibold" style={budget >= outcome.offerAmount ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>{budget >= outcome.offerAmount ? "Gå vidare till löneförhandling" : "Otillräcklig budget"}</button>
-        </PaperCard>
-      ) : outcome.result === "counter" ? (
-        <PaperCard>
-          <div className="text-sm font-semibold" style={{ color: C.ink }}>{club.name} vill ha {formatMoney(outcome.counterPrice)} istället.</div>
-          <div className="flex gap-2 mt-2">
-            <button onClick={() => setAgreedPrice(outcome.counterPrice)} disabled={budget < outcome.counterPrice} className="flex-1 py-2.5 rounded-xl text-sm font-semibold" style={budget >= outcome.counterPrice ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>Acceptera</button>
-            <button onClick={() => setOutcome(null)} className="flex-1 py-2.5 rounded-xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Avbryt</button>
+        ) : priceOutcome.result === "accept" ? (
+          <button onClick={() => setAgreedPrice(priceOutcome.offerAmount)} disabled={budget < priceOutcome.offerAmount} className="mt-3 w-full py-2.5 rounded-xl text-sm font-semibold" style={budget >= priceOutcome.offerAmount ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>{budget >= priceOutcome.offerAmount ? "Gå vidare till löneförhandling" : "Otillräcklig budget"}</button>
+        ) : priceOutcome.result === "counter" ? (
+          <div className="flex gap-2 mt-3">
+            <button onClick={() => setAgreedPrice(priceOutcome.counterPrice)} disabled={budget < priceOutcome.counterPrice} className="flex-1 py-2.5 rounded-xl text-sm font-semibold" style={budget >= priceOutcome.counterPrice ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>Acceptera</button>
+            <button onClick={() => setPriceOutcome(null)} className="flex-1 py-2.5 rounded-xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Nytt bud</button>
           </div>
-        </PaperCard>
-      ) : (
-        <PaperCard>
-          <div className="text-sm font-semibold" style={{ color: C.loss }}>{club.name} tackar nej till budet.</div>
-          <button onClick={() => setOutcome(null)} className="mt-2 w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Försök igen</button>
-        </PaperCard>
-      )}
+        ) : (
+          <button onClick={() => setPriceOutcome(null)} className="mt-3 w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Försök igen</button>
+        )}
+      </PaperCard>
     </div>
   );
 }
 
-function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfiles, onStart, onDismiss, onNegotiate, onSaveProfile, onDeleteProfile }) {
+function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfiles, onStart, onDismiss, onCancel, onNegotiate, onSaveProfile, onDeleteProfile, onOpenClubBrowser }) {
   const [posFilter, setPosFilter] = useState(null);
+  const [sideFilter, setSideFilter] = useState(null);
   const [ageMin, setAgeMin] = useState("");
   const [ageMax, setAgeMax] = useState("");
   const [activeAttrs, setActiveAttrs] = useState({});
@@ -5723,6 +7176,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
   const inputStyle = { background: "transparent", border: `1px solid ${C.paperDim}`, borderRadius: 10, padding: "8px 10px", color: C.ink, fontSize: 13, width: "100%" };
   function applyPreset(preset) {
     setPosFilter(preset.posFilter);
+    setSideFilter(preset.sideFilter || null);
     setActiveAttrs(Object.fromEntries(Object.keys(preset.attrs).map(k => [k, true])));
     setAttrMins(Object.fromEntries(Object.entries(preset.attrs).map(([k, v]) => [k, String(v)])));
     setAgeMax(preset.ageMax ? String(preset.ageMax) : "");
@@ -5730,7 +7184,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
   }
   function currentFilters() {
     return {
-      posFilter,
+      posFilter, sideFilter: posFilter && posFilter !== "MV" ? sideFilter : null,
       ageMin: ageMin ? parseInt(ageMin) : null, ageMax: ageMax ? parseInt(ageMax) : null,
       attributeFilters: Object.fromEntries(Object.keys(activeAttrs).filter(k => activeAttrs[k] && attrMins[k]).map(k => [k, parseInt(attrMins[k])])),
       maxValue: maxValue ? parseInt(maxValue) : null, maxWage: maxWage ? parseInt(maxWage) : null,
@@ -5742,6 +7196,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
     const pct = clamp(Math.round((scoutMission.roundsElapsed / scoutMission.roundsTotal) * 100), 0, 100);
     const parts = [];
     if (scoutMission.posFilter) parts.push(POS_LABEL[scoutMission.posFilter]);
+    if (scoutMission.sideFilter) parts.push({ left: "Vänster", center: "Central", right: "Höger" }[scoutMission.sideFilter]);
     if (scoutMission.ageMin || scoutMission.ageMax) parts.push(`${scoutMission.ageMin || "?"}–${scoutMission.ageMax || "?"} år`);
     Object.entries(scoutMission.attributeFilters || {}).forEach(([key, minVal]) => parts.push(`${ATTR_LABELS_OUTFIELD[key] || key} ≥${minVal}`));
     if (scoutMission.maxValue) parts.push(`Max ${formatMoney(scoutMission.maxValue)}`);
@@ -5753,6 +7208,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
         <div className="text-sm mt-1 font-semibold">{scoutMission.roundsElapsed} av {scoutMission.roundsTotal} omgångar</div>
         <div className="h-2 rounded-full mt-2" style={{ background: "rgba(0,0,0,0.08)" }}><div style={{ width: `${pct}%`, background: C.gold, height: "100%", borderRadius: 999, transition: "width .5s ease" }} /></div>
         <div className="text-11 mt-2" style={{ color: C.inkSoft }}>{parts.length ? `Kriterier: ${parts.join(" · ")}` : "Fri sökning, inga specifika kriterier."}</div>
+        <button onClick={onCancel} className="w-full py-2 mt-2.5 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.inkSoft }}>Avbryt uppdraget</button>
       </PaperCard>
     );
   }
@@ -5819,6 +7275,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
         <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Skicka ut scouten</div>
         <div className="text-11 mt-1" style={{ color: C.inkSoft }}>Ange kriterier — lämna ett fält tomt för att inte begränsa sökningen där. {scoutLevel ? `Er scout (nivå ${scoutLevel}) hittar bättre spelare, snabbare.` : "Utan anställd scout hittar ni bara okej spelare, och det tar längre tid."}</div>
       </PaperCard>
+      <button onClick={onOpenClubBrowser} className="w-full py-2.5 rounded-xl text-xs font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Bläddra klubbar & truppar direkt</button>
       <PaperCard>
         <div className="text-10 uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Snabbval — spelstil</div>
         <div className="flex gap-2 flex-wrap">
@@ -5831,8 +7288,8 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
             <div className="text-10 uppercase tracking-wide font-semibold mb-1.5 mt-3 pt-3" style={{ color: C.inkSoft, borderTop: `1px solid rgba(30,42,34,0.1)` }}>Sparade sökningar</div>
             <div className="flex gap-2 flex-wrap">
               {savedProfiles.map(sp => (
-                <div key={sp.id} className="flex items-center gap-1 pl-3 pr-1 py-1 rounded-full" style={{ background: "rgba(255,255,255,0.08)" }}>
-                  <button onClick={() => applyPreset({ posFilter: sp.posFilter, attrs: sp.attributeFilters || {}, ageMax: sp.ageMax, minPotential: sp.minPotential })} className="text-11 font-semibold" style={{ color: C.paperDim }}>{sp.name}</button>
+                <div key={sp.id} className="flex items-center gap-1 pl-3 pr-1 py-1 rounded-full" style={{ background: C.paperDim }}>
+                  <button onClick={() => applyPreset({ posFilter: sp.posFilter, attrs: sp.attributeFilters || {}, ageMax: sp.ageMax, minPotential: sp.minPotential })} className="text-11 font-semibold" style={{ color: C.ink }}>{sp.name}</button>
                   <button onClick={() => onDeleteProfile(sp.id)} className="text-11 px-1" style={{ color: C.loss }}>×</button>
                 </div>
               ))}
@@ -5844,9 +7301,19 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
         <div className="text-10 uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Position</div>
         <div className="flex gap-2 flex-wrap">
           {[[null, "Valfri"], ...POS_ORDER.map(p => [p, POS_LABEL[p]])].map(([key, label]) => (
-            <button key={label} onClick={() => setPosFilter(key)} className="px-3 py-1.5 rounded-full text-11 font-semibold" style={posFilter === key ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>{label}</button>
+            <button key={label} onClick={() => { setPosFilter(key); if (key === "MV" || !key) setSideFilter(null); }} className="px-3 py-1.5 rounded-full text-11 font-semibold" style={posFilter === key ? { background: C.gold, color: C.turfDeep } : { background: C.paperDim, color: C.ink }}>{label}</button>
           ))}
         </div>
+        {posFilter && posFilter !== "MV" && (
+          <>
+            <div className="text-10 uppercase tracking-wide font-semibold mb-1.5 mt-3 pt-3" style={{ color: C.inkSoft, borderTop: `1px solid rgba(30,42,34,0.1)` }}>Sida</div>
+            <div className="flex gap-2 flex-wrap">
+              {[[null, "Valfri"], ["left", "Vänster"], ["center", "Central"], ["right", "Höger"]].map(([key, label]) => (
+                <button key={label} onClick={() => setSideFilter(key)} className="px-3 py-1.5 rounded-full text-11 font-semibold" style={sideFilter === key ? { background: C.gold, color: C.turfDeep } : { background: C.paperDim, color: C.ink }}>{label}</button>
+              ))}
+            </div>
+          </>
+        )}
       </PaperCard>
       <PaperCard>
         <div className="text-10 uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Åldersspann</div>
@@ -5863,7 +7330,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
             const active = !!activeAttrs[key];
             return (
               <button key={key} onClick={() => setActiveAttrs(a => ({ ...a, [key]: !a[key] }))} className="px-3 py-1.5 rounded-full text-11 font-semibold"
-                style={active ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>{label}</button>
+                style={active ? { background: C.gold, color: C.turfDeep } : { background: C.paperDim, color: C.ink }}>{label}</button>
             );
           })}
         </div>
@@ -5914,26 +7381,34 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
 }
 
 
-function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSquad, youthMarket, round, clubs, reputation, incomingOffers, onFinalizeTransfer, onBuyYouth, onRespondOffer, scoutMission, scoutLevel, onStartScoutMission, onDismissScoutMission, onFinalizeScoutSignee, loanOffers, onAcceptLoan, onDeclineLoan, difficulty, squad, savedScoutProfiles, onSaveScoutProfile, onDeleteScoutProfile }) {
+function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSquad, youthMarket, round, season, clubs, reputation, incomingOffers, clubGoodwill, blacklistedPlayers, onNegotiationFailed, onFinalizeTransfer, onBuyYouth, onRespondOffer, scoutMission, scoutLevel, onStartScoutMission, onDismissScoutMission, onCancelScoutMission, onFinalizeScoutSignee, loanOffers, onAcceptLoan, onDeclineLoan, difficulty, squad, savedScoutProfiles, onSaveScoutProfile, onDeleteScoutProfile, userClubId, leagueId, onFinalizeClubBrowseTransfer }) {
+  const [showClubBrowser, setShowClubBrowser] = useState(false);
   const [subView, setSubView] = useState("spelare");
   const [region, setRegion] = useState("europa");
   const [negotiatingId, setNegotiatingId] = useState(null);
   const [negotiatingScout, setNegotiatingScout] = useState(false);
-  const list = market[region];
+  const currentTurn = season * 38 + round;
+  const list = market[region].filter(p => !blacklistedPlayers?.[p.id] || blacklistedPlayers[p.id] <= currentTurn);
   const locked = scoutingLevel < REGION_UNLOCK[region];
   const discount = 1 - (kontakterLevel - 1) * 0.04;
   const windowOpen = transferWindowOpen(round);
   const closesIn = roundsUntilWindowCloses(round);
   const opensIn = roundsUntilWindowOpens(round);
 
+  if (showClubBrowser) return <ClubSquadBrowserView clubs={clubs} userClubId={userClubId} homeLeagueId={leagueId} budget={budget} reputation={reputation} difficulty={difficulty} clubGoodwill={clubGoodwill} onNegotiationFailed={onNegotiationFailed} onFinalize={onFinalizeClubBrowseTransfer} onBack={() => setShowClubBrowser(false)} />;
+
   if (negotiatingScout && scoutMission?.result) {
-    return <NegotiationView player={scoutMission.result} club={clubs[scoutMission.result.clubId]} region="scout" budget={budget} reputation={reputation} difficulty={difficulty}
+    const scoutClub = clubs[scoutMission.result.clubId];
+    return <NegotiationView player={scoutMission.result} club={scoutClub ? { ...scoutClub, goodwill: clubGoodwill?.[scoutClub.id] ?? 50 } : scoutClub} region="scout" budget={budget} reputation={reputation} difficulty={difficulty}
+      onNegotiationFailed={onNegotiationFailed}
       onBack={() => setNegotiatingScout(false)} onFinalize={(r, p, price, wage) => { onFinalizeScoutSignee(price, wage); setNegotiatingScout(false); }} />;
   }
 
   const negotiatingPlayer = negotiatingId ? list.find(p => p.id === negotiatingId) : null;
   if (negotiatingPlayer) {
-    return <NegotiationView player={negotiatingPlayer} club={clubs[negotiatingPlayer.clubId]} region={region} budget={budget} reputation={reputation} difficulty={difficulty}
+    const negoClub = clubs[negotiatingPlayer.clubId];
+    return <NegotiationView player={negotiatingPlayer} club={negoClub ? { ...negoClub, goodwill: clubGoodwill?.[negoClub.id] ?? 50 } : negoClub} region={region} budget={budget} reputation={reputation} difficulty={difficulty}
+      onNegotiationFailed={onNegotiationFailed}
       onBack={() => setNegotiatingId(null)} onFinalize={(r, p, price, wage) => { onFinalizeTransfer(r, p, price, wage); setNegotiatingId(null); }} />;
   }
 
@@ -6029,7 +7504,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
         </>
       ) : subView === "scout" ? (
         <ScoutMissionPanel scoutMission={scoutMission} scoutLevel={scoutLevel} budget={budget} squad={squad} savedProfiles={savedScoutProfiles}
-          onStart={onStartScoutMission} onDismiss={onDismissScoutMission} onNegotiate={() => setNegotiatingScout(true)} onSaveProfile={onSaveScoutProfile} onDeleteProfile={onDeleteScoutProfile} />
+          onStart={onStartScoutMission} onDismiss={onDismissScoutMission} onCancel={onCancelScoutMission} onNegotiate={() => setNegotiatingScout(true)} onSaveProfile={onSaveScoutProfile} onDeleteProfile={onDeleteScoutProfile} onOpenClubBrowser={() => setShowClubBrowser(true)} />
       ) : (
         <>
           {loanOffers && loanOffers.length > 0 && (
@@ -6077,12 +7552,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
   );
 }
 
-const CATEGORY_META = {
-  arena: { label: "Arena", desc: "Läktare, publikservice och kapacitet." },
-  akademi: { label: "Ungdomsakademi", desc: "Träningsmiljö och talangintag." },
-  scouting: { label: "Scoutnätverk", desc: "Övergångsmarknadens räckvidd och kvalitet." },
-  sponsring: { label: "Sponsring", desc: "Avtal och partnerskap som ger löpande intäkter." },
-};
+const CATEGORY_META = {};
 
 function LevelDots({ level, max = 5 }) {
   return <div className="flex gap-1">{Array.from({ length: max }, (_, i) => i + 1).map(n => <span key={n} className="w-3.5 h-3.5 rounded-full" style={{ background: n <= level ? C.gold : "rgba(0,0,0,0.12)" }} />)}</div>;
@@ -6112,45 +7582,67 @@ function PartCard({ title, desc, level, max, cost, canAfford, onUpgrade, tierNam
 }
 
 const BP = { bg: "#0E2A4A", line: "#6FA8DC", lineDim: "rgba(111,168,220,0.35)", grid: "rgba(111,168,220,0.12)", ink: "#EAF3FB", inkDim: "#9FC1E0" };
-function BlueprintStand({ id, style, level, selected, onSelect, building, buildPct }) {
+function IllustratedArena({ arenaStands, selectedStand, onSelectStand, buildingStand, buildPct, capacity }) {
+  const levelColor = (lvl) => {
+    const shades = ["#233A2F", "#2C4739", "#345043", "#3E5C4A", "#4A6E58", "#5A8067"];
+    return shades[clamp(lvl, 0, 5)];
+  };
+  const Stand = ({ id, x, y, w, h, labelX, labelY }) => {
+    const level = arenaStands[id] || 0;
+    const isEmpty = level <= 0 && buildingStand !== id;
+    const isBuilding = buildingStand === id;
+    const isSelected = selectedStand === id;
+    const fill = isEmpty ? "rgba(111,168,220,0.05)" : levelColor(level);
+    const stroke = isSelected ? C.gold : isEmpty ? "rgba(111,168,220,0.4)" : "#1A2E26";
+    return (
+      <g onClick={() => onSelectStand(id)} style={{ cursor: "pointer" }}>
+        <rect x={x} y={y} width={w} height={h} rx="3" fill={fill} stroke={stroke} strokeWidth={isSelected ? 2 : 1.3} strokeDasharray={isEmpty ? "4 3" : "none"} />
+        {isBuilding && <rect x={x} y={y} width={(w * buildPct) / 100} height={h} rx="3" fill={C.gold} opacity="0.5" style={{ transition: "width .5s ease" }} />}
+        <text x={labelX} y={labelY} fontFamily="sans-serif" fontSize="8" fontWeight="700" fill={isEmpty ? "rgba(238,234,224,0.55)" : "#EEEAE0"} textAnchor="middle" letterSpacing="1">{STAND_NAMES[id].split(" ")[0].toUpperCase()}</text>
+        {isEmpty && <text x={labelX} y={labelY + 10} fontFamily="sans-serif" fontSize="6.5" fill="rgba(238,234,224,0.4)" textAnchor="middle">+ Bygg läktare</text>}
+        {!isEmpty && !isBuilding && <text x={labelX} y={labelY + 10} fontFamily="sans-serif" fontSize="6.5" fill="rgba(238,234,224,0.6)" textAnchor="middle">{"★".repeat(level)}{"☆".repeat(5 - level)}</text>}
+        {isBuilding && <text x={labelX} y={labelY + 10} fontFamily="monospace" fontSize="7" fontWeight="700" fill={C.gold} textAnchor="middle">{Math.round(buildPct)}%</text>}
+      </g>
+    );
+  };
   return (
-    <button onClick={() => onSelect(id)} style={{ ...style, position: "relative", border: `1.4px solid ${selected ? C.gold : BP.line}`, borderRadius: 4, background: "rgba(111,168,220,0.05)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4 }}>
-      <span className="text-9 font-semibold" style={{ color: BP.ink, letterSpacing: "0.03em" }}>{STAND_NAMES[id].split(" ")[0]}</span>
-      <div className="flex gap-0.5">
-        {Array.from({ length: 5 }, (_, i) => {
-          const filled = i < level;
-          const isBuilding = building && i === level;
-          return <div key={i} style={{ width: 8, height: 6, border: `1px solid ${isBuilding ? C.gold : BP.line}`, background: filled ? BP.line : isBuilding ? "transparent" : "transparent", position: "relative", overflow: "hidden" }}>
-            {isBuilding && <div style={{ position: "absolute", inset: 0, background: C.gold, opacity: 0.7, width: `${buildPct}%`, transition: "width .5s ease" }} />}
-          </div>;
-        })}
-      </div>
-      {building && <span className="font-mono" style={{ fontSize: 8, color: C.gold }}>{Math.round(buildPct)}%</span>}
-    </button>
+    <svg width="100%" height="260" viewBox="0 0 380 320">
+      <rect x="0" y="0" width="380" height="320" fill="#0F1E19" rx="12" />
+      <Stand id="north" x={70} y={30} w={240} h={42} labelX={190} labelY={52} />
+      <Stand id="south" x={70} y={248} w={240} h={42} labelX={190} labelY={270} />
+      <Stand id="west" x={30} y={90} w={34} h={140} labelX={47} labelY={160} />
+      <Stand id="east" x={316} y={90} w={34} h={140} labelX={333} labelY={160} />
+
+      <rect x="90" y="90" width="200" height="140" fill="#2E7D5B" stroke="#EEEAE0" strokeWidth="1.5" opacity="0.95" />
+      <line x1="190" y1="90" x2="190" y2="230" stroke="#EEEAE0" strokeWidth="1.2" opacity="0.7" />
+      <circle cx="190" cy="160" r="22" fill="none" stroke="#EEEAE0" strokeWidth="1.2" opacity="0.7" />
+      <circle cx="190" cy="160" r="1.6" fill="#EEEAE0" opacity="0.7" />
+      <rect x="90" y="130" width="16" height="60" fill="none" stroke="#EEEAE0" strokeWidth="1.2" opacity="0.7" />
+      <rect x="274" y="130" width="16" height="60" fill="none" stroke="#EEEAE0" strokeWidth="1.2" opacity="0.7" />
+
+      <rect x="46" y="55" width="4" height="20" fill={C.gold} />
+      <circle cx="48" cy="50" r="6" fill={C.goldSoft} />
+      <rect x="330" y="55" width="4" height="20" fill={C.gold} />
+      <circle cx="332" cy="50" r="6" fill={C.goldSoft} />
+      <rect x="46" y="248" width="4" height="20" fill={C.gold} />
+      <circle cx="48" cy="272" r="6" fill={C.goldSoft} />
+      <rect x="330" y="248" width="4" height="20" fill={C.gold} />
+      <circle cx="332" cy="272" r="6" fill={C.goldSoft} />
+
+      <rect x="120" y="140" width="140" height="42" rx="8" fill="#0F1E19" opacity="0.55" />
+      <text x="190" y="167" fontFamily="Georgia, serif" fontSize="26" fontWeight="700" fill={C.goldSoft} textAnchor="middle">{capacity.toLocaleString("sv-SE")}</text>
+      <text x="190" y="179" fontFamily="sans-serif" fontSize="8" fill="#c7d2cb" textAnchor="middle" letterSpacing="1.2">ÅSKÅDARE</text>
+    </svg>
   );
 }
-function BlueprintPitch({ style }) {
-  return (
-    <div style={{ ...style, position: "relative", border: `1.4px solid ${BP.line}`, borderRadius: 4, background: "rgba(111,168,220,0.03)" }}>
-      <svg viewBox="0 0 100 60" width="100%" height="100%" preserveAspectRatio="none">
-        <rect x="3" y="3" width="94" height="54" fill="none" stroke={BP.line} strokeWidth="0.8" />
-        <line x1="50" y1="3" x2="50" y2="57" stroke={BP.line} strokeWidth="0.8" />
-        <circle cx="50" cy="30" r="8" fill="none" stroke={BP.line} strokeWidth="0.8" />
-        <circle cx="50" cy="30" r="0.8" fill={BP.line} />
-        <rect x="3" y="16" width="10" height="28" fill="none" stroke={BP.line} strokeWidth="0.8" />
-        <rect x="87" y="16" width="10" height="28" fill="none" stroke={BP.line} strokeWidth="0.8" />
-      </svg>
-    </div>
-  );
-}
-function ArenaDetail({ club, dev, budget, arenaStands, arenaFacilities, arenaConstruction, onUpgrade, onUpgradePart, onStartConstruction, onBack }) {
+function ArenaDetail({ club, dev, budget, arenaStands, arenaFacilities, arenaConstruction, onUpgrade, onUpgradePart, onStartConstruction, ticketPrice, onSetTicketPrice, recentMatchFinances, onBack }) {
   const [selectedStand, setSelectedStand] = useState(null);
   const capacity = arenaCapacityOf(dev, arenaStands);
   const buildingStand = arenaConstruction?.stand;
   const buildPct = arenaConstruction ? (arenaConstruction.roundsElapsed / arenaConstruction.roundsTotal) * 100 : 0;
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till klubben</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till ekonomi</button>
       <PaperCard>
         <div className="flex items-center justify-between">
           <div>
@@ -6164,25 +7656,48 @@ function ArenaDetail({ club, dev, budget, arenaStands, arenaFacilities, arenaCon
                 Ombyggnad pågår
               </div>
               <div className="text-11 font-mono" style={{ color: C.inkSoft }}>{arenaConstruction.roundsElapsed}/{arenaConstruction.roundsTotal} omg</div>
+              <div className="text-10 font-mono font-semibold" style={{ color: C.win }}>+{constructionSeatDelta(arenaConstruction).toLocaleString("sv-SE")} platser</div>
             </div>
           )}
         </div>
-        <div className="mt-4 relative rounded-2xl p-4" style={{ background: BP.bg, backgroundImage: `linear-gradient(${BP.grid} 1px, transparent 1px), linear-gradient(90deg, ${BP.grid} 1px, transparent 1px)`, backgroundSize: "14px 14px", border: `1px solid ${BP.lineDim}` }}>
-          <div className="font-mono" style={{ position: "absolute", top: 8, left: 12, fontSize: 8, letterSpacing: "0.08em", color: BP.lineDim }}>ARENAPLAN · SKALA 1:500</div>
-          <div className="grid mt-3" style={{ gridTemplateColumns: "1fr 2.2fr 1fr", gridTemplateRows: "42px 84px 42px", gap: 5 }}>
-            <div />
-            <BlueprintStand id="north" style={{ gridColumn: 2, gridRow: 1 }} level={arenaStands.north} selected={selectedStand === "north"} onSelect={setSelectedStand} building={buildingStand === "north"} buildPct={buildPct} />
-            <div />
-            <BlueprintStand id="west" style={{ gridColumn: 1, gridRow: 2 }} level={arenaStands.west} selected={selectedStand === "west"} onSelect={setSelectedStand} building={buildingStand === "west"} buildPct={buildPct} />
-            <BlueprintPitch style={{ gridColumn: 2, gridRow: 2 }} />
-            <BlueprintStand id="east" style={{ gridColumn: 3, gridRow: 2 }} level={arenaStands.east} selected={selectedStand === "east"} onSelect={setSelectedStand} building={buildingStand === "east"} buildPct={buildPct} />
-            <div />
-            <BlueprintStand id="south" style={{ gridColumn: 2, gridRow: 3 }} level={arenaStands.south} selected={selectedStand === "south"} onSelect={setSelectedStand} building={buildingStand === "south"} buildPct={buildPct} />
-            <div />
-          </div>
+        <div className="mt-4 rounded-2xl overflow-hidden">
+          <IllustratedArena arenaStands={arenaStands} selectedStand={selectedStand} onSelectStand={setSelectedStand} buildingStand={buildingStand} buildPct={buildPct} capacity={capacity} />
         </div>
         <div className="text-11 mt-3 text-center" style={{ color: C.inkSoft }}>Tryck på en läktare för att bygga ut den.</div>
       </PaperCard>
+
+      <PaperCard>
+        <div className="text-10 uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Biljettpris</div>
+        <div className="grid grid-cols-3 gap-2">
+          {Object.entries(TICKET_TIERS).map(([key, tier]) => (
+            <button key={key} onClick={() => onSetTicketPrice(key)} className="text-center py-2 rounded-xl border" style={ticketPrice === key ? { background: C.turf, color: C.paper, borderColor: C.turf } : { background: "transparent", color: C.inkSoft, borderColor: C.paperDim }}>
+              <div className="text-sm font-bold font-mono" style={{ color: ticketPrice === key ? C.paper : C.ink }}>{tier.label}</div>
+            </button>
+          ))}
+        </div>
+        <div className="text-11 mt-2" style={{ color: C.inkSoft }}>{TICKET_TIERS[ticketPrice]?.desc}</div>
+      </PaperCard>
+
+      {recentMatchFinances && recentMatchFinances.length > 0 && (
+        <PaperCard style={{ padding: 0 }}>
+          <div className="px-3 pt-3 pb-1.5 text-10 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Senaste publiktrender</div>
+          <div style={{ display: "grid", gridTemplateColumns: "0.6fr 1.1fr 0.9fr 0.9fr 1fr" }} className="px-3 pb-1 text-9 uppercase font-semibold">
+            <span style={{ color: C.inkSoft }}>Omg</span><span style={{ color: C.inkSoft }}>Motstånd</span>
+            <span className="text-center" style={{ color: C.inkSoft }}>Biljettpris</span>
+            <span className="text-center" style={{ color: C.inkSoft }}>Publik</span>
+            <span className="text-right" style={{ color: C.inkSoft }}>Intäkt</span>
+          </div>
+          {recentMatchFinances.map((m, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "0.6fr 1.1fr 0.9fr 0.9fr 1fr", borderTop: "1px solid rgba(30,42,34,0.08)" }} className="px-3 py-1.5 text-11 items-center">
+              <span className="font-mono" style={{ color: C.ink }}>{m.round + 1}</span>
+              <span className="truncate" style={{ color: C.ink }}>{m.userIsHome ? "" : "b. "}{m.oppName}</span>
+              <span className="text-center text-10" style={{ color: C.inkSoft }}>{m.userIsHome ? (TICKET_TIERS[m.ticketPrice]?.label || "–") : "Borta"}</span>
+              <span className="text-center font-mono" style={{ color: C.ink }}>{m.userIsHome ? m.attendance.toLocaleString("sv-SE") : "–"}</span>
+              <span className="text-right font-mono font-semibold" style={{ color: C.win }}>+{formatMoney(m.income)}</span>
+            </div>
+          ))}
+        </PaperCard>
+      )}
 
       {selectedStand && (
         buildingStand === selectedStand ? (
@@ -6225,7 +7740,7 @@ function ArenaDetail({ club, dev, budget, arenaStands, arenaFacilities, arenaCon
 function AkademiDetail({ dev, budget, akademiParts, youthSquad, onUpgrade, onUpgradePart, onSellYouth, onPromoteYouth, onBack }) {
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till klubben</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till klubben</button>
       <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Strategiska val</div>
       <PartCard title="Tränarstab" desc="Erfarna tränare minskar risken att lovande talanger stagnerar."
         level={akademiParts.tranare} max={3} cost={partUpgradeCost("akademiParts", akademiParts.tranare)}
@@ -6274,7 +7789,7 @@ function AkademiDetail({ dev, budget, akademiParts, youthSquad, onUpgrade, onUpg
 function ScoutingDetail({ dev, budget, scoutingParts, onUpgrade, onUpgradePart, onBack }) {
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till klubben</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till klubben</button>
       <PaperCard>
         <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Regioner öppna</div>
         <div className="text-sm mt-1">{Object.entries(REGION_LABELS).filter(([k]) => dev.scouting >= REGION_UNLOCK[k]).map(([, l]) => l).join(", ") || "Endast Europa"}</div>
@@ -6289,7 +7804,7 @@ function ScoutingDetail({ dev, budget, scoutingParts, onUpgrade, onUpgradePart, 
 
       <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Stor ombyggnad</div>
       <BigUpgradeCard title="Scoutnätverk" desc="Nätverkets globala räckvidd — låser upp nya regioner och höjer kvalitetstaket på marknaden."
-        level={dev.scouting} cost={Math.round(750 * Math.pow(dev.scouting, 1.6))} canAfford={budget >= Math.round(750 * Math.pow(dev.scouting, 1.6))} onUpgrade={() => onUpgrade("scouting")} />
+        level={dev.scouting} cost={Math.round(820 * Math.pow(dev.scouting, 1.85))} canAfford={budget >= Math.round(820 * Math.pow(dev.scouting, 1.85))} onUpgrade={() => onUpgrade("scouting")} />
     </div>
   );
 }
@@ -6299,16 +7814,20 @@ function SponsorDetail({ dev, budget, reputation, sponsors, onUpgrade, onSignSpo
   const [offers, setOffers] = useState([]);
   const [selectedOfferId, setSelectedOfferId] = useState(null);
   const [negotiated, setNegotiated] = useState({});
-  function openOffers(slot) { setOffersFor(slot); setOffers(generateSponsorOffers(slot, reputation)); setSelectedOfferId(null); setNegotiated({}); }
+  const [negotiateAttempts, setNegotiateAttempts] = useState({});
+  function openOffers(slot) { setOffersFor(slot); setOffers(generateSponsorOffers(slot, reputation)); setSelectedOfferId(null); setNegotiated({}); setNegotiateAttempts({}); }
   function tryNegotiate(offer) {
-    const result = negotiateSponsor(offer, reputation);
-    if (result.result === "walk") setNegotiated(prev => ({ ...prev, [offer.id]: { done: true, walked: true } }));
-    else if (result.result === "improved") setNegotiated(prev => ({ ...prev, [offer.id]: { done: true, offer: result.offer, improved: true } }));
-    else setNegotiated(prev => ({ ...prev, [offer.id]: { done: true, offer } }));
+    const used = negotiateAttempts[offer.id] || 0;
+    const result = negotiateSponsor(offer, reputation, used);
+    setNegotiateAttempts(prev => ({ ...prev, [offer.id]: used + 1 }));
+    if (result.result === "walk") setNegotiated(prev => ({ ...prev, [offer.id]: { done: true, walked: true, line: result.line } }));
+    else if (result.result === "improved") setNegotiated(prev => ({ ...prev, [offer.id]: { done: true, offer: result.offer, improved: true, line: result.line, canRetry: false } }));
+    else if (result.result === "counter") setNegotiated(prev => ({ ...prev, [offer.id]: { done: true, offer: result.offer, countered: true, line: result.line, canRetry: used + 1 < NEGOTIATION_MAX_ATTEMPTS } }));
+    else setNegotiated(prev => ({ ...prev, [offer.id]: { done: true, offer, line: result.line, canRetry: used + 1 < NEGOTIATION_MAX_ATTEMPTS } }));
   }
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till klubben</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till klubben</button>
       <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Sponsoravtal</div>
       {Object.entries(SPONSOR_SLOT_LABEL).map(([slot, label]) => {
         const current = sponsors[slot];
@@ -6324,24 +7843,31 @@ function SponsorDetail({ dev, budget, reputation, sponsors, onUpgrade, onSignSpo
             <button onClick={() => openOffers(slot)} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={{ background: C.turf, color: C.paper }}>{current ? "Hitta ny sponsor" : "Sök sponsorer"}</button>
             {offersFor === slot && (
               <div className="mt-2 space-y-1.5">
+                <LeverageBadge score={negotiationLeverage(reputation, 50)} />
                 {offers.map(o => {
                   const neg = negotiated[o.id];
-                  if (neg?.walked) return <div key={o.id} className="text-11 p-2.5 rounded-xl" style={{ background: "rgba(180,68,59,0.1)", color: C.loss }}>{o.name} drog sig ur förhandlingen.</div>;
+                  if (neg?.walked) return (
+                    <div key={o.id} className="rounded-xl p-2.5" style={{ background: "rgba(180,68,59,0.1)" }}>
+                      <div className="text-xs font-semibold mb-1.5">{o.name}</div>
+                      <NegotiationThread messages={[{ from: "them", text: neg.line }]} />
+                    </div>
+                  );
                   const finalOffer = neg?.offer || o;
                   const isSelected = selectedOfferId === o.id;
                   return (
                     <div key={o.id} className="rounded-xl p-2.5" style={{ background: C.paperDim }}>
                       <button onClick={() => setSelectedOfferId(o.id)} className="w-full text-left">
                         <div className="flex items-center justify-between">
-                          <span className="text-xs font-semibold">{finalOffer.name}{neg?.improved && <span style={{ color: C.win }}> (förbättrat!)</span>}</span>
+                          <span className="text-xs font-semibold">{finalOffer.name}{neg?.improved && <span style={{ color: C.win }}> (förbättrat!)</span>}{neg?.countered && <span style={{ color: C.gold }}> (nya villkor)</span>}</span>
                           <span className="font-mono text-11">+{formatMoney(finalOffer.income)}/omg</span>
                         </div>
-                        <div className="text-10" style={{ color: C.inkSoft }}>Signeringsbonus: {formatMoney(finalOffer.bonus)}</div>
+                        <div className="text-10" style={{ color: C.inkSoft }}>{SPONSOR_TYPES[o.type]?.label || "Partner"} · Signeringsbonus: {formatMoney(finalOffer.bonus)}</div>
                       </button>
+                      {neg?.line && <div className="mt-2"><NegotiationThread messages={[{ from: "them", text: neg.line }]} /></div>}
                       {isSelected && (
                         <div className="flex gap-2 mt-2">
                           <button onClick={() => { onSignSponsor(slot, finalOffer); setOffersFor(null); }} className="flex-1 py-1.5 rounded-lg text-11 font-semibold" style={{ background: C.turf, color: C.paper }}>Acceptera</button>
-                          {!neg && <button onClick={() => tryNegotiate(o)} className="flex-1 py-1.5 rounded-lg text-11 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Förhandla</button>}
+                          {(!neg || neg.canRetry) && <button onClick={() => tryNegotiate(o)} className="flex-1 py-1.5 rounded-lg text-11 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>{neg ? "Förhandla igen (risk att de drar sig ur)" : "Förhandla"}</button>}
                         </div>
                       )}
                     </div>
@@ -6360,13 +7886,47 @@ function SponsorDetail({ dev, budget, reputation, sponsors, onUpgrade, onSignSpo
   );
 }
 
-function StaffDetail({ budget, staff, reputation, homeCountry, onHire, onRenegotiate, onBack }) {
+function StaffDetail({ budget, staff, reputation, homeCountry, staffCandidates, onOpenCandidates, onHire, onRenegotiate, onBack }) {
   const [offersFor, setOffersFor] = useState(null);
-  const [offers, setOffers] = useState([]);
-  function openOffers(role) { setOffersFor(role); setOffers(generateStaffOffers(role, homeCountry)); }
+  const [negotiatingId, setNegotiatingId] = useState(null);
+  const [negoMessages, setNegoMessages] = useState([]);
+  const [negoAttempts, setNegoAttempts] = useState(0);
+  const [negoOutcome, setNegoOutcome] = useState(null);
+  const [negoWalked, setNegoWalked] = useState(false);
+  function openOffers(role) { onOpenCandidates(role); setOffersFor(role); setNegotiatingId(null); }
+  function startNegotiation(candidate) {
+    setNegotiatingId(candidate.id);
+    setNegoMessages([{ from: "them", text: pick(["Jag vet vad jag är värd — bjud på riktigt.", "Beroende på villkoren kan jag tänka mig ett byte.", "Jag lyssnar, men förvänta er inte en fyndaffär."]) }]);
+    setNegoAttempts(0); setNegoOutcome(null); setNegoWalked(false);
+  }
+  function tryStaffWage(candidate, mult) {
+    const levelPenalty = (candidate.level - 1) * 0.02;
+    const target = negotiationDrift(candidate.wage, negoAttempts) * (1 + levelPenalty);
+    const offerWage = Math.round(target * mult);
+    if (negoAttempts === 0 && Math.random() < opportunityChance(negotiationLeverage(reputation, candidate.level * 20))) {
+      setNegoMessages(prev => [...prev, { from: "you", text: `Erbjuder ${formatMoney(offerWage)}/omg` }, { from: "them", text: `Er klubbs rykte gör det här enkelt — jag tackar ja direkt.` }]);
+      setNegoOutcome({ result: "accept", offerWage });
+      setNegoAttempts(1);
+      return;
+    }
+    const result = negotiateWage(offerWage, target, reputation);
+    const nextAttempts = negoAttempts + 1;
+    setNegoAttempts(nextAttempts);
+    if (result.result !== "accept") {
+      const walkChance = negotiationWalkAwayChance(offerWage / target, reputation) + levelPenalty;
+      if (nextAttempts >= NEGOTIATION_MAX_ATTEMPTS || Math.random() < walkChance) {
+        setNegoMessages(prev => [...prev, { from: "you", text: `Erbjuder ${formatMoney(offerWage)}/omg` }, { from: "them", text: `${wageRejectLine()} Jag tackar för intresset, men går vidare.` }]);
+        setNegoWalked(true);
+        return;
+      }
+    }
+    const reply = result.result === "accept" ? wageAcceptLine() : result.result === "counter" ? wageCounterLine(result.counterWage) : wageRejectLine();
+    setNegoMessages(prev => [...prev, { from: "you", text: `Erbjuder ${formatMoney(offerWage)}/omg` }, { from: "them", text: reply }]);
+    setNegoOutcome({ ...result, offerWage });
+  }
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till klubben</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till klubben</button>
       <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Klubbens personal</div>
       {Object.entries(STAFF_ROLE_LABEL).map(([role, label]) => {
         const current = staff[role];
@@ -6379,7 +7939,8 @@ function StaffDetail({ budget, staff, reputation, homeCountry, onHire, onRenegot
             {current ? (
               <>
                 <div className="font-semibold text-sm mt-1">{current.name} <span className="font-normal text-11" style={{ color: C.inkSoft }}>({nationalityLabel(current.nationality)})</span></div>
-                <div className="font-mono text-11 mt-0.5" style={{ color: C.inkSoft }}>Lön: {formatMoney(current.wage)} / matchomgång</div>
+                <div className="font-mono text-11 mt-0.5" style={{ color: C.inkSoft }}>Lön: {formatMoney(current.wage)} / matchomgång · Kontrakt: {current.contractYears ?? "–"} år kvar</div>
+                {(current.contractYears || 0) > 0 && <div className="text-9 mt-0.5" style={{ color: C.loss }}>Att ersätta nu kostar en avgångsvederlag.</div>}
               </>
             ) : <div className="text-sm mt-1" style={{ color: C.inkSoft }}>Tjänsten är obemannad.</div>}
             <div className="text-11 mt-1.5" style={{ color: C.inkSoft }}>{STAFF_ROLE_DESC[role]}</div>
@@ -6395,14 +7956,50 @@ function StaffDetail({ budget, staff, reputation, homeCountry, onHire, onRenegot
             <button onClick={() => openOffers(role)} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={{ background: C.turf, color: C.paper }}>{current ? "Rekrytera ersättare" : "Rekrytera"}</button>
             {offersFor === role && (
               <div className="mt-2 space-y-1.5">
-                {offers.map(o => (
-                  <button key={o.id} onClick={() => { onHire(role, o); setOffersFor(null); }} className="w-full text-left p-2.5 rounded-xl" style={{ background: C.paperDim }}>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold">{o.name} <span className="font-normal" style={{ color: C.inkSoft }}>({nationalityLabel(o.nationality)})</span></span>
-                      <LevelDots level={o.level} />
-                    </div>
-                    <div className="text-10 mt-0.5" style={{ color: C.inkSoft }}>Lön: {formatMoney(o.wage)} / matchomgång</div>
-                  </button>
+                <div className="text-9" style={{ color: C.inkSoft }}>Nya kandidater dyker upp om ingen av dessa tre passar er — det tar några omgångar.</div>
+                {(staffCandidates[role]?.list || []).map(o => (
+                  <div key={o.id} className="p-2.5 rounded-xl" style={{ background: C.paperDim }}>
+                    <button onClick={() => negotiatingId === o.id ? null : startNegotiation(o)} className="w-full text-left">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold">{o.name} <span className="font-normal" style={{ color: C.inkSoft }}>({nationalityLabel(o.nationality)})</span></span>
+                        <LevelDots level={o.level} />
+                      </div>
+                      <div className="text-10 mt-0.5" style={{ color: C.inkSoft }}>Löneanspråk: ca {formatMoney(o.wage)} / matchomgång{o.level >= 4 ? " · svårförhandlad, hög nivå" : ""}</div>
+                      {current && (
+                        <div className="text-9 mt-0.5 font-semibold" style={{ color: o.level > current.level ? C.win : o.level < current.level ? C.loss : C.inkSoft }}>
+                          {o.level > current.level ? `+${o.level - current.level} nivå` : o.level < current.level ? `${o.level - current.level} nivå` : "Samma nivå"} jämfört med {current.name.split(" ")[0]} · {o.wage > current.wage ? "dyrare" : o.wage < current.wage ? "billigare" : "samma lön"}
+                        </div>
+                      )}
+                    </button>
+                    {negotiatingId === o.id && (
+                      <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.paper}` }}>
+                        {negoWalked ? (
+                          <div className="text-11 font-semibold" style={{ color: C.loss }}>{o.name} gick vidare till ett annat erbjudande. Förhandlingen är över.</div>
+                        ) : (
+                          <>
+                            <div className="mb-1.5"><LeverageBadge score={negotiationLeverage(reputation, o.level * 20)} /></div>
+                            <NegotiationThread messages={negoMessages} />
+                            {!negoOutcome ? (
+                              <div className="space-y-1.5 mt-2">
+                                <button onClick={() => tryStaffWage(o, 0.85)} className="w-full py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.paper, color: C.ink }}>Lågt bud ({formatMoney(Math.round(o.wage * 0.85))}/omg)</button>
+                                <button onClick={() => tryStaffWage(o, 1.0)} className="w-full py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Marknadsmässigt ({formatMoney(o.wage)}/omg)</button>
+                                <button onClick={() => tryStaffWage(o, 1.15)} className="w-full py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Generöst ({formatMoney(Math.round(o.wage * 1.15))}/omg)</button>
+                              </div>
+                            ) : negoOutcome.result === "accept" ? (
+                              <button onClick={() => { onHire(role, { ...o, wage: negoOutcome.offerWage }); setOffersFor(null); setNegotiatingId(null); }} className="mt-2 w-full py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Anställ för {formatMoney(negoOutcome.offerWage)}/omg</button>
+                            ) : negoOutcome.result === "counter" ? (
+                              <div className="flex gap-1.5 mt-2">
+                                <button onClick={() => { onHire(role, { ...o, wage: negoOutcome.counterWage }); setOffersFor(null); setNegotiatingId(null); }} className="flex-1 py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Acceptera {formatMoney(negoOutcome.counterWage)}/omg</button>
+                                <button onClick={() => setNegoOutcome(null)} className="flex-1 py-1.5 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Nytt bud</button>
+                              </div>
+                            ) : (
+                              <button onClick={() => setNegoOutcome(null)} className="mt-2 w-full py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Försök igen</button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
             )}
@@ -6418,7 +8015,7 @@ function LoanDetail({ budget, loans, reputation, onTakeLoan, onBack }) {
   const totalDebt = loans.reduce((s, l) => s + l.installment * l.seasonsLeft, 0);
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till klubben</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till klubben</button>
       <PaperCard>
         <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Nuvarande skuld</div>
         <div className="font-display text-xl mt-1" style={{ color: totalDebt > 0 ? C.loss : C.ink }}>{formatMoney(totalDebt)}</div>
@@ -6457,7 +8054,7 @@ function WagesDetail({ squad, reputation, division, sponsringLevel, onBack }) {
   const sorted = [...squad].sort((a, b) => b.wage - a.wage);
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till klubben</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till klubben</button>
       <PaperCard>
         <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Löneutrymme</div>
         <div className="flex items-center justify-between mt-1">
@@ -6486,11 +8083,11 @@ function WagesDetail({ squad, reputation, division, sponsringLevel, onBack }) {
   );
 }
 
-function OwnerDetail({ owner, takeoverBid, budget, reputation, fanbase, shopLevel, division, tourOffers, onRespondTakeover, onOpenTours, onStartTour, onBack }) {
+function OwnerDetail({ owner, takeoverBid, budget, reputation, fanbase, shopLevel, division, tourOffers, onRespondTakeover, onOpenTours, onStartTour, onRequestOwner, onBack, merchandisePricing, onSetMerchandisePricing }) {
   const type = OWNER_TYPES[owner.type] || OWNER_TYPES.talmodig;
   return (
     <div className="rise-in space-y-2.5">
-      <button onClick={onBack} style={{ position: "sticky", bottom: 6, display: "inline-block", color: "rgba(255,255,255,0.32)", background: "rgba(19,34,29,0.6)", padding: "3px 9px", borderRadius: 999, fontSize: 10, zIndex: 5, backdropFilter: "blur(3px)" }}>← Tillbaka till klubben</button>
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, left: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Tillbaka till klubben</button>
       <PaperCard>
         <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Klubbägare</div>
         <div className="font-display text-lg mt-1">{owner.name}</div>
@@ -6501,6 +8098,23 @@ function OwnerDetail({ owner, takeoverBid, budget, reputation, fanbase, shopLeve
           <StatBar label="" value={owner.patience} color={owner.patience <= 30 ? C.loss : C.gold} />
         </div>
       </PaperCard>
+
+      {onRequestOwner && (
+        <>
+          <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Begär något av ägaren</div>
+          <div className="text-11 px-1" style={{ color: C.paperDim }}>Ju lägre tålamod ägaren har, desto större risk att förfrågan avvisas — och ett nej kostar ytterligare tålamod. Max en förfrågan var 6:e omgång.</div>
+          <PaperCard>
+            <div className="text-sm font-semibold">Extra transferbudget</div>
+            <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Be om ett kapitaltillskott för att förstärka truppen nu.</div>
+            <button onClick={() => onRequestOwner("budget")} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Begär pengar</button>
+          </PaperCard>
+          <PaperCard>
+            <div className="text-sm font-semibold">Mer tid att nå resultat</div>
+            <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Be ägaren tala för er inför styrelsen och köpa er mer tålamod.</div>
+            <button onClick={() => onRequestOwner("patience")} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Begär mer tid</button>
+          </PaperCard>
+        </>
+      )}
 
       {takeoverBid && (
         <PaperCard style={{ background: "rgba(201,154,62,0.15)" }}>
@@ -6520,45 +8134,157 @@ function OwnerDetail({ owner, takeoverBid, budget, reputation, fanbase, shopLeve
         <div className="text-10 mt-0.5" style={{ color: C.inkSoft }}>Skalar med rykte och division.</div>
       </PaperCard>
       <PaperCard>
-        <div className="flex items-center justify-between"><span className="text-sm font-semibold">Merchandise</span><span className="font-mono text-sm font-semibold" style={{ color: C.win }}>+{formatMoney(merchandiseIncome(fanbase, shopLevel))}/omg</span></div>
+        <div className="flex items-center justify-between"><span className="text-sm font-semibold">Merchandise</span><span className="font-mono text-sm font-semibold" style={{ color: C.win }}>+{formatMoney(merchandiseIncome(fanbase, shopLevel, merchandisePricing))}/omg</span></div>
         <div className="text-10 mt-0.5" style={{ color: C.inkSoft }}>Skalar med fanbase och klubbutikens nivå.</div>
-      </PaperCard>
-
-      <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Försäsongsturné</div>
-      <div className="text-11 px-1" style={{ color: C.paperDim }}>En genomförd turné skärper också effekten av försäsongens fyra träningsmatcher.</div>
-      {!tourOffers ? (
-        <button onClick={onOpenTours} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Planera turné</button>
-      ) : (
-        <div className="space-y-2">
-          {tourOffers.map(o => {
-            const affordable = budget >= o.cost;
-            return (
-              <PaperCard key={o.id}>
-                <div className="text-sm font-semibold">{o.name}</div>
-                <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Kostnad {formatMoney(o.cost)} · Möjlig intäkt {formatMoney(o.incomeMin)}–{formatMoney(o.incomeMax)} · +{o.repBonus} rykte</div>
-                <button onClick={() => onStartTour(o)} disabled={!affordable} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={affordable ? { background: C.gold, color: C.turfDeep } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>{affordable ? "Genomför turné" : "Otillräcklig budget"}</button>
-              </PaperCard>
-            );
-          })}
+        <div className="grid grid-cols-3 gap-1.5 mt-2.5">
+          {Object.entries(MERCH_PRICING).map(([key, tier]) => (
+            <button key={key} onClick={() => onSetMerchandisePricing(key)} className="py-1.5 rounded-xl text-10 font-semibold border"
+              style={merchandisePricing === key ? { background: C.turf, color: C.paper, borderColor: C.turf } : { background: "transparent", color: C.inkSoft, borderColor: C.paperDim }}>{tier.label}</button>
+          ))}
         </div>
-      )}
+        <div className="text-10 mt-1.5" style={{ color: C.inkSoft }}>{MERCH_PRICING[merchandisePricing || "standard"].desc}</div>
+      </PaperCard>
     </div>
   );
 }
 
-function ClubTab({ club, dev, budget, history, reputation, fanbase, spelide, onSetSpelide, youthSquad, onUpgrade, onSellYouth, onPromoteYouth,
-  arenaStands, arenaFacilities, arenaConstruction, onStartConstruction, akademiParts, scoutingParts, sponsors, onUpgradePart, onSignSponsor, staff, onHireStaff, onRenegotiateStaff, boardConfidence, boardTarget, loans, onTakeLoan,
-  squad, owner, takeoverBid, tourOffers, onRespondTakeover, onOpenTours, onStartTour, repHistory, fanHistory }) {
+function EconomyTab({ budget, reputation, division, sponsringLevel, squad, history, season, round, totalRounds, seasonIncomeTotal, seasonWageTotal, ticketPrice, onSetTicketPrice,
+  loans, onTakeLoan, sponsors, dev, onUpgrade, onUpgradePart, onSignSponsor, club, arenaStands, arenaFacilities, arenaConstruction, onStartConstruction, recentMatchFinances }) {
+  const [selectedCategory, setSelectedCategory] = useState(null);
+  if (selectedCategory === "loner") return <WagesDetail squad={squad} reputation={reputation} division={division} sponsringLevel={sponsringLevel} onBack={() => setSelectedCategory(null)} />;
+  if (selectedCategory === "lan") return <LoanDetail budget={budget} loans={loans} reputation={reputation} onTakeLoan={onTakeLoan} onBack={() => setSelectedCategory(null)} />;
+  if (selectedCategory === "sponsring") return <SponsorDetail dev={dev} budget={budget} reputation={reputation} sponsors={sponsors} onUpgrade={onUpgrade} onSignSponsor={onSignSponsor} onBack={() => setSelectedCategory(null)} />;
+  if (selectedCategory === "arena") return <ArenaDetail club={club} dev={dev} budget={budget} arenaStands={arenaStands} arenaFacilities={arenaFacilities} arenaConstruction={arenaConstruction} onUpgrade={onUpgrade} onUpgradePart={onUpgradePart} onStartConstruction={onStartConstruction} ticketPrice={ticketPrice} onSetTicketPrice={onSetTicketPrice} recentMatchFinances={recentMatchFinances} onBack={() => setSelectedCategory(null)} />;
+
+  const cap = wageBudgetCap(reputation, division, sponsringLevel);
+  const wageBill = totalWageBill(squad);
+  const wageRatio = clamp(wageBill / Math.max(1, cap), 0, 1.4);
+  const roundsPlayed = Math.max(1, round);
+  const roundsLeft = Math.max(0, totalRounds - round);
+  const avgIncomePerRound = seasonIncomeTotal / roundsPlayed;
+  const avgWagePerRound = seasonWageTotal / roundsPlayed;
+  const avgNetPerRound = avgIncomePerRound - avgWagePerRound;
+  const projectedEndBudget = budget + avgNetPerRound * roundsLeft;
+  const seasonNetSoFar = seasonIncomeTotal - seasonWageTotal;
+
+  return (
+    <div className="rise-in space-y-2.5">
+      <PaperCard>
+        <div className="font-display text-xl">Ekonomi</div>
+        <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Budget, löner, sponsring och prognos för säsongen.</div>
+      </PaperCard>
+
+      <PaperCard>
+        <div className="text-10 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Tillgänglig budget</div>
+        <div className="font-display text-3xl mt-1" style={{ color: budget >= 0 ? C.ink : C.loss }}>{formatMoney(budget)}</div>
+      </PaperCard>
+
+      <PaperCard>
+        <div className="flex items-center justify-between mb-1.5">
+          <div className="text-10 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Löneutrymme</div>
+          <span className="text-11 font-mono" style={{ color: wageRatio >= 1 ? C.loss : C.inkSoft }}>{formatMoney(wageBill)} / {formatMoney(cap)}</span>
+        </div>
+        <div style={{ height: 8, borderRadius: 999, background: "rgba(0,0,0,0.08)", overflow: "hidden" }}>
+          <div style={{ width: `${Math.min(100, wageRatio * 100)}%`, height: "100%", background: wageRatio >= 1 ? C.loss : wageRatio >= 0.85 ? C.gold : C.win }} />
+        </div>
+        {wageRatio >= 0.95 && <div className="text-11 mt-1.5 font-semibold" style={{ color: C.loss }}>Nära eller över lönetaket — Financial Fair Play kan blockera nya värvningar.</div>}
+      </PaperCard>
+
+      <PaperCard>
+        <div className="text-10 uppercase tracking-wide font-semibold mb-2" style={{ color: C.inkSoft }}>Prognos — resten av säsongen</div>
+        <div className="grid grid-cols-2 gap-2">
+          <div><div className="text-9" style={{ color: C.inkSoft }}>Snittintäkt / omgång</div><div className="font-mono font-semibold" style={{ color: C.win }}>+{formatMoney(Math.round(avgIncomePerRound))}</div></div>
+          <div><div className="text-9" style={{ color: C.inkSoft }}>Snittlön / omgång</div><div className="font-mono font-semibold" style={{ color: C.loss }}>−{formatMoney(Math.round(avgWagePerRound))}</div></div>
+        </div>
+        <div className="mt-2.5 pt-2.5" style={{ borderTop: `1px dashed ${C.paperDim}` }}>
+          <div className="text-9" style={{ color: C.inkSoft }}>Säsongens resultat hittills</div>
+          <div className="font-mono font-semibold" style={{ color: seasonNetSoFar >= 0 ? C.win : C.loss }}>{seasonNetSoFar >= 0 ? "+" : ""}{formatMoney(Math.round(seasonNetSoFar))}</div>
+        </div>
+        <div className="mt-2.5 pt-2.5" style={{ borderTop: `1px dashed ${C.paperDim}` }}>
+          <div className="text-9" style={{ color: C.inkSoft }}>Uppskattad budget vid säsongens slut ({roundsLeft} omgångar kvar)</div>
+          <div className="font-display text-xl mt-0.5" style={{ color: projectedEndBudget >= 0 ? C.win : C.loss }}>{formatMoney(Math.round(projectedEndBudget))}</div>
+        </div>
+      </PaperCard>
+
+      <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Hantera</div>
+      <div className="grid grid-cols-2 gap-2">
+        <button onClick={() => setSelectedCategory("loner")} className="p-3 rounded-xl text-left" style={{ background: C.paper }}><div className="font-semibold text-sm" style={{ color: C.ink }}>Löner</div><div className="text-10" style={{ color: C.inkSoft }}>{formatMoney(wageBill)}/omg</div></button>
+        <button onClick={() => setSelectedCategory("lan")} className="p-3 rounded-xl text-left" style={{ background: C.paper }}><div className="font-semibold text-sm" style={{ color: C.ink }}>Lån</div><div className="text-10" style={{ color: C.inkSoft }}>{loans?.length || 0} aktiva</div></button>
+        <button onClick={() => setSelectedCategory("sponsring")} className="p-3 rounded-xl text-left" style={{ background: C.paper }}><div className="font-semibold text-sm" style={{ color: C.ink }}>Sponsring</div><div className="text-10" style={{ color: C.inkSoft }}>{Object.values(sponsors || {}).filter(Boolean).length}/3 avtal</div></button>
+        <button onClick={() => setSelectedCategory("arena")} className="p-3 rounded-xl text-left" style={{ background: C.paper }}><div className="font-semibold text-sm" style={{ color: C.ink }}>Arena</div><div className="text-10" style={{ color: C.inkSoft }}>Biljetter, restaurang & butik</div></button>
+      </div>
+
+      <PaperCard>
+        <div className="text-10 uppercase tracking-wide font-semibold mb-2" style={{ color: C.inkSoft }}>Ekonomisk historik</div>
+        <FinanceBarChart history={history} />
+      </PaperCard>
+    </div>
+  );
+}
+function PersonalTab({ budget, staff, reputation, homeCountry, staffCandidates, onOpenStaffCandidates, onHireStaff, onRenegotiateStaff, dev, scoutingParts, onUpgrade, onUpgradePart, seasonStaffImpact }) {
+  const [showDetail, setShowDetail] = useState(false);
+  const [showScouting, setShowScouting] = useState(false);
+  if (showDetail) return <StaffDetail budget={budget} staff={staff} reputation={reputation} homeCountry={homeCountry} staffCandidates={staffCandidates} onOpenCandidates={onOpenStaffCandidates} onHire={onHireStaff} onRenegotiate={onRenegotiateStaff} onBack={() => setShowDetail(false)} />;
+  if (showScouting) return <ScoutingDetail dev={dev} budget={budget} scoutingParts={scoutingParts} onUpgrade={onUpgrade} onUpgradePart={onUpgradePart} onBack={() => setShowScouting(false)} />;
+
+  const roles = [
+    { key: "physio", label: "Fysioterapeut", impact: (m) => m ? `-${Math.round(m.level * 6)}% skadetid, lägre skaderisk i match och på träning.` : "Ingen anställd — högre skaderisk och längre läkningstid.",
+      seasonText: (v) => `Har troligen förhindrat ca ${v.toFixed(1)} skador den här säsongen.` },
+    { key: "assistant", label: "Assisterande tränare", impact: (m) => m ? `Sänker risken för gula och röda kort (nivå ${m.level}).` : "Ingen anställd — högre risk för kort i matcher.",
+      seasonText: (v) => `Har troligen förhindrat ca ${v.toFixed(1)} kort den här säsongen.` },
+    { key: "scout", label: "Scout", impact: (m) => m ? `Höjer scoutens träffsäkerhet med ca +${(m.level * 0.2).toFixed(1)} i scoutbetyg.` : "Ingen anställd — scoutuppdrag använder bara klubbens grundnivå." },
+    { key: "gkCoach", label: "Målvaktstränare", impact: (m) => m ? `+${(m.level * 1.2).toFixed(1)}% i lagets försvarsstyrka i matcher.` : "Ingen anställd — inget extra tillskott till försvaret.",
+      seasonText: (v) => `Har bidragit med totalt ca ${v.toFixed(0)} extra försvarspoäng över säsongens matcher.` },
+    { key: "analyst", label: "Analytiker", impact: (m) => m ? `+${(m.level * 0.9).toFixed(1)}% i lagets anfallsstyrka i matcher.` : "Ingen anställd — inget extra tillskott till anfallet.",
+      seasonText: (v) => `Har bidragit med totalt ca ${v.toFixed(0)} extra anfallspoäng över säsongens matcher.` },
+    { key: "fitnessCoach", label: "Fystränare", impact: (m) => m ? `Snabbare orkåterhämtning, mindre uttröttning under match (nivå ${m.level}).` : "Ingen anställd — spelare återhämtar sig i normal takt.",
+      seasonText: (v) => `Har gett laget totalt ca ${v.toFixed(0)} extra orkpoäng tillbaka den här säsongen.` },
+  ];
+
+  return (
+    <div className="rise-in space-y-2.5">
+      <PaperCard>
+        <div className="font-display text-xl">Personal</div>
+        <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Er backroom-personal och vad de faktiskt bidrar med.</div>
+      </PaperCard>
+      <button onClick={() => setShowScouting(true)} className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-between px-4" style={{ background: C.gold, color: C.turfDeep, boxShadow: "0 2px 10px rgba(201,154,62,0.35)" }}>
+        <span>Scoutnätverk — nivå {dev.scouting}/5</span>
+        <ChevronRight size={18} />
+      </button>
+      {roles.map(r => {
+        const member = staff[r.key];
+        return (
+          <PaperCard key={r.key}>
+            <div className="flex items-center justify-between">
+              <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{r.label}</div>
+              {member && <LevelDots level={member.level} />}
+            </div>
+            {member ? (
+              <>
+                <div className="font-semibold text-sm mt-1">{member.name} <span className="font-normal text-11" style={{ color: C.inkSoft }}>({nationalityLabel(member.nationality)})</span></div>
+                <div className="font-mono text-11" style={{ color: C.inkSoft }}>{formatMoney(member.wage)} / omgång · Kontrakt: {member.contractYears ?? "–"} år kvar</div>
+                <div className="mt-1.5">
+                  <div className="text-9 mb-0.5" style={{ color: C.inkSoft }}>Trivsel</div>
+                  <StatBar label="" value={member.satisfaction ?? 70} color={(member.satisfaction ?? 70) <= 30 ? C.loss : C.gold} />
+                </div>
+                {member.needsRaise && <div className="text-11 mt-1.5 font-semibold" style={{ color: C.loss }}>Vill omförhandla sin lön — trivseln sjunker tills detta löses.</div>}
+                {r.seasonText && seasonStaffImpact?.[r.key] > 0.05 && <div className="text-10 mt-1.5" style={{ color: C.gold }}>{r.seasonText(seasonStaffImpact[r.key])}</div>}
+              </>
+            ) : <div className="text-sm mt-1" style={{ color: C.inkSoft }}>Tjänsten är obemannad.</div>}
+            <div className="text-11 mt-1.5 font-semibold" style={{ color: member ? C.win : C.loss }}>{r.impact(member)}</div>
+          </PaperCard>
+        );
+      })}
+      <button onClick={() => setShowDetail(true)} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Rekrytera / förhandla personal</button>
+    </div>
+  );
+}
+function ClubTab({ club, dev, budget, history, reputation, fanbase,
+  sponsors, staff, boardConfidence, boardTarget,
+  squad, owner, takeoverBid, tourOffers, onRespondTakeover, onOpenTours, onStartTour, onRequestOwner, repHistory, fanHistory, shopLevel, division, merchandisePricing, onSetMerchandisePricing }) {
   const [selectedCategory, setSelectedCategory] = useState(null);
 
-  if (selectedCategory === "arena") return <ArenaDetail club={club} dev={dev} budget={budget} arenaStands={arenaStands} arenaFacilities={arenaFacilities} arenaConstruction={arenaConstruction} onUpgrade={onUpgrade} onUpgradePart={onUpgradePart} onStartConstruction={onStartConstruction} onBack={() => setSelectedCategory(null)} />;
-  if (selectedCategory === "akademi") return <AkademiDetail dev={dev} budget={budget} akademiParts={akademiParts} youthSquad={youthSquad} onUpgrade={onUpgrade} onUpgradePart={onUpgradePart} onSellYouth={onSellYouth} onPromoteYouth={onPromoteYouth} onBack={() => setSelectedCategory(null)} />;
-  if (selectedCategory === "scouting") return <ScoutingDetail dev={dev} budget={budget} scoutingParts={scoutingParts} onUpgrade={onUpgrade} onUpgradePart={onUpgradePart} onBack={() => setSelectedCategory(null)} />;
-  if (selectedCategory === "sponsring") return <SponsorDetail dev={dev} budget={budget} reputation={reputation} sponsors={sponsors} onUpgrade={onUpgrade} onSignSponsor={onSignSponsor} onBack={() => setSelectedCategory(null)} />;
-  if (selectedCategory === "personal") return <StaffDetail budget={budget} staff={staff} reputation={reputation} homeCountry={club.league} onHire={onHireStaff} onRenegotiate={onRenegotiateStaff} onBack={() => setSelectedCategory(null)} />;
-  if (selectedCategory === "lan") return <LoanDetail budget={budget} loans={loans} reputation={reputation} onTakeLoan={onTakeLoan} onBack={() => setSelectedCategory(null)} />;
-  if (selectedCategory === "loner") return <WagesDetail squad={squad} reputation={reputation} division={club.division} sponsringLevel={dev.sponsring} onBack={() => setSelectedCategory(null)} />;
-  if (selectedCategory === "agare") return <OwnerDetail owner={owner} takeoverBid={takeoverBid} budget={budget} reputation={reputation} fanbase={fanbase} shopLevel={arenaFacilities.shop} division={club.division} tourOffers={tourOffers} onRespondTakeover={onRespondTakeover} onOpenTours={onOpenTours} onStartTour={onStartTour} onBack={() => setSelectedCategory(null)} />;
+  if (selectedCategory === "agare") return <OwnerDetail owner={owner} takeoverBid={takeoverBid} budget={budget} reputation={reputation} fanbase={fanbase} shopLevel={shopLevel} division={division} tourOffers={tourOffers} onRespondTakeover={onRespondTakeover} onOpenTours={onOpenTours} onStartTour={onStartTour} onRequestOwner={onRequestOwner} onBack={() => setSelectedCategory(null)} merchandisePricing={merchandisePricing} onSetMerchandisePricing={onSetMerchandisePricing} />;
 
   const sponsorCount = Object.values(sponsors).filter(Boolean).length;
   const staffCount = Object.values(staff).filter(Boolean).length;
@@ -6588,17 +8314,7 @@ function ClubTab({ club, dev, budget, history, reputation, fanbase, spelide, onS
         </div>
       </PaperCard>
 
-      <PaperCard>
-        <div className="text-xs uppercase tracking-wide font-semibold mb-2" style={{ color: C.inkSoft }}>Spelidé</div>
-        <div className="grid grid-cols-2 gap-2">
-          {Object.entries(SPELIDE_LABELS).map(([key, label]) => (
-            <button key={key} onClick={() => onSetSpelide(key)} className="text-left p-2.5 rounded-xl border" style={spelide === key ? { background: C.turf, color: C.paper, borderColor: C.turf } : { background: "transparent", color: C.inkSoft, borderColor: C.paperDim }}>
-              <div className="text-xs font-semibold">{label}</div>
-            </button>
-          ))}
-        </div>
-        <div className="text-11 mt-2" style={{ color: C.inkSoft }}>{SPELIDE_DESC[spelide]}</div>
-      </PaperCard>
+      <div className="text-11 px-1 py-1 text-center" style={{ color: C.inkSoft }}>Spelidén ställs numera in under <b>Trupp</b>, tillsammans med taktik och startelva.</div>
 
       <PaperCard>
         <div className="text-xs uppercase tracking-wide font-semibold mb-2" style={{ color: C.inkSoft }}>Rykte & Fanbase</div>
@@ -6618,70 +8334,20 @@ function ClubTab({ club, dev, budget, history, reputation, fanbase, spelide, onS
         <div className="text-11 mt-2" style={{ color: C.inkSoft }}>Säsongsmål: {boardTarget}</div>
       </PaperCard>
 
+      <div className="text-11 px-1 py-1" style={{ color: C.inkSoft }}>Personal, löner, lån, sponsring, arena och akademi hittar du numera under Ekonomi, Trupp och Personal.</div>
       <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Klubbavdelningar</div>
-      <button onClick={() => setSelectedCategory("personal")} className="w-full text-left">
-        <PaperCard>
-          <div className="flex items-center justify-between">
-            <div className="flex-1 min-w-0">
-              <div className="font-semibold text-sm">Personal</div>
-              <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Assisterande tränare, fysioterapeut och huvudscout.</div>
-              <div className="text-10 mt-1" style={{ color: C.win }}>{staffCount}/3 tjänster tillsatta</div>
-            </div>
-            <ChevronRight size={16} color={C.inkSoft} className="shrink-0" />
-          </div>
-        </PaperCard>
-      </button>
-      <button onClick={() => setSelectedCategory("lan")} className="w-full text-left">
-        <PaperCard>
-          <div className="flex items-center justify-between">
-            <div className="flex-1 min-w-0">
-              <div className="font-semibold text-sm">Lån</div>
-              <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Snabbare utbyggnad mot ränta över flera säsonger.</div>
-              {loans.length > 0 && <div className="text-10 mt-1" style={{ color: C.loss }}>{loans.length} aktiva lån</div>}
-            </div>
-            <ChevronRight size={16} color={C.inkSoft} className="shrink-0" />
-          </div>
-        </PaperCard>
-      </button>
-      <button onClick={() => setSelectedCategory("loner")} className="w-full text-left">
-        <PaperCard>
-          <div className="flex items-center justify-between">
-            <div className="flex-1 min-w-0">
-              <div className="font-semibold text-sm">Löner</div>
-              <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Löneutrymme och individuella löneförhandlingar.</div>
-              <div className="text-10 mt-1" style={{ color: wageOverCap ? C.loss : C.win }}>{formatMoney(wageTotal)} / {formatMoney(wageCap)}{wageOverCap ? " — över taket!" : ""}</div>
-            </div>
-            <ChevronRight size={16} color={C.inkSoft} className="shrink-0" />
-          </div>
-        </PaperCard>
-      </button>
       <button onClick={() => setSelectedCategory("agare")} className="w-full text-left">
         <PaperCard>
           <div className="flex items-center justify-between">
             <div className="flex-1 min-w-0">
               <div className="font-semibold text-sm">Ägare & intäkter</div>
-              <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Klubbägare, övertagandebud, TV-avtal, merchandise och turnéer.</div>
+              <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Klubbägare, övertagandebud, försäsongsturné, TV-avtal och merchandise.</div>
               {takeoverBid && <div className="text-10 mt-1 font-semibold" style={{ color: C.gold }}>Övertagandebud väntar!</div>}
             </div>
             <ChevronRight size={16} color={C.inkSoft} className="shrink-0" />
           </div>
         </PaperCard>
       </button>
-      {Object.entries(CATEGORY_META).map(([key, meta]) => (
-        <button key={key} onClick={() => setSelectedCategory(key)} className="w-full text-left">
-          <PaperCard>
-            <div className="flex items-center justify-between">
-              <div className="flex-1 min-w-0">
-                <div className="font-semibold text-sm">{meta.label}</div>
-                <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>{meta.desc}</div>
-                {key === "sponsring" && <div className="text-10 mt-1" style={{ color: C.win }}>{sponsorCount}/3 avtal aktiva</div>}
-                {key === "arena" && arenaConstruction && <div className="text-10 mt-1 font-semibold" style={{ color: C.gold }}>🏗️ Ombyggnad pågår — {arenaConstruction.roundsTotal - arenaConstruction.roundsElapsed} omgångar kvar</div>}
-              </div>
-              <div className="flex items-center gap-2 shrink-0"><LevelDots level={dev[key]} /><ChevronRight size={16} color={C.inkSoft} /></div>
-            </div>
-          </PaperCard>
-        </button>
-      ))}
 
       {history && history.length > 0 && (
         <PaperCard>
