@@ -3648,7 +3648,7 @@ function setupCup(type, base) {
         .tabbtn { transition: color .15s ease, background .15s ease, transform .1s ease; }
         .tabbtn:active { transform: scale(0.94); }
         @keyframes riseIn { from { opacity:0; transform: translateY(14px); } to { opacity:1; transform: translateY(0); } }
-        .rise-in { animation: riseIn .35s ease both; }
+        .rise-in { animation: riseIn .35s ease; }
         @keyframes confettiFall { 0% { transform: translateY(0) rotate(0deg); opacity: 1; } 100% { transform: translateY(240px) rotate(340deg); opacity: 0; } }
         @keyframes pulseCta { 0%, 100% { box-shadow: 0 0 0 0 rgba(201,154,62,0.45); } 50% { box-shadow: 0 0 0 8px rgba(201,154,62,0); } }
         @keyframes constructionScroll { from { background-position: 0 0; } to { background-position: 32px 0; } }
