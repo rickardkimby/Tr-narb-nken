@@ -102,15 +102,19 @@ const SPECIFIC_POSITIONS = {
     { code: "CAM", label: "Offensiv mittfältare", col: 4, row: 2 },
     { code: "LM", label: "Vänster mittfältare", col: 3, row: 0 },
     { code: "RM", label: "Höger mittfältare", col: 3, row: 4 },
+    { code: "VOM", label: "Vänster offensiv mittfältare", col: 4, row: 0 },
+    { code: "HOM", label: "Höger offensiv mittfältare", col: 4, row: 4 },
   ],
   AN: [
     { code: "ST", label: "Anfallare", col: 5, row: 2 },
-    { code: "LW", label: "Vänsterytter", col: 4, row: 0 },
-    { code: "RW", label: "Högerytter", col: 4, row: 4 },
+    { code: "LF", label: "Vänsterforward", col: 5, row: 0 },
+    { code: "RF", label: "Högerforward", col: 5, row: 4 },
   ],
 };
 const SPECIFIC_POSITION_LOOKUP = Object.values(SPECIFIC_POSITIONS).flat().reduce((acc, p) => { acc[p.code] = p; return acc; }, {});
 function randomSpecificPosition(pos) {
+  // Some forwards drift into an advanced wide midfield role, and vice versa for midfielders (handled in distributeSpecificPositions).
+  if (pos === "AN" && Math.random() < 0.18) return pick(["VOM", "HOM"]);
   const options = SPECIFIC_POSITIONS[pos] || SPECIFIC_POSITIONS.MF;
   return pick(options).code;
 }
@@ -574,8 +578,8 @@ function makePlayer(pos, homeCountry, forcedSpecificPosition, archetype, divisio
 }
 function distributeSpecificPositions(pos, count) {
   if (pos !== "FÖ" && pos !== "MF") return Array.from({ length: count }, () => randomSpecificPosition(pos));
-  const leftOptions = pos === "FÖ" ? ["LB", "LWB"] : ["LM"];
-  const rightOptions = pos === "FÖ" ? ["RB", "RWB"] : ["RM"];
+  const leftOptions = pos === "FÖ" ? ["LB", "LWB"] : ["LM", "VOM"];
+  const rightOptions = pos === "FÖ" ? ["RB", "RWB"] : ["RM", "HOM"];
   const centerOptions = pos === "FÖ" ? ["CB"] : ["CDM", "CM", "CAM"];
   const guaranteed = [pick(leftOptions), pick(rightOptions), pick(centerOptions), pick(centerOptions)];
   const allOptions = SPECIFIC_POSITIONS[pos].map(p => p.code);
@@ -1327,9 +1331,21 @@ function merchandiseIncome(fanbase, shopLevel, pricing = "standard") {
 }
 function generateTourOffers(reputation) {
   return [
-    { id: uid(), name: "Turné i Asien", cost: 250, incomeMin: 300, incomeMax: 700, repBonus: 3, opponents: ["Tokyo All-Stars", "Seoul United", "Shanghai Select XI", "Bangkok Select XI"] },
-    { id: uid(), name: "Turné i Nordamerika", cost: 180, incomeMin: 200, incomeMax: 500, repBonus: 2, opponents: ["LA All-Stars", "New York Select XI", "Toronto United", "Mexico City All-Stars"] },
-    { id: uid(), name: "Lokal försäsongsturné", cost: 60, incomeMin: 60, incomeMax: 160, repBonus: 1, opponents: ["Grannlaget IF", "Regionsserien XI", "Lokala Utmanarna", "Distriktslaget"] },
+    {
+      id: uid(), name: "Turné i Asien", cost: 250, incomeMin: 300, incomeMax: 700, repBonus: 3, injuryRisk: 0.16, prepBonus: 1, opponents: ["Tokyo All-Stars", "Seoul United", "Shanghai Select XI", "Bangkok Select XI"],
+      pros: ["Störst intäkter och synlighet", "Högst rykteshöjning"],
+      cons: ["Lång resa sliter på truppen — högre skaderisk i försäsongen", "Minst tid kvar för taktisk inövning hemma"],
+    },
+    {
+      id: uid(), name: "Turné i Nordamerika", cost: 180, incomeMin: 200, incomeMax: 500, repBonus: 2, injuryRisk: 0.09, prepBonus: 3, opponents: ["LA All-Stars", "New York Select XI", "Toronto United", "Mexico City All-Stars"],
+      pros: ["Bra balans mellan intäkter och belastning", "Rimlig taktisk förberedelsetid"],
+      cons: ["Måttlig skaderisk", "Varken bäst på intäkter eller förberedelse"],
+    },
+    {
+      id: uid(), name: "Lokal försäsongsturné", cost: 60, incomeMin: 60, incomeMax: 160, repBonus: 1, injuryRisk: 0.02, prepBonus: 5, opponents: ["Grannlaget IF", "Regionsserien XI", "Lokala Utmanarna", "Distriktslaget"],
+      pros: ["Lägst skaderisk — ingen lång resa", "Bäst taktisk vana inför säsongsstart"],
+      cons: ["Minst intäkter", "Minst rykteshöjning"],
+    },
   ];
 }
 function simulateTourMatches(offer) {
@@ -2048,6 +2064,7 @@ export default function TranarbankenApp() {
   const [nameDraft, setNameDraft] = useState("");
   const [confirmSell, setConfirmSell] = useState(null);
   const [toast, setToast] = useState(null);
+  const [subViewOpen, setSubViewOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const loadedRef = useRef(false);
 
@@ -2110,6 +2127,7 @@ export default function TranarbankenApp() {
       owner: parsed.owner || generateOwner(parsed.reputation),
       takeoverBid: parsed.takeoverBid || null,
       tourOffers: parsed.tourOffers || null,
+      tourPrepBonus: parsed.tourPrepBonus || 0,
       lastTourResult: parsed.lastTourResult || null,
       tourCompletedThisOffseason: parsed.tourCompletedThisOffseason || false,
       formationFamiliarity: parsed.formationFamiliarity || 0,
@@ -2196,6 +2214,7 @@ export default function TranarbankenApp() {
     if (g._toast) { showToast(g._toast); setG(prev => ({ ...prev, _toast: null })); }
   }, [g._toast]);
 
+  useEffect(() => { setSubViewOpen(false); }, [g.activeTab]);
   const standings = useMemo(() => {
     if (!g.setupDone) return [];
     const club = g.clubs[g.userClubId];
@@ -2318,7 +2337,7 @@ export default function TranarbankenApp() {
       seasonIncomeTotal: 0, seasonWageTotal: 0, difficulty: "normal", savedScoutProfiles: [], clubRecords: {}, seasonStaffImpact: { physio: 0, assistant: 0, analyst: 0, gkCoach: 0, fitnessCoach: 0 },
       setPieceTakers: { penalties: [], freeKick: null, cornerLeft: null, cornerRight: null }, chemistryPairs: {}, newsFeed: [], captainId: null, clubGoodwill: {}, blacklistedPlayers: {}, staffCandidates: {}, recentMatchFinances: [],
       formationCode: "4-4-2", tacticalSettings: { ...DEFAULT_TACTICAL_SETTINGS }, lineupCells: null,
-      owner: generateOwner(reputation), takeoverBid: null, tourOffers: null, tourCompletedThisOffseason: false, lastTourResult: null,
+      owner: generateOwner(reputation), takeoverBid: null, tourOffers: null, tourCompletedThisOffseason: false, tourPrepBonus: 0, lastTourResult: null,
       formationFamiliarity: 0, teamTalk: "neutral", pendingLateGame: null, pendingMidGame: null, restedForMatch: false,
       repHistory: [reputation], fanHistory: [startFanbase],
       manager, assistantManager: null,
@@ -3263,14 +3282,27 @@ function setupCup(type, base) {
     showToast(`${offer.name} är nu er assisterande manager!`);
   }
   function startTour(offer) {
+    if (g.tourCompletedThisOffseason) { showToast("Ni har redan åkt på en försäsongsturné — bara en per försäsong är tillåten."); return; }
     if (g.budget < offer.cost) { showToast("Inte tillräcklig budget."); return; }
     const income = rndInt(offer.incomeMin, offer.incomeMax);
     const matches = simulateTourMatches(offer);
     const wins = matches.filter(m => m.us > m.them).length;
-    setG(prev => ({ ...prev, budget: prev.budget - offer.cost + income, reputation: clamp(prev.reputation + offer.repBonus, 0, 100), tourOffers: null, tourCompletedThisOffseason: true, lastTourResult: { name: offer.name, matches, income, cost: offer.cost } }));
-    pushNews(`${offer.name} avslutad: ${wins}/4 vinster på turnén, nettoresultat ${formatMoney(income - offer.cost)}.`, "Klubben");
+    let injuredName = null;
+    let newSquad = g.squad;
+    if (Math.random() < (offer.injuryRisk || 0)) {
+      const candidates = g.squad.filter(p => !p.injuryWeeks);
+      if (candidates.length) {
+        const hurt = pick(candidates);
+        const weeks = pick([1, 1, 2]);
+        newSquad = g.squad.map(p => p.id === hurt.id ? { ...p, injuryWeeks: weeks } : p);
+        injuredName = `${hurt.name} (${weeks} omg)`;
+      }
+    }
+    setG(prev => ({ ...prev, squad: newSquad, budget: prev.budget - offer.cost + income, reputation: clamp(prev.reputation + offer.repBonus, 0, 100), tourOffers: null, tourCompletedThisOffseason: true, tourPrepBonus: offer.prepBonus || 0, lastTourResult: { name: offer.name, matches, income, cost: offer.cost, injuredName } }));
+    pushNews(`${offer.name} avslutad: ${wins}/4 vinster på turnén, nettoresultat ${formatMoney(income - offer.cost)}.${injuredName ? ` ${injuredName.split(" (")[0]} ådrog sig en skada under resan.` : ""}`, "Klubben");
   }
   function openTourOffers() {
+    if (g.tourCompletedThisOffseason) { showToast("Ni har redan åkt på en försäsongsturné denna försäsong."); return; }
     setG(prev => ({ ...prev, tourOffers: generateTourOffers(prev.reputation) }));
   }
   function upgradeDev(key) {
@@ -3609,7 +3641,7 @@ function setupCup(type, base) {
     setG(prev => {
       let newSquad = prev.squad;
       const friendlyXI = new Set(prev.startingXI.filter(id => newSquad.some(p => p.id === id)));
-      const tourBoost = prev.tourCompletedThisOffseason ? 1.3 : 1;
+      const tourBoost = prev.tourCompletedThisOffseason ? 1 + (prev.tourPrepBonus || 3) / 10 : 1;
       const developedNames = [];
       if (friendlyXI.size >= 7) {
         newSquad = newSquad.map(p => {
@@ -3621,9 +3653,9 @@ function setupCup(type, base) {
           return { ...p, attack: clamp(p.attack + boost, 15, 99), defense: clamp(p.defense + boost * 0.7, 15, 99) };
         });
       }
-      const preSeasonFamiliarity = clamp((prev.formationFamiliarity || 0) + 4 * (9 + (prev.tourCompletedThisOffseason ? 3 : 0)), 0, 100);
+      const preSeasonFamiliarity = clamp((prev.formationFamiliarity || 0) + 4 * (9 + (prev.tourCompletedThisOffseason ? (prev.tourPrepBonus || 3) : 0)), 0, 100);
       const preSeasonMsg = friendlyXI.size >= 7 ? `Försäsongen (4 träningsmatcher) är avklarad — laget går in i säsongen med ${Math.round(preSeasonFamiliarity)}% taktisk vana${developedNames.length ? `, och ${developedNames.slice(0, 3).join(", ")}${developedNames.length > 3 ? " m.fl." : ""} utvecklades av speltiden ihop` : ""}.` : null;
-      return { ...prev, squad: newSquad, formationFamiliarity: preSeasonFamiliarity, sillySeasonWeeksLeft: 0, tourCompletedThisOffseason: false, _toast: preSeasonMsg };
+      return { ...prev, squad: newSquad, formationFamiliarity: preSeasonFamiliarity, sillySeasonWeeksLeft: 0, tourCompletedThisOffseason: false, tourPrepBonus: 0, _toast: preSeasonMsg };
     });
   }
 
@@ -3807,11 +3839,11 @@ function setupCup(type, base) {
                   onSetTeamTalk={setTeamTalk} onRestStars={restStars} onGotoPrep={() => setG(prev => ({ ...prev, view: "matchprep" }))}
                   onAdvanceSillySeason={advanceSillySeasonWeek} onFinishSillySeason={finishSillySeason} />
               ) : g.activeTab === "table" ? (
-                <TableTab standings={standings} clubs={g.clubs} userClubId={g.userClubId} division={userClub.division} cup={g.activeCupType ? g.cups[g.activeCupType] : null} nextFixture={nextFixture} allSchedules={g.allSchedules} leagueId={g.leagueId} season={g.season} currentRound={g.round} />
+                <TableTab standings={standings} clubs={g.clubs} userClubId={g.userClubId} division={userClub.division} cup={g.activeCupType ? g.cups[g.activeCupType] : null} nextFixture={nextFixture} allSchedules={g.allSchedules} leagueId={g.leagueId} season={g.season} currentRound={g.round} onSubViewChange={setSubViewOpen} />
               ) : g.activeTab === "fixtures" ? (
                 <FixturesTab schedule={g.schedule} clubs={g.clubs} currentRound={g.round} userClubId={g.userClubId} cup={g.activeCupType ? g.cups[g.activeCupType] : null} season={g.season}
-                  budget={g.budget} tourOffers={g.tourOffers} lastTourResult={g.lastTourResult} onOpenTours={openTourOffers} onStartTour={startTour}
-                  allSchedules={g.allSchedules} leagueId={g.leagueId} />
+                  budget={g.budget} tourOffers={g.tourOffers} lastTourResult={g.lastTourResult} tourCompletedThisOffseason={g.tourCompletedThisOffseason} onOpenTours={openTourOffers} onStartTour={startTour}
+                  allSchedules={g.allSchedules} leagueId={g.leagueId} onSubViewChange={setSubViewOpen} />
               ) : g.activeTab === "squad" ? (
                 <SquadTab squad={g.squad} startingXI={g.startingXI} onToggleStarter={toggleStarter} confirmSell={confirmSell} setConfirmSell={setConfirmSell} onSell={sellPlayer} onToggleListed={toggleTransferListed} onRenew={renewContract}
                   formationCode={g.formationCode} lineupCells={g.lineupCells} onSaveFormation={saveFormation} onChat={chatWithPlayer}
@@ -3819,24 +3851,24 @@ function setupCup(type, base) {
                   setPieceTakers={g.setPieceTakers} onSetSetPieceTakers={setSetPieceTakers} chemistryPairs={g.chemistryPairs} onAssessPlayer={assessPlayer}
                   tactic={g.tactic} onTactic={t => setG(prev => ({ ...prev, tactic: t }))} tacticalSettings={g.tacticalSettings} onSetTactical={setTacticalOption}
                   spelide={g.spelide} onSetSpelide={setSpelide} captainId={g.captainId} onSetCaptain={setCaptain}
-                  dev={g.dev} budget={g.budget} akademiParts={g.akademiParts} youthSquad={g.youthSquad} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSellYouth={sellYouth} onPromoteYouth={promoteYouth} />
+                  dev={g.dev} budget={g.budget} akademiParts={g.akademiParts} youthSquad={g.youthSquad} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSellYouth={sellYouth} onPromoteYouth={promoteYouth} onSubViewChange={setSubViewOpen} />
               ) : g.activeTab === "club" ? (
                 <ClubTab club={userClub} dev={g.dev} budget={g.budget} history={g.history} reputation={g.reputation} fanbase={g.fanbase}
                   sponsors={g.sponsors} staff={g.staff} boardConfidence={g.boardConfidence} boardTarget={boardTargetLabel(userClub.archetype, userClub.division).label}
                   squad={g.squad} owner={g.owner} takeoverBid={g.takeoverBid} tourOffers={g.tourOffers} shopLevel={g.arenaFacilities.shop} division={userClub.division}
                   onRespondTakeover={respondTakeoverBid} onOpenTours={openTourOffers} onStartTour={startTour} onRequestOwner={requestFromOwner}
                   merchandisePricing={g.merchandisePricing} onSetMerchandisePricing={setMerchandisePricing}
-                  repHistory={g.repHistory} fanHistory={g.fanHistory} />
+                  repHistory={g.repHistory} fanHistory={g.fanHistory} onSubViewChange={setSubViewOpen} />
               ) : g.activeTab === "ekonomi" ? (
                 <EconomyTab budget={g.budget} reputation={g.reputation} division={userClub.division} sponsringLevel={g.dev.sponsring} squad={g.squad} history={g.history}
                   season={g.season} round={g.round} totalRounds={g.schedule.length} seasonIncomeTotal={g.seasonIncomeTotal || 0} seasonWageTotal={g.seasonWageTotal || 0}
                   ticketPrice={g.ticketPrice} onSetTicketPrice={setTicketPrice}
                   loans={g.loans} onTakeLoan={takeLoan} sponsors={g.sponsors} dev={g.dev} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSignSponsor={signSponsor}
-                  club={userClub} arenaStands={g.arenaStands} arenaFacilities={g.arenaFacilities} arenaConstruction={g.arenaConstruction} onStartConstruction={startArenaConstruction} recentMatchFinances={g.recentMatchFinances} />
+                  club={userClub} arenaStands={g.arenaStands} arenaFacilities={g.arenaFacilities} arenaConstruction={g.arenaConstruction} onStartConstruction={startArenaConstruction} recentMatchFinances={g.recentMatchFinances} onSubViewChange={setSubViewOpen} />
               ) : g.activeTab === "personal" ? (
                 <PersonalTab budget={g.budget} staff={g.staff} reputation={g.reputation} homeCountry={userClub.league} staffCandidates={g.staffCandidates}
                   onOpenStaffCandidates={openStaffCandidates} onHireStaff={hireStaff} onRenegotiateStaff={renegotiateStaffWage}
-                  dev={g.dev} scoutingParts={g.scoutingParts} onUpgrade={upgradeDev} onUpgradePart={upgradePart} seasonStaffImpact={g.seasonStaffImpact} />
+                  dev={g.dev} scoutingParts={g.scoutingParts} onUpgrade={upgradeDev} onUpgradePart={upgradePart} seasonStaffImpact={g.seasonStaffImpact} onSubViewChange={setSubViewOpen} />
               ) : (
                 <TransfersTab market={g.market} budget={g.budget} scoutingLevel={g.dev.scouting} kontakterLevel={g.scoutingParts.kontakter} youthSquad={g.youthSquad} youthMarket={g.youthMarket} round={g.round} season={g.season}
                   clubs={g.clubs} reputation={g.reputation} incomingOffers={g.incomingOffers} clubGoodwill={g.clubGoodwill} blacklistedPlayers={g.blacklistedPlayers} onNegotiationFailed={failNegotiation}
@@ -3845,11 +3877,17 @@ function setupCup(type, base) {
                   onStartScoutMission={startScoutMission} onDismissScoutMission={dismissScoutMission} onCancelScoutMission={cancelScoutMission} onFinalizeScoutSignee={finalizeScoutSignee}
                   loanOffers={g.loanOffers} onAcceptLoan={acceptLoanOffer} onDeclineLoan={declineLoanOffer} difficulty={g.difficulty}
                   squad={g.squad} savedScoutProfiles={g.savedScoutProfiles} onSaveScoutProfile={saveScoutProfile} onDeleteScoutProfile={deleteScoutProfile}
-                  userClubId={g.userClubId} leagueId={g.leagueId} onFinalizeClubBrowseTransfer={finalizeClubBrowseTransfer} />
+                  userClubId={g.userClubId} leagueId={g.leagueId} onFinalizeClubBrowseTransfer={finalizeClubBrowseTransfer} onSubViewChange={setSubViewOpen} />
               )}
             </div>
           </div>
         </div>
+        {(g.view === "tab" && g.activeTab !== "home" && !subViewOpen) && (
+          <button onClick={() => setG(prev => ({ ...prev, activeTab: "home", view: "home" }))}
+            style={{ position: "fixed", bottom: 14, right: 14, display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.9)", background: "rgba(19,34,29,0.9)", padding: "8px 15px", borderRadius: 999, fontSize: 12, fontWeight: 700, zIndex: 60, backdropFilter: "blur(4px)", boxShadow: "0 2px 12px rgba(0,0,0,0.4)", border: `1px solid ${C.gold}` }}>
+            <Home size={14} color={C.goldSoft} /> Hem
+          </button>
+        )}
       </div>
     </>
   );
@@ -5447,10 +5485,11 @@ function LeagueBrowserView({ allSchedules, clubs, userClubId, homeLeagueId, onBa
     </div>
   );
 }
-function TableTab({ standings, clubs, userClubId, division, cup, nextFixture, allSchedules, leagueId, season, currentRound }) {
+function TableTab({ standings, clubs, userClubId, division, cup, nextFixture, allSchedules, leagueId, season, currentRound, onSubViewChange }) {
   const [subView, setSubView] = useState("league");
   const [showBrowser, setShowBrowser] = useState(false);
   const [showCupBrowser, setShowCupBrowser] = useState(false);
+  useEffect(() => { onSubViewChange?.(showBrowser || showCupBrowser); }, [showBrowser, showCupBrowser]);
   if (showBrowser) return <LeagueBrowserView allSchedules={allSchedules} clubs={clubs} userClubId={userClubId} homeLeagueId={leagueId} onBack={() => setShowBrowser(false)} />;
   if (showCupBrowser) return <CupBrowserView clubs={clubs} homeLeagueId={leagueId} season={season} currentRound={currentRound} onBack={() => setShowCupBrowser(false)} />;
   const n = standings.length;
@@ -5559,10 +5598,11 @@ function ScheduleBrowserView({ allSchedules, clubs, homeLeagueId, season, onBack
     </div>
   );
 }
-function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, tourOffers, lastTourResult, onOpenTours, onStartTour, season, allSchedules, leagueId }) {
+function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, tourOffers, lastTourResult, tourCompletedThisOffseason, onOpenTours, onStartTour, season, allSchedules, leagueId, onSubViewChange }) {
   const [subView, setSubView] = useState("league");
   const [showBrowser, setShowBrowser] = useState(false);
   const [showCupBrowser, setShowCupBrowser] = useState(false);
+  useEffect(() => { onSubViewChange?.(showBrowser || showCupBrowser); }, [showBrowser, showCupBrowser]);
   const rivalId = clubs[userClubId]?.rivalId;
   const showCupTab = cup && !cup.champion && !cup.eliminated;
   if (showBrowser) return <ScheduleBrowserView allSchedules={allSchedules} clubs={clubs} homeLeagueId={leagueId} season={season} onBack={() => setShowBrowser(false)} />;
@@ -5574,9 +5614,9 @@ function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, t
       <PaperCard>
         <div className="text-xs uppercase tracking-wide font-semibold px-1 mb-1" style={{ color: C.inkSoft }}>Försäsongsturné</div>
         <div className="text-11 px-1 mb-2" style={{ color: C.inkSoft }}>En turné innehåller 4 träningsmatcher mot lokala lag och skärper också effekten av försäsongen.</div>
-        {!tourOffers ? (
+        {tourCompletedThisOffseason ? (
           <>
-            <button onClick={onOpenTours} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Planera turné</button>
+            <div className="text-11 px-2.5 py-2 rounded-xl font-semibold text-center" style={{ background: "rgba(0,0,0,0.06)", color: C.inkSoft }}>Ni har redan genomfört en turné denna försäsong — bara en är tillåten.</div>
             {lastTourResult && (
               <div className="mt-2 p-2.5 rounded-xl" style={{ background: C.paperDim }}>
                 <div className="text-11 font-semibold mb-1">Senaste turné: {lastTourResult.name}</div>
@@ -5586,9 +5626,12 @@ function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, t
                   </div>
                 ))}
                 <div className="text-10 mt-1 font-semibold" style={{ color: lastTourResult.income - lastTourResult.cost >= 0 ? C.win : C.loss }}>Nettoresultat: {formatMoney(lastTourResult.income - lastTourResult.cost)}</div>
+                {lastTourResult.injuredName && <div className="text-10 mt-1 font-semibold" style={{ color: C.loss }}>Skada under resan: {lastTourResult.injuredName}</div>}
               </div>
             )}
           </>
+        ) : !tourOffers ? (
+          <button onClick={onOpenTours} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Planera turné</button>
         ) : (
           <div className="space-y-2">
             {tourOffers.map(o => {
@@ -5597,6 +5640,16 @@ function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, t
                 <div key={o.id} className="p-2.5 rounded-xl" style={{ background: C.paperDim }}>
                   <div className="text-sm font-semibold">{o.name}</div>
                   <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Kostnad {formatMoney(o.cost)} · Möjlig intäkt {formatMoney(o.incomeMin)}–{formatMoney(o.incomeMax)} · +{o.repBonus} rykte · 4 matcher</div>
+                  <div className="mt-1.5 grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-9 uppercase tracking-wide font-semibold" style={{ color: C.win }}>Fördelar</div>
+                      <ul className="mt-0.5 space-y-0.5">{(o.pros || []).map((t, i) => <li key={i} className="text-9" style={{ color: C.inkSoft }}>+ {t}</li>)}</ul>
+                    </div>
+                    <div>
+                      <div className="text-9 uppercase tracking-wide font-semibold" style={{ color: C.loss }}>Nackdelar</div>
+                      <ul className="mt-0.5 space-y-0.5">{(o.cons || []).map((t, i) => <li key={i} className="text-9" style={{ color: C.inkSoft }}>− {t}</li>)}</ul>
+                    </div>
+                  </div>
                   <button onClick={() => onStartTour(o)} disabled={!affordable} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={affordable ? { background: C.gold, color: C.turfDeep } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>{affordable ? "Genomför turné" : "Otillräcklig budget"}</button>
                 </div>
               );
@@ -6495,13 +6548,14 @@ function TacticsPanel({ squad, startingXI, tactic, onTactic, tacticalSettings, o
     </div>
   );
 }
-function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmSell, onSell, onToggleListed, onRenew, formationCode, lineupCells, onSaveFormation, onChat, clubs, round, onSendLoan, outgoingLoans, setPieceTakers, onSetSetPieceTakers, chemistryPairs, onAssessPlayer, tactic, onTactic, tacticalSettings, onSetTactical, spelide, onSetSpelide, captainId, onSetCaptain, dev, budget, akademiParts, youthSquad, onUpgrade, onUpgradePart, onSellYouth, onPromoteYouth }) {
+function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmSell, onSell, onToggleListed, onRenew, formationCode, lineupCells, onSaveFormation, onChat, clubs, round, onSendLoan, outgoingLoans, setPieceTakers, onSetSetPieceTakers, chemistryPairs, onAssessPlayer, tactic, onTactic, tacticalSettings, onSetTactical, spelide, onSetSpelide, captainId, onSetCaptain, dev, budget, akademiParts, youthSquad, onUpgrade, onUpgradePart, onSellYouth, onPromoteYouth, onSubViewChange }) {
   const [selectedId, setSelectedId] = useState(null);
   const [showContracts, setShowContracts] = useState(false);
   const [showSetPieces, setShowSetPieces] = useState(false);
   const [showTactics, setShowTactics] = useState(false);
   const [showAkademi, setShowAkademi] = useState(false);
   const [viewMode, setViewMode] = useState("tabell");
+  useEffect(() => { onSubViewChange?.(!!selectedId || showContracts || showSetPieces || showTactics || showAkademi); }, [selectedId, showContracts, showSetPieces, showTactics, showAkademi]);
 
   if (showTactics) {
     return <TacticsPanel squad={squad} startingXI={startingXI} tactic={tactic} onTactic={onTactic} tacticalSettings={tacticalSettings} onSetTactical={onSetTactical}
@@ -7381,12 +7435,13 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
 }
 
 
-function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSquad, youthMarket, round, season, clubs, reputation, incomingOffers, clubGoodwill, blacklistedPlayers, onNegotiationFailed, onFinalizeTransfer, onBuyYouth, onRespondOffer, scoutMission, scoutLevel, onStartScoutMission, onDismissScoutMission, onCancelScoutMission, onFinalizeScoutSignee, loanOffers, onAcceptLoan, onDeclineLoan, difficulty, squad, savedScoutProfiles, onSaveScoutProfile, onDeleteScoutProfile, userClubId, leagueId, onFinalizeClubBrowseTransfer }) {
+function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSquad, youthMarket, round, season, clubs, reputation, incomingOffers, clubGoodwill, blacklistedPlayers, onNegotiationFailed, onFinalizeTransfer, onBuyYouth, onRespondOffer, scoutMission, scoutLevel, onStartScoutMission, onDismissScoutMission, onCancelScoutMission, onFinalizeScoutSignee, loanOffers, onAcceptLoan, onDeclineLoan, difficulty, squad, savedScoutProfiles, onSaveScoutProfile, onDeleteScoutProfile, userClubId, leagueId, onFinalizeClubBrowseTransfer, onSubViewChange }) {
   const [showClubBrowser, setShowClubBrowser] = useState(false);
   const [subView, setSubView] = useState("spelare");
   const [region, setRegion] = useState("europa");
   const [negotiatingId, setNegotiatingId] = useState(null);
   const [negotiatingScout, setNegotiatingScout] = useState(false);
+  useEffect(() => { onSubViewChange?.(showClubBrowser || !!negotiatingId || negotiatingScout); }, [showClubBrowser, negotiatingId, negotiatingScout]);
   const currentTurn = season * 38 + round;
   const list = market[region].filter(p => !blacklistedPlayers?.[p.id] || blacklistedPlayers[p.id] <= currentTurn);
   const locked = scoutingLevel < REGION_UNLOCK[region];
@@ -8149,8 +8204,9 @@ function OwnerDetail({ owner, takeoverBid, budget, reputation, fanbase, shopLeve
 }
 
 function EconomyTab({ budget, reputation, division, sponsringLevel, squad, history, season, round, totalRounds, seasonIncomeTotal, seasonWageTotal, ticketPrice, onSetTicketPrice,
-  loans, onTakeLoan, sponsors, dev, onUpgrade, onUpgradePart, onSignSponsor, club, arenaStands, arenaFacilities, arenaConstruction, onStartConstruction, recentMatchFinances }) {
+  loans, onTakeLoan, sponsors, dev, onUpgrade, onUpgradePart, onSignSponsor, club, arenaStands, arenaFacilities, arenaConstruction, onStartConstruction, recentMatchFinances, onSubViewChange }) {
   const [selectedCategory, setSelectedCategory] = useState(null);
+  useEffect(() => { onSubViewChange?.(!!selectedCategory); }, [selectedCategory]);
   if (selectedCategory === "loner") return <WagesDetail squad={squad} reputation={reputation} division={division} sponsringLevel={sponsringLevel} onBack={() => setSelectedCategory(null)} />;
   if (selectedCategory === "lan") return <LoanDetail budget={budget} loans={loans} reputation={reputation} onTakeLoan={onTakeLoan} onBack={() => setSelectedCategory(null)} />;
   if (selectedCategory === "sponsring") return <SponsorDetail dev={dev} budget={budget} reputation={reputation} sponsors={sponsors} onUpgrade={onUpgrade} onSignSponsor={onSignSponsor} onBack={() => setSelectedCategory(null)} />;
@@ -8221,9 +8277,10 @@ function EconomyTab({ budget, reputation, division, sponsringLevel, squad, histo
     </div>
   );
 }
-function PersonalTab({ budget, staff, reputation, homeCountry, staffCandidates, onOpenStaffCandidates, onHireStaff, onRenegotiateStaff, dev, scoutingParts, onUpgrade, onUpgradePart, seasonStaffImpact }) {
+function PersonalTab({ budget, staff, reputation, homeCountry, staffCandidates, onOpenStaffCandidates, onHireStaff, onRenegotiateStaff, dev, scoutingParts, onUpgrade, onUpgradePart, seasonStaffImpact, onSubViewChange }) {
   const [showDetail, setShowDetail] = useState(false);
   const [showScouting, setShowScouting] = useState(false);
+  useEffect(() => { onSubViewChange?.(showDetail || showScouting); }, [showDetail, showScouting]);
   if (showDetail) return <StaffDetail budget={budget} staff={staff} reputation={reputation} homeCountry={homeCountry} staffCandidates={staffCandidates} onOpenCandidates={onOpenStaffCandidates} onHire={onHireStaff} onRenegotiate={onRenegotiateStaff} onBack={() => setShowDetail(false)} />;
   if (showScouting) return <ScoutingDetail dev={dev} budget={budget} scoutingParts={scoutingParts} onUpgrade={onUpgrade} onUpgradePart={onUpgradePart} onBack={() => setShowScouting(false)} />;
 
@@ -8281,8 +8338,9 @@ function PersonalTab({ budget, staff, reputation, homeCountry, staffCandidates, 
 }
 function ClubTab({ club, dev, budget, history, reputation, fanbase,
   sponsors, staff, boardConfidence, boardTarget,
-  squad, owner, takeoverBid, tourOffers, onRespondTakeover, onOpenTours, onStartTour, onRequestOwner, repHistory, fanHistory, shopLevel, division, merchandisePricing, onSetMerchandisePricing }) {
+  squad, owner, takeoverBid, tourOffers, onRespondTakeover, onOpenTours, onStartTour, onRequestOwner, repHistory, fanHistory, shopLevel, division, merchandisePricing, onSetMerchandisePricing, onSubViewChange }) {
   const [selectedCategory, setSelectedCategory] = useState(null);
+  useEffect(() => { onSubViewChange?.(!!selectedCategory); }, [selectedCategory]);
 
   if (selectedCategory === "agare") return <OwnerDetail owner={owner} takeoverBid={takeoverBid} budget={budget} reputation={reputation} fanbase={fanbase} shopLevel={shopLevel} division={division} tourOffers={tourOffers} onRespondTakeover={onRespondTakeover} onOpenTours={onOpenTours} onStartTour={onStartTour} onRequestOwner={onRequestOwner} onBack={() => setSelectedCategory(null)} merchandisePricing={merchandisePricing} onSetMerchandisePricing={onSetMerchandisePricing} />;
 
