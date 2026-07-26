@@ -88,8 +88,12 @@ if (typeof window !== "undefined" && !window.storage) {
       } catch (e) { return null; }
     },
     async set(key, value) {
-      try { await migrateFromLocalStorage(); await idbSet(key, value); return { key, value }; }
-      catch (e) { return null; }
+      // Deliberately does NOT swallow errors here (unlike get/delete/list) — a failed save is
+      // serious enough that the caller needs to know about it and can warn the person, rather
+      // than silently losing progress.
+      await migrateFromLocalStorage();
+      await idbSet(key, value);
+      return { key, value };
     },
     async delete(key) {
       try { await migrateFromLocalStorage(); await idbDelete(key); return { key, deleted: true }; }
@@ -2823,7 +2827,7 @@ function TranarbankenApp() {
     const id = uid();
     const entry = { id, ...saveSummary(initial) };
     setSaveIndex(prev => { const updated = [...prev, entry]; persistIndex(updated); return updated; });
-    (async () => { try { await window.storage?.set(`tranarbanken-save-${id}`, JSON.stringify(initial)); } catch (e) {} })();
+    (async () => { try { await window.storage?.set(`tranarbanken-save-${id}`, JSON.stringify(initial)); } catch (e) { console.error("Kunde inte spara ny karriär:", e); showToast("⚠️ Kunde inte spara — lagringsutrymmet kan vara fullt."); } })();
     setActiveSaveId(id);
     setG(initial);
     setNameDraft(club.name);
