@@ -61,6 +61,14 @@ if (typeof window !== "undefined" && !window.storage) {
       req.onerror = () => reject(req.error);
     });
   }
+  // Plain localStorage fallback — used whenever IndexedDB itself fails for any reason.
+  // Some iOS Safari configurations have flaky/unreliable IndexedDB support even outside
+  // Private Browsing, so rather than failing outright, every operation below quietly
+  // retries against localStorage before giving up.
+  function lsGet(key) { const v = localStorage.getItem(key); return v === null ? null : v; }
+  function lsSet(key, value) { localStorage.setItem(key, value); }
+  function lsDelete(key) { localStorage.removeItem(key); }
+  function lsKeys(prefix) { return Object.keys(localStorage).filter(k => !prefix || k.startsWith(prefix)); }
   let migratePromise = null;
   function migrateFromLocalStorage() {
     if (migratePromise) return migratePromise;
@@ -85,26 +93,41 @@ if (typeof window !== "undefined" && !window.storage) {
         await migrateFromLocalStorage();
         const v = await idbGet(key);
         return v === null || v === undefined ? null : { key, value: v };
-      } catch (e) { return null; }
+      } catch (e) {
+        try { const v = lsGet(key); return v === null ? null : { key, value: v }; }
+        catch (e2) { return null; }
+      }
     },
     async set(key, value) {
-      // Deliberately does NOT swallow errors here (unlike get/delete/list) — a failed save is
-      // serious enough that the caller needs to know about it and can warn the person, rather
-      // than silently losing progress.
-      await migrateFromLocalStorage();
-      await idbSet(key, value);
-      return { key, value };
+      // Deliberately does NOT swallow the final error here (unlike get/delete/list) — a failed
+      // save is serious enough that the caller needs to know about it and can warn the person,
+      // rather than silently losing progress. IndexedDB failures fall back to localStorage first
+      // though, so most real-world hiccups (e.g. flaky iOS Safari IndexedDB) never reach that point.
+      try {
+        await migrateFromLocalStorage();
+        await idbSet(key, value);
+        return { key, value };
+      } catch (e) {
+        lsSet(key, value);
+        return { key, value };
+      }
     },
     async delete(key) {
       try { await migrateFromLocalStorage(); await idbDelete(key); return { key, deleted: true }; }
-      catch (e) { return null; }
+      catch (e) {
+        try { lsDelete(key); return { key, deleted: true }; }
+        catch (e2) { return null; }
+      }
     },
     async list(prefix) {
       try {
         await migrateFromLocalStorage();
         const keys = (await idbKeys()).filter(k => !prefix || k.startsWith(prefix));
         return { keys, prefix };
-      } catch (e) { return null; }
+      } catch (e) {
+        try { const keys = lsKeys(prefix); return { keys, prefix }; }
+        catch (e2) { return null; }
+      }
     },
   };
 }
@@ -765,7 +788,7 @@ function makePlayer(pos, homeCountry, forcedSpecificPosition, archetype, divisio
   attack = clamp(attack + shift, 15, 96);
   defense = clamp(defense + shift, 15, 96);
   if (youthSlot) { attack = clamp(Math.round(attack * 0.82), 15, 90); defense = clamp(Math.round(defense * 0.82), 15, 90); }
-  const value = Math.round(((attack + defense) / 2) * 8 + rndInt(-25, 35));
+  const value = Math.round((((attack + defense) / 2) * 8 + rndInt(-25, 35)) * 1.1);
   const nationality = homeCountry ? randomDomesticNationality(homeCountry) : pick(NATIONALITY_KEYS);
   const age = youthSlot ? rndInt(18, 21) : rndInt(18, 33);
   const finalValue = Math.max(40, value);
@@ -842,7 +865,7 @@ function makeScoutPlayer(pos, region, rating, clubs) {
   else { attack = rndInt(60, 84); defense = rndInt(22, 45); }
   attack = clamp(Math.round((attack + bias.attack) * scale), 20, 97);
   defense = clamp(Math.round((defense + bias.defense) * scale), 20, 97);
-  const value = Math.max(60, Math.round(((attack + defense) / 2) * 8 * bias.priceMult + rndInt(-25, 35)));
+  const value = Math.max(60, Math.round((((attack + defense) / 2) * 8 * bias.priceMult + rndInt(-25, 35)) * 1.1));
   const nationality = bias.nationality || pick(EUROPEAN_NATIONALITIES);
   const age = rndInt(19, 31);
   const clubId = clubs ? pickOwningClub(clubs, (attack + defense) / 2) : null;
@@ -903,7 +926,7 @@ function generateScoutCandidate(mission, scoutLevel, clubs, division, userClubId
     else { attack = overallTarget + rnd(-3, 3); defense = overallTarget * 0.45 + rnd(-5, 5); }
     attack = clamp(Math.round(attack), 15, 96);
     defense = clamp(Math.round(defense), 15, 96);
-    let value = Math.max(60, Math.round(((attack + defense) / 2) * 8 + rndInt(-20, 30)));
+    let value = Math.max(60, Math.round((((attack + defense) / 2) * 8 + rndInt(-20, 30)) * 1.1));
     if (mission.maxValue && value > mission.maxValue) { if (tries < maxTries - 1) continue; value = mission.maxValue; }
     const wage = computeWage(value, attack, defense);
     if (mission.maxWage && wage > mission.maxWage) { if (tries < maxTries - 1) continue; }
@@ -1865,7 +1888,7 @@ function generateYouthProspect(akademiLevel, intakeBonus = 0, homeCountry) {
   const startFactor = 0.35 + Math.random() * 0.15;
   const attack = clamp(Math.round(potential * startFactor * (pos === "AN" ? 1.15 : pos === "MF" ? 1.0 : pos === "FÖ" ? 0.7 : 0.4)), 15, 60);
   const defense = clamp(Math.round(potential * startFactor * (pos === "FÖ" || pos === "MV" ? 1.15 : pos === "MF" ? 0.9 : 0.5)), 15, 60);
-  const value = Math.max(40, Math.round(potential * 4 + rndInt(-20, 20)));
+  const value = Math.max(40, Math.round((potential * 4 + rndInt(-20, 20)) * 1.1));
   const foreignChance = clamp(0.05 + intakeBonus * 0.08, 0.05, 0.3);
   const nationality = homeCountry ? (Math.random() < foreignChance ? pick(NATIONALITY_KEYS.filter(n => n !== homeCountry)) : homeCountry) : pick(NATIONALITY_KEYS);
   const age = rndInt(15, 17);
@@ -1892,7 +1915,7 @@ function growYouth(y, akademiLevel, spelide, coachBonus = 0) {
   const attackShare = y.pos === "AN" ? 0.6 : y.pos === "MF" ? 0.5 : y.pos === "FÖ" ? 0.35 : 0.25;
   const attack = clamp(y.attack + growth * attackShare * 2, 15, 99);
   const defense = clamp(y.defense + growth * (1 - attackShare) * 2, 15, 99);
-  return { ...y, attack, defense, yearsInAcademy: y.yearsInAcademy + 1, value: Math.max(40, Math.round(((attack + defense) / 2) * 4 + y.potential * 3)) };
+  return { ...y, attack, defense, yearsInAcademy: y.yearsInAcademy + 1, value: Math.max(40, Math.round((((attack + defense) / 2) * 4 + y.potential * 3) * 1.1)) };
 }
 function potentialStars(potential) { return clamp(Math.round(potential / 20), 1, 5); }
 
@@ -3068,7 +3091,7 @@ function setupCup(type, base) {
       const fitnessCoachLevel = staff.fitnessCoach ? staff.fitnessCoach.level : 0;
       const newStamina = clamp(staminaNow - Math.max(1, rndInt(4, 8) - fitnessCoachLevel * 0.4), 0, 100);
       const outOfPos = (pl.personality === "Ambitiös" && (cellFitByPlayer[pl.id] ?? 1) < 0.6) ? 1 : 0;
-      return { ...pl, apps: pl.apps + 1, goals: pl.goals + goals, assists: (pl.assists || 0) + assists, ratingSum: pl.ratingSum + rating, attack: clamp(pl.attack + attackDelta, 15, 99), defense: clamp(pl.defense + defenseDelta, 15, 99), injuryWeeks, yellowCards, suspendedMatches, fatigued: false, stamina: newStamina, outOfPositionApps: (pl.outOfPositionApps || 0) + outOfPos };
+      return { ...pl, apps: pl.apps + 1, goals: pl.goals + goals, assists: (pl.assists || 0) + assists, ratingSum: pl.ratingSum + rating, recentRatings: [...(pl.recentRatings || []), rating].slice(-5), attack: clamp(pl.attack + attackDelta, 15, 99), defense: clamp(pl.defense + defenseDelta, 15, 99), injuryWeeks, yellowCards, suspendedMatches, fatigued: false, stamina: newStamina, outOfPositionApps: (pl.outOfPositionApps || 0) + outOfPos };
     });
     matchReport.ratings.sort((a, b) => b.rating - a.rating);
     matchReport.motm = matchReport.ratings[0] || null;
@@ -5803,6 +5826,43 @@ function JobMarketView({ g, onTakeJob, onBack }) {
 }
 
 const MATCH_SEGMENTS = [[0, 15], [15, 30], [30, 45], [45, 60], [60, 75], [75, 90]];
+function PlayerQuickInfoCard({ player, ratings }) {
+  const overall = overallOf(player);
+  const recent = player.recentRatings || [];
+  const recentAvg = recent.length ? recent.reduce((s, r) => s + r, 0) / recent.length : null;
+  const seasonAvg = player.apps ? player.ratingSum / player.apps : null;
+  const liveRating = ratings ? ratings[player.id] : null;
+  return (
+    <div className="px-3 pb-2.5 pt-1" style={{ background: C.paper, borderTop: `1px dashed ${C.paperDim}` }}>
+      <div className="flex items-center gap-2 mb-1.5">
+        <PlayerAvatar player={player} size={30} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono text-sm font-bold" style={{ color: C.ink }}>{overall}</span>
+            <StarRating rating={overallToStars(overall)} size={8} />
+          </div>
+          <div className="text-9" style={{ color: C.inkSoft }}>{player.age} år · {nationalityLabel(player.nationality)}</div>
+        </div>
+        {liveRating !== null && liveRating !== undefined && (
+          <div className="text-right shrink-0">
+            <div className="font-mono text-sm font-bold" style={{ color: liveRating >= 7 ? C.win : liveRating < 5.5 ? C.loss : C.ink }}>{liveRating.toFixed(1)}</div>
+            <div className="text-9" style={{ color: C.inkSoft }}>Nu i match</div>
+          </div>
+        )}
+      </div>
+      <div className="grid grid-cols-4 gap-1.5 text-center">
+        <div className="rounded-lg py-1" style={{ background: C.paperDim }}><div className="font-mono text-11 font-bold">{Math.round(player.attack)}</div><div className="text-9" style={{ color: C.inkSoft }}>Anfall</div></div>
+        <div className="rounded-lg py-1" style={{ background: C.paperDim }}><div className="font-mono text-11 font-bold">{Math.round(player.defense)}</div><div className="text-9" style={{ color: C.inkSoft }}>Försvar</div></div>
+        <div className="rounded-lg py-1" style={{ background: C.paperDim }}><div className="font-mono text-11 font-bold" style={{ color: (player.stamina ?? 100) >= 60 ? C.win : (player.stamina ?? 100) >= 35 ? C.gold : C.loss }}>{Math.round(player.stamina ?? 100)}%</div><div className="text-9" style={{ color: C.inkSoft }}>Ork</div></div>
+        <div className="rounded-lg py-1" style={{ background: C.paperDim }}><div className="font-mono text-11 font-bold" style={{ color: (player.morale ?? 70) >= 60 ? C.win : (player.morale ?? 70) >= 35 ? C.gold : C.loss }}>{Math.round(player.morale ?? 70)}%</div><div className="text-9" style={{ color: C.inkSoft }}>Trivsel</div></div>
+      </div>
+      <div className="flex items-center justify-center gap-3 mt-1.5 text-9" style={{ color: C.inkSoft }}>
+        <span>Snitt 5 match: <b style={{ color: C.ink }}>{recentAvg !== null ? recentAvg.toFixed(1) : "–"}</b></span>
+        <span>Snitt säsong: <b style={{ color: C.ink }}>{seasonAvg !== null ? seasonAvg.toFixed(1) : "–"}</b></span>
+      </div>
+    </div>
+  );
+}
 function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tacticalSettings, lineupCells, staff, formationFamiliarity, teamTalk, onFinalize }) {
   const [segmentIdx, setSegmentIdx] = useState(0);
   const [log, setLog] = useState([]);
@@ -5813,6 +5873,7 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
   const [subLog, setSubLog] = useState([]);
   const [panelMode, setPanelMode] = useState(null); // null | "tactics" | "subs" | "ratings"
   const [subOutId, setSubOutId] = useState(null);
+  const [infoPlayerId, setInfoPlayerId] = useState(null);
   const [stats, setStats] = useState({ shotsUser: 0, shotsOpp: 0, possessionSum: 0, segmentsPlayed: 0 });
   const [ratings, setRatings] = useState(() => Object.fromEntries(pending.xiIds.map(id => [id, 6.0])));
 
@@ -5937,7 +5998,13 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
           {!subOutId ? (
             <div className="space-y-1">
               {xiPlayers.map(p => (
-                <button key={p.id} onClick={() => setSubOutId(p.id)} className="w-full text-left px-3 py-2 rounded-xl text-sm" style={{ background: C.paperDim, color: C.ink }}>{p.name} · {p.specificPosition}</button>
+                <div key={p.id} className="rounded-xl overflow-hidden" style={{ background: C.paperDim }}>
+                  <div className="flex items-center">
+                    <button onClick={() => setSubOutId(p.id)} className="flex-1 text-left px-3 py-2 text-sm" style={{ color: C.ink }}>{p.name} · {p.specificPosition}</button>
+                    <button onClick={() => setInfoPlayerId(infoPlayerId === p.id ? null : p.id)} className="px-3 py-2 text-sm font-bold" style={{ color: C.inkSoft }}>{infoPlayerId === p.id ? "▲" : "ⓘ"}</button>
+                  </div>
+                  {infoPlayerId === p.id && <PlayerQuickInfoCard player={p} ratings={ratings} />}
+                </div>
               ))}
               <button onClick={() => setPanelMode(null)} className="w-full py-2 mt-1 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.inkSoft }}>Stäng</button>
             </div>
@@ -5945,7 +6012,13 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
             <div className="space-y-1">
               {benchPlayers.length === 0 && <div className="text-sm" style={{ color: C.inkSoft }}>Ingen tillgänglig på bänken.</div>}
               {benchPlayers.map(p => (
-                <button key={p.id} onClick={() => makeSub(subOutId, p.id)} className="w-full text-left px-3 py-2 rounded-xl text-sm" style={{ background: C.paperDim, color: C.ink }}>{p.name} · {p.specificPosition}</button>
+                <div key={p.id} className="rounded-xl overflow-hidden" style={{ background: C.paperDim }}>
+                  <div className="flex items-center">
+                    <button onClick={() => makeSub(subOutId, p.id)} className="flex-1 text-left px-3 py-2 text-sm" style={{ color: C.ink }}>{p.name} · {p.specificPosition}</button>
+                    <button onClick={() => setInfoPlayerId(infoPlayerId === p.id ? null : p.id)} className="px-3 py-2 text-sm font-bold" style={{ color: C.inkSoft }}>{infoPlayerId === p.id ? "▲" : "ⓘ"}</button>
+                  </div>
+                  {infoPlayerId === p.id && <PlayerQuickInfoCard player={p} ratings={null} />}
+                </div>
               ))}
               <button onClick={() => setSubOutId(null)} className="w-full py-2 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.inkSoft }}>Avbryt</button>
             </div>
@@ -7253,6 +7326,21 @@ function LineupTablePlayerRow({ player, posCode, cellCol, cellRow, dragId, dragO
         <div style={{ width: 62, flexShrink: 0, textAlign: "center" }}>
           <span className="text-9 font-semibold" style={{ color: (player.stamina ?? 100) >= 60 ? C.win : (player.stamina ?? 100) >= 35 ? C.gold : C.loss }}>Ork {Math.round(player.stamina ?? 100)}%</span>
         </div>
+        {(() => {
+          const recent = player.recentRatings || [];
+          const recentAvg = recent.length ? recent.reduce((s, r) => s + r, 0) / recent.length : null;
+          const seasonAvg = player.apps ? player.ratingSum / player.apps : null;
+          if (recentAvg === null && seasonAvg === null) return null;
+          return (
+            <div style={{ width: 108, flexShrink: 0, textAlign: "center" }}>
+              <span className="text-9 font-semibold" style={{ color: C.inkSoft }}>
+                {recentAvg !== null && <>5m: <span style={{ color: recentAvg >= 7 ? C.win : recentAvg < 5.5 ? C.loss : C.ink, fontWeight: 700 }}>{recentAvg.toFixed(1)}</span></>}
+                {recentAvg !== null && seasonAvg !== null && " · "}
+                {seasonAvg !== null && <>Säs: <span style={{ color: seasonAvg >= 7 ? C.win : seasonAvg < 5.5 ? C.loss : C.ink, fontWeight: 700 }}>{seasonAvg.toFixed(1)}</span></>}
+              </span>
+            </div>
+          );
+        })()}
         {(otherGood.length > 0 || otherLesser.length > 0) && (
           <span className="text-9 truncate" style={{ color: C.inkSoft, flex: 1, minWidth: 0, textAlign: "center" }}>Även: {otherGood.join(", ")}{otherGood.length && otherLesser.length ? ", " : ""}{otherLesser.map(c => `(${c})`).join(", ")}</span>
         )}
@@ -7689,6 +7777,8 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
   const overall = overallOf(player);
   const tier = overallTier(overall);
   const avgRating = player.apps ? (player.ratingSum / player.apps).toFixed(1) : "–";
+  const recentRatingsList = player.recentRatings || [];
+  const recentAvgRating = recentRatingsList.length ? (recentRatingsList.reduce((s, r) => s + r, 0) / recentRatingsList.length).toFixed(1) : "–";
   const seasonLog = player.seasonLog || [];
   const careerApps = seasonLog.reduce((s, r) => s + r.apps, 0) + player.apps;
   const careerGoals = seasonLog.reduce((s, r) => s + r.goals, 0) + player.goals;
@@ -7768,11 +7858,12 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
         {injured && <div className="mt-2 text-11 font-semibold px-2.5 py-1.5 rounded-lg text-center" style={{ background: "rgba(180,68,59,0.15)", color: C.loss }}>Skadad — {player.injuryWeeks} omgångar kvar</div>}
         {suspended && <div className="mt-2 text-11 font-semibold px-2.5 py-1.5 rounded-lg text-center" style={{ background: "rgba(180,68,59,0.15)", color: C.loss }}>Avstängd — {player.suspendedMatches} omgångar kvar</div>}
         {player.internationalDuty && <div className="mt-2 text-11 font-semibold px-2.5 py-1.5 rounded-lg text-center" style={{ background: "rgba(180,68,59,0.15)", color: C.loss }}>Landslagsuppdrag — missar nästa match</div>}
-        <div className="grid grid-cols-4 gap-2 mt-3 text-center">
+        <div className="grid grid-cols-5 gap-1.5 mt-3 text-center">
           <div><div className="font-display text-lg">{careerApps}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Matcher</div></div>
           <div><div className="font-display text-lg">{careerGoals}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Mål</div></div>
           <div><div className="font-display text-lg">{careerAssists}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Assist</div></div>
-          <div><div className="font-display text-lg">{avgRating}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Snittbetyg</div></div>
+          <div><div className="font-display text-lg">{recentAvgRating}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Snitt (5)</div></div>
+          <div><div className="font-display text-lg">{avgRating}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Snitt (säsong)</div></div>
         </div>
         <div className="mt-3 flex items-center justify-between text-11" style={{ color: C.inkSoft }}>
           <span>Gula kort denna säsong: {player.yellowCards}/5</span>
