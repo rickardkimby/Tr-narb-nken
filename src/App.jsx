@@ -231,7 +231,14 @@ function specificPositionLabel(code) { return SPECIFIC_POSITION_LOOKUP[code]?.la
 function positionFit(specificPos, col, row) {
   const anchor = SPECIFIC_POSITION_LOOKUP[specificPos];
   if (!anchor) return 0.6;
-  const dist = Math.sqrt((col - anchor.col) ** 2 + (row - anchor.row) ** 2);
+  // Central position types (anchor row 2 — CB/CDM/CM/CAM/ST) are shown with the identical label across
+  // grid rows 1-3 (see nearestPositionForCell), so their fit should treat all three rows as an equally
+  // perfect match, not just the exact middle row — otherwise the same-looking tile shows inconsistent
+  // colors depending on which of the three central rows it happens to sit in.
+  const rowDist = anchor.row === 2
+    ? (row >= 1 && row <= 3 ? 0 : Math.min(Math.abs(row - 1), Math.abs(row - 3)))
+    : Math.abs(row - anchor.row);
+  const dist = Math.sqrt((col - anchor.col) ** 2 + rowDist ** 2);
   return clamp(1 - dist / 4, 0.3, 1);
 }
 function nearestPositionForCell(col, row) {
