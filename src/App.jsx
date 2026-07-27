@@ -7473,12 +7473,12 @@ function SetPieceDropSlot({ label, player, onRemove, isDragOver }) {
     </div>
   );
 }
-function RankedPickerPopup({ title, candidates, statLabel, onPick, onClose }) {
+function RankedPickerPopup({ title, candidates, statLabel, starterIds, onPick, onClose }) {
   const [showAll, setShowAll] = useState(false);
   return (
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 40 }} />
-      <div style={{ position: "fixed", top: 70, left: 110, width: 270, maxHeight: "72vh", overflowY: "auto", background: C.paper, borderRadius: 16, boxShadow: "0 16px 40px rgba(0,0,0,0.5)", border: `2px solid ${C.gold}`, zIndex: 41, padding: 12 }}>
+      <div style={{ position: "fixed", top: 70, left: 110, width: 270, maxHeight: "72vh", overflowY: "auto", background: C.paper, color: C.ink, borderRadius: 16, boxShadow: "0 16px 40px rgba(0,0,0,0.5)", border: `2px solid ${C.gold}`, zIndex: 41, padding: 12 }}>
         <div className="flex items-center justify-between mb-2">
           <div className="text-10 uppercase tracking-wide font-bold" style={{ color: C.ink }}>{title}</div>
           <button onClick={onClose} className="shrink-0 ml-2" style={{ width: 22, height: 22, borderRadius: "50%", background: C.paperDim, color: C.ink, fontWeight: 900, fontSize: 12, lineHeight: "22px", textAlign: "center" }}>✕</button>
@@ -7492,7 +7492,7 @@ function RankedPickerPopup({ title, candidates, statLabel, onPick, onClose }) {
               <button key={player.id} onClick={() => onPick(player.id)} className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left" style={{ background: C.paperDim }}>
                 <PlayerAvatar player={player} size={26} />
                 <div className="flex-1 min-w-0">
-                  <div className="text-11 font-semibold truncate">{player.name}{player.personality === "Ledare" ? " · Ledartyp" : ""}</div>
+                  <div className="text-11 font-semibold truncate">{player.name}{player.personality === "Ledare" ? " · Ledartyp" : ""}{starterIds && starterIds.has(player.id) && <span className="text-9 font-semibold" style={{ color: C.gold }}> · I startelvan</span>}</div>
                   <div className="flex items-center gap-1 mt-0.5">
                     <StarRating rating={overallToStars(overall)} size={7} showLabel={false} />
                     <span className="font-mono text-9 font-bold" style={{ color: C.ink }}>{overall}</span>
@@ -7514,7 +7514,7 @@ function RankedPickerPopup({ title, candidates, statLabel, onPick, onClose }) {
     </>
   );
 }
-function SetPieceSection({ title, desc, outfield, statFn, statLabel, mode, value, onChange, onSelectPlayer }) {
+function SetPieceSection({ title, desc, outfield, startingXI, statFn, statLabel, mode, value, onChange, onSelectPlayer }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const sorted = [...outfield].sort((a, b) => statFn(b) - statFn(a));
   const pickerCandidates = sorted.filter(p => mode === "ranked" ? !value.includes(p.id) : p.id !== value).map(p => ({ player: p, statValue: statFn(p) }));
@@ -7573,6 +7573,7 @@ function SetPieceSection({ title, desc, outfield, statFn, statLabel, mode, value
           title={title}
           candidates={pickerCandidates}
           statLabel={statLabel}
+          starterIds={startingXI ? new Set(startingXI) : null}
           onClose={() => setPickerOpen(false)}
           onPick={id => {
             if (mode === "ranked") onChange(prev => prev.includes(id) ? prev : prev.length < 5 ? [...prev, id] : prev);
@@ -7584,7 +7585,7 @@ function SetPieceSection({ title, desc, outfield, statFn, statLabel, mode, value
     </PaperCard>
   );
 }
-function SetPieceTakersPanel({ squad, setPieceTakers, onSave, onBack, onSelectPlayer }) {
+function SetPieceTakersPanel({ squad, startingXI, setPieceTakers, onSave, onBack, onSelectPlayer }) {
   const [penalties, setPenalties] = useState(setPieceTakers.penalties || []);
   const [freeKick, setFreeKick] = useState(setPieceTakers.freeKick || null);
   const [cornerLeft, setCornerLeft] = useState(setPieceTakers.cornerLeft || null);
@@ -7597,10 +7598,10 @@ function SetPieceTakersPanel({ squad, setPieceTakers, onSave, onBack, onSelectPl
         <div className="font-display text-lg">Standardsituationer</div>
         <div className="text-11 mt-1" style={{ color: C.inkSoft }}>Dra en spelare till en ruta för att utse dem. Tryck på en spelare för att se profilen. Utses ingen tas nästa tillgängliga i prioritetsordning automatiskt över.</div>
       </PaperCard>
-      <SetPieceSection title="Straffskyttar (prioritetsordning, max 5)" desc="Straffsäkerhet byggd på avslut och lugn i pressade lägen." outfield={outfield} statFn={penaltyRating} statLabel="Straff" mode="ranked" value={penalties} onChange={setPenalties} onSelectPlayer={onSelectPlayer} />
-      <SetPieceSection title="Frisparksskytt" desc="Frisparksträffsäkerhet byggd på avslut, dribbling och starkast fot." outfield={outfield} statFn={freekickRating} statLabel="Frispark" mode="single" value={freeKick} onChange={setFreeKick} onSelectPlayer={onSelectPlayer} />
-      <SetPieceSection title="Hörnläggare vänster" desc="Inläggsprecision byggd på passningsförmåga." outfield={outfield} statFn={cornerRating} statLabel="Hörna" mode="single" value={cornerLeft} onChange={setCornerLeft} onSelectPlayer={onSelectPlayer} />
-      <SetPieceSection title="Hörnläggare höger" desc="Inläggsprecision byggd på passningsförmåga." outfield={outfield} statFn={cornerRating} statLabel="Hörna" mode="single" value={cornerRight} onChange={setCornerRight} onSelectPlayer={onSelectPlayer} />
+      <SetPieceSection title="Straffskyttar (prioritetsordning, max 5)" desc="Straffsäkerhet byggd på avslut och lugn i pressade lägen." outfield={outfield} startingXI={startingXI} statFn={penaltyRating} statLabel="Straff" mode="ranked" value={penalties} onChange={setPenalties} onSelectPlayer={onSelectPlayer} />
+      <SetPieceSection title="Frisparksskytt" desc="Frisparksträffsäkerhet byggd på avslut, dribbling och starkast fot." outfield={outfield} startingXI={startingXI} statFn={freekickRating} statLabel="Frispark" mode="single" value={freeKick} onChange={setFreeKick} onSelectPlayer={onSelectPlayer} />
+      <SetPieceSection title="Hörnläggare vänster" desc="Inläggsprecision byggd på passningsförmåga." outfield={outfield} startingXI={startingXI} statFn={cornerRating} statLabel="Hörna" mode="single" value={cornerLeft} onChange={setCornerLeft} onSelectPlayer={onSelectPlayer} />
+      <SetPieceSection title="Hörnläggare höger" desc="Inläggsprecision byggd på passningsförmåga." outfield={outfield} startingXI={startingXI} statFn={cornerRating} statLabel="Hörna" mode="single" value={cornerRight} onChange={setCornerRight} onSelectPlayer={onSelectPlayer} />
       <button onClick={() => onSave({ penalties, freeKick, cornerLeft, cornerRight })} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep }}>SPARA STANDARDSITUATIONER</button>
     </div>
   );
@@ -7885,7 +7886,7 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
       {selectedSlotKey && (
         <>
           <div onClick={() => setSelectedSlotKey(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 40 }} />
-          <div style={{ position: "fixed", top: 70, left: 110, width: 260, maxHeight: "72vh", overflowY: "auto", background: C.paper, borderRadius: 16, boxShadow: "0 16px 40px rgba(0,0,0,0.5)", border: `2px solid ${C.gold}`, zIndex: 41, padding: 12 }}>
+          <div style={{ position: "fixed", top: 70, left: 110, width: 260, maxHeight: "72vh", overflowY: "auto", background: C.paper, color: C.ink, borderRadius: 16, boxShadow: "0 16px 40px rgba(0,0,0,0.5)", border: `2px solid ${C.gold}`, zIndex: 41, padding: 12 }}>
             <div className="flex items-center justify-between mb-2">
               <div className="text-10 uppercase tracking-wide font-bold" style={{ color: C.ink }}>Bäst passande för {nearestPositionForCell(selectedSlot.col, selectedSlot.row)}</div>
               <button onClick={() => setSelectedSlotKey(null)} className="shrink-0 ml-2" style={{ width: 22, height: 22, borderRadius: "50%", background: C.paperDim, color: C.ink, fontWeight: 900, fontSize: 12, lineHeight: "22px", textAlign: "center" }}>✕</button>
@@ -7898,11 +7899,12 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
                 const overall = overallOf(player);
                 const stamina = Math.round(player.stamina ?? 100);
                 const staminaColor = stamina >= 60 ? C.win : stamina >= 35 ? C.gold : C.loss;
+                const alreadyStarter = assignedIds.has(player.id);
                 return (
                   <button key={player.id} onClick={() => pickCandidate(player.id)} className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left" style={{ background: C.paperDim }}>
                     <PlayerAvatar player={player} size={26} />
                     <div className="flex-1 min-w-0">
-                      <div className="text-11 font-semibold truncate">{player.name}</div>
+                      <div className="text-11 font-semibold truncate">{player.name}{alreadyStarter && <span className="text-9 font-semibold" style={{ color: C.gold }}> · I startelvan</span>}</div>
                       <div className="text-9" style={{ color: C.inkSoft }}>{player.specificPosition}{unavailable ? (player.injuryWeeks > 0 ? ` · Skadad ${player.injuryWeeks}omg` : player.suspendedMatches > 0 ? ` · Avstängd ${player.suspendedMatches}omg` : " · Landslag") : ""}</div>
                       <div className="flex items-center gap-1 mt-0.5">
                         <StarRating rating={overallToStars(overall)} size={7} showLabel={false} />
@@ -7927,7 +7929,7 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
       {selectedBenchId && selectedBenchPlayer && (
         <>
           <div onClick={() => setSelectedBenchId(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 40 }} />
-          <div style={{ position: "fixed", top: 70, left: 110, width: 260, maxHeight: "72vh", overflowY: "auto", background: C.paper, borderRadius: 16, boxShadow: "0 16px 40px rgba(0,0,0,0.5)", border: `2px solid ${C.gold}`, zIndex: 41, padding: 12 }}>
+          <div style={{ position: "fixed", top: 70, left: 110, width: 260, maxHeight: "72vh", overflowY: "auto", background: C.paper, color: C.ink, borderRadius: 16, boxShadow: "0 16px 40px rgba(0,0,0,0.5)", border: `2px solid ${C.gold}`, zIndex: 41, padding: 12 }}>
             <div className="flex items-center justify-between mb-2">
               <div className="text-10 uppercase tracking-wide font-bold" style={{ color: C.ink }}>Var passar {selectedBenchPlayer.name} bäst?</div>
               <button onClick={() => setSelectedBenchId(null)} className="shrink-0 ml-2" style={{ width: 22, height: 22, borderRadius: "50%", background: C.paperDim, color: C.ink, fontWeight: 900, fontSize: 12, lineHeight: "22px", textAlign: "center" }}>✕</button>
@@ -8123,7 +8125,7 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
   }
 
   if (showSetPieces) {
-    return <SetPieceTakersPanel squad={squad} setPieceTakers={setPieceTakers} onSave={next => { onSetSetPieceTakers(next); setShowSetPieces(false); }} onBack={() => setShowSetPieces(false)} onSelectPlayer={id => { setShowSetPieces(false); setSelectedId(id); }} />;
+    return <SetPieceTakersPanel squad={squad} startingXI={startingXI} setPieceTakers={setPieceTakers} onSave={next => { onSetSetPieceTakers(next); setShowSetPieces(false); }} onBack={() => setShowSetPieces(false)} onSelectPlayer={id => { setShowSetPieces(false); setSelectedId(id); }} />;
   }
 
   if (selectedId) {
