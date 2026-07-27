@@ -4675,7 +4675,7 @@ function setupCup(type, base) {
             )}
           </div>
 
-          <div style={{ flex: 1, overflowY: "auto", padding: "14px 20px 24px" }}>
+          <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "14px 20px 24px" }}>
             <div style={{ maxWidth: "min(94vw, 1040px)", margin: "0 auto" }}>
               {toast && <div className="rise-in mb-3 text-sm px-3 py-2 rounded-lg" style={{ background: "rgba(201,154,62,0.18)", border: `1px solid ${C.gold}`, color: C.goldSoft }}>{toast}</div>}
 
@@ -5049,8 +5049,8 @@ function Onboarding({ world, onConfirm, onCancel }) {
       </div>
       <div className="max-w-md mx-auto w-full px-5 pb-2">
         <ul className="text-9 leading-snug space-y-0.5" style={{ color: C.paperDim, listStyle: "disc", paddingLeft: 14 }}>
-          <li><span style={{ color: C.paperDim }}>Kimby Mästerskapet</span>: 16 bästa lagen per land, gruppspel + slutspel.</li>
-          <li><span style={{ color: C.paperDim }}>Kimby Cupen</span>: 16 topplag per land, rakt slutspelsträd.</li>
+          <li><span style={{ color: C.paperDim }}>Kimby Mästerskapet</span>: Spelas mellan de bästa lagen från varje land. Cupen innehåller 16 lag och spelas med gruppspel + slutspel.</li>
+          <li><span style={{ color: C.paperDim }}>Kimby Cupen</span>: Spelas mellan topplag från varje land. Cupen innehåller 16 lag och spelas i ett rakt slutspel.</li>
         </ul>
       </div>
       <div className="max-w-md mx-auto w-full px-5 space-y-2.5 pb-28">
@@ -7820,7 +7820,7 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 10, alignItems: "start" }}>
-      <div>
+      <div style={{ minWidth: 0 }}>
         <PaperCard style={{ padding: 0 }}>
           <div className="px-2.5 pt-2.5 pb-1 text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Startelva ({starterRows.length}/11) — tryck på en spelare för att se förslag på ersättare</div>
           <div className="flex items-center gap-2 px-2.5 pb-1 text-9 uppercase font-semibold" style={{ color: C.inkSoft }}>
@@ -7834,7 +7834,7 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
           {benchPlayers.map(p => <LineupTablePlayerRow key={p.id} player={p} {...rowProps} />)}
         </PaperCard>
       </div>
-      <PaperCard>
+      <PaperCard style={{ minWidth: 0 }}>
         <div className="text-9 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Startelvans overall</div>
         <div className="mt-1 mb-2"><StarRating rating={overallToStars(squadOverallRating(starterRows.map(r => r.player)))} size={10} /></div>
         {selectedSlotKey ? (
@@ -8140,23 +8140,19 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
   return (
     <div className="rise-in space-y-2.5">
       <PaperCard>
-        <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Truppens overall</div>
-        <div className="mt-1"><StarRating rating={overallToStars(clubOverall)} size={11} /></div>
-      </PaperCard>
-      <PaperCard>
         <div className="flex items-center justify-between">
-          <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Startelva</div>
+          <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Truppens overall</div>
           <div className="font-mono text-sm font-semibold" style={{ color: startingXI.length === 11 ? C.win : C.loss }}>{startingXI.length}/11</div>
         </div>
-        <div className="text-11 mt-1" style={{ color: C.inkSoft }}>Tryck på en spelare för att se profilen, eller dra en spelare till en annan rad i tabellen för att byta plats.</div>
-        <div className="grid grid-cols-4 gap-1.5 mt-2.5">
-          <button onClick={() => setShowContracts(true)} className="py-2 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft, position: "relative" }}>
+        <div className="mt-1"><StarRating rating={overallToStars(clubOverall)} size={11} /></div>
+        <div className="grid grid-cols-4 gap-1 mt-2.5">
+          <button onClick={() => setShowContracts(true)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft, position: "relative" }}>
             Kontrakt
             {squad.filter(p => p.contractYears <= 1).length > 0 && <span style={{ position: "absolute", top: -4, right: -4, width: 9, height: 9, borderRadius: "50%", background: "#D9534F", border: `1.5px solid ${C.paper}` }} />}
           </button>
-          <button onClick={() => setShowTactics(true)} className="py-2 rounded-lg text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Taktik</button>
-          <button onClick={() => setShowAkademi(true)} className="py-2 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Akademi</button>
-          <button onClick={() => setShowSetPieces(true)} className="py-2 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Standard</button>
+          <button onClick={() => setShowTactics(true)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Taktik</button>
+          <button onClick={() => setShowAkademi(true)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Akademi</button>
+          <button onClick={() => setShowSetPieces(true)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Standard</button>
         </div>
       </PaperCard>
       {outgoingLoans && outgoingLoans.length > 0 && (
