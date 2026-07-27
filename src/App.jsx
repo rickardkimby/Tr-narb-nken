@@ -2931,7 +2931,8 @@ function TranarbankenApp() {
   const NAV_NOTIFS = {
     transfers: g.incomingOffers.length,
     squad: g.squad.filter(p => p.contractYears <= 1).length,
-    club: (g.takeoverBid ? 1 : 0) + Object.values(g.staff).filter(m => m?.needsRaise).length,
+    club: g.takeoverBid ? 1 : 0,
+    personal: Object.values(g.staff).filter(m => m?.needsRaise).length,
     news: (g.newsFeed || []).filter(n => !n.read).length,
   };
 function setupCup(type, base) {
@@ -7833,6 +7834,8 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
         </PaperCard>
       </div>
       <PaperCard>
+        <div className="text-9 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Startelvans overall</div>
+        <div className="mt-1 mb-2"><StarRating rating={overallToStars(squadOverallRating(starterRows.map(r => r.player)))} size={10} /></div>
         {selectedSlotKey ? (
           <div className="flex items-center justify-between gap-2 mb-2 px-2.5 py-1.5 rounded-lg" style={{ background: C.gold, color: C.turfDeep }}>
             <span className="text-11 font-bold">📍 {nearestPositionForCell(selectedSlot.col, selectedSlot.row)} vald — välj vem som ska spela där nedan</span>
@@ -7872,6 +7875,7 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
                   {isSlotSelected && <span style={{ position: "absolute", top: -5, right: -5, width: 12, height: 12, borderRadius: "50%", background: C.gold, color: C.turfDeep, fontSize: 8, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", border: `1.5px solid ${C.turfDeep}` }}>📍</span>}
                 </div>
                 <div className="font-semibold" style={{ fontSize: 6.5, color: "#fff", background: "rgba(0,0,0,0.55)", padding: "0 3px", borderRadius: 3, marginTop: 2, maxWidth: 62, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "9px" }}>{player.name.split(" ").slice(-1)[0]}</div>
+                <div className="font-mono font-bold" style={{ fontSize: 6.5, marginTop: 1, color: "#fff", background: "rgba(0,0,0,0.5)", borderRadius: 3, padding: "1px 3px" }}>⭐ {overallOf(player)}</div>
               </div>
             );
           })}
@@ -8144,7 +8148,10 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
         </div>
         <div className="text-11 mt-1" style={{ color: C.inkSoft }}>Tryck på en spelare för att se profilen, eller dra en spelare till en annan rad i tabellen för att byta plats.</div>
         <div className="grid grid-cols-4 gap-1.5 mt-2.5">
-          <button onClick={() => setShowContracts(true)} className="py-2 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Kontrakt</button>
+          <button onClick={() => setShowContracts(true)} className="py-2 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft, position: "relative" }}>
+            Kontrakt
+            {squad.filter(p => p.contractYears <= 1).length > 0 && <span style={{ position: "absolute", top: -4, right: -4, width: 9, height: 9, borderRadius: "50%", background: "#D9534F", border: `1.5px solid ${C.paper}` }} />}
+          </button>
           <button onClick={() => setShowTactics(true)} className="py-2 rounded-lg text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Taktik</button>
           <button onClick={() => setShowAkademi(true)} className="py-2 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Akademi</button>
           <button onClick={() => setShowSetPieces(true)} className="py-2 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Standard</button>
@@ -10082,7 +10089,10 @@ function PersonalTab({ budget, staff, reputation, homeCountry, staffCandidates, 
         return (
           <PaperCard key={r.key}>
             <div className="flex items-center justify-between">
-              <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{r.label}</div>
+              <div className="text-xs uppercase tracking-wide font-semibold flex items-center gap-1.5" style={{ color: C.inkSoft }}>
+                {r.label}
+                {member?.needsRaise && <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#D9534F", display: "inline-block" }} />}
+              </div>
               {member && <LevelDots level={member.level} />}
             </div>
             {member ? (
