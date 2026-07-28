@@ -3582,7 +3582,7 @@ function setupCup(type, base) {
         ...prev, clubs: listingClubs, schedule: finalSchedule, squad: finalSquad,
         startingXI: prev.startingXI.filter(id => finalSquad.some(p => p.id === id)),
         youthSquad: finalYouthSquad, sponsors: finalSponsors,
-        budget: prev.budget + delta + eventBudgetDelta + installmentBudgetDelta + leaguePrizeThisRound + promotionBonus, lastDelta: delta, round: newRound,
+        budget: prev.budget + delta + eventBudgetDelta + installmentBudgetDelta + leaguePrizeThisRound, lastDelta: delta, round: newRound,
         transferHistory: aiTransferResult?.records?.length ? [...aiTransferResult.records, ...(prev.transferHistory || [])].slice(0, 1000) : prev.transferHistory,
         transferInstallments: installmentsAfter, installmentMonthKey: newMonthKey,
         staffCandidates: refreshStaffCandidates(prev.staffCandidates, newRound, prev.clubs[prev.userClubId].league),
@@ -4743,7 +4743,7 @@ function setupCup(type, base) {
         schedule: generateSchedule(userPoolIds), allSchedules: generateAllSchedules(newClubs), squad: newSquad, youthSquad: newYouth,
         startingXI: prev.startingXI.filter(id => !departedIds.has(id)),
         reputation: newReputation, fanbase: newFanbase, boardConfidence: newBoardConfidence, plannedSub: null,
-        budget: prev.budget - loanPayment + ownerEvent.cashDelta, loans: newLoans,
+        budget: prev.budget - loanPayment + ownerEvent.cashDelta + promotionBonus, loans: newLoans,
         owner: newOwner, takeoverBid: newTakeoverBid, tourOffers: null, manager: { ...newManager, reputation: clamp((newManager.reputation || 0) + managerAwardRepBonus, 0, 100) }, staff: newStaff, boardCrisisWarned: newBoardCrisisWarned,
         lastSeasonAwards: seasonAwards, userAwardWins, userManagerAwardBonus: managerAwardRepBonus, lastCrisisWasFinancial: financialCrisis,
         lastMatchReport: null, view: gotSacked ? "sacked" : boardCrisis ? "boardcrisis" : newManager.contractYears <= 0 ? "managercontract" : "seasonawards", activeTab: "home", pendingAfterResult: "home",
@@ -5023,11 +5023,11 @@ function setupCup(type, base) {
                   onAdvanceSillySeason={advanceSillySeasonWeek} onFinishSillySeason={finishSillySeason} onOpenTours={openTourOffers} onStartTour={startTour}
                   onGotoTourPlanner={() => setG(prev => ({ ...prev, view: "tourplanner" }))} />
               ) : g.activeTab === "table" ? (
-                <TableTab standings={standings} clubs={g.clubs} userClubId={g.userClubId} division={userClub.division} cup={g.activeCupType ? g.cups[g.activeCupType] : null} nextFixture={nextFixture} allSchedules={g.allSchedules} leagueId={g.leagueId} season={g.season} currentRound={g.round} onSubViewChange={setSubViewOpen} season1Qualifiers={g.season1Qualifiers} schedule={g.schedule} cup1Live={g.cups.cup1} />
+                <TableTab standings={standings} clubs={g.clubs} userClubId={g.userClubId} division={userClub.division} cup={g.activeCupType ? g.cups[g.activeCupType] : null} nextFixture={nextFixture} allSchedules={g.allSchedules} leagueId={g.leagueId} season={g.season} currentRound={g.round} onSubViewChange={setSubViewOpen} season1Qualifiers={g.season1Qualifiers} schedule={g.schedule} cup1Live={g.cups.cup1} domesticLive={g.cups.domestic} cup2Live={g.cups.cup2} />
               ) : g.activeTab === "fixtures" ? (
                 <FixturesTab schedule={g.schedule} clubs={g.clubs} currentRound={g.round} userClubId={g.userClubId} cup={g.activeCupType ? g.cups[g.activeCupType] : null} season={g.season}
                   budget={g.budget} tourOffers={g.tourOffers} lastTourResult={g.lastTourResult} tourCompletedThisOffseason={g.tourCompletedThisOffseason} onOpenTours={openTourOffers} onStartTour={startTour}
-                  allSchedules={g.allSchedules} leagueId={g.leagueId} onSubViewChange={setSubViewOpen} season1Qualifiers={g.season1Qualifiers} cup1Live={g.cups.cup1} />
+                  allSchedules={g.allSchedules} leagueId={g.leagueId} onSubViewChange={setSubViewOpen} season1Qualifiers={g.season1Qualifiers} cup1Live={g.cups.cup1} domesticLive={g.cups.domestic} cup2Live={g.cups.cup2} />
               ) : g.activeTab === "squad" ? (
                 <SquadTab squad={g.squad} startingXI={g.startingXI} onToggleStarter={toggleStarter} confirmSell={confirmSell} setConfirmSell={setConfirmSell} onSell={sellPlayer} onToggleListed={toggleTransferListed} onToggleLoanListed={toggleLoanListed} onRenew={renewContract}
                   formationCode={g.formationCode} lineupCells={g.lineupCells} onSaveFormation={saveFormation} onChat={chatWithPlayer}
@@ -7202,7 +7202,27 @@ function CupBracketList({ rounds, clubs, revealedRounds, userClubId }) {
     </div>
   );
 }
-function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId, season1Qualifiers, cup1Live, onBack }) {
+function YourRealCupStatus({ cup, clubs, userClubId }) {
+  if (!cup) return null;
+  const oppId = cup.tie?.oppId;
+  const opp = oppId ? clubs[oppId] : null;
+  return (
+    <PaperCard style={{ border: `1.5px solid ${C.gold}` }}>
+      <div className="text-9 uppercase tracking-wide font-semibold mb-1" style={{ color: C.gold }}>Er riktiga status — verkliga resultat</div>
+      {cup.champion ? (
+        <div className="text-sm font-bold" style={{ color: C.gold }}>🏆 Mästare!</div>
+      ) : cup.eliminated ? (
+        <div className="text-sm font-semibold" style={{ color: C.loss }}>Utslagna denna säsong.</div>
+      ) : (
+        <>
+          <div className="text-sm font-semibold">{cup.roundName} · {(cup.teams || cup.groups?.flat() || []).length || "?"} lag kvar i turneringen</div>
+          {opp && <div className="text-11 mt-1 flex items-center gap-1.5" style={{ color: C.inkSoft }}>Aktuell motståndare: <ClubJersey club={opp} size={16} />{opp.name}</div>}
+        </>
+      )}
+    </PaperCard>
+  );
+}
+function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId, season1Qualifiers, cup1Live, domesticLive, cup2Live, onBack }) {
   const [selected, setSelected] = useState("domestic");
   const domesticField = withSeededRandom(`${homeLeagueId}_domestic_${season}`, () => domesticCupField(homeLeagueId, clubs));
   const domesticDue = cupDueSchedule("domestic", domesticField.length);
@@ -7247,7 +7267,7 @@ function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId,
     <div className="rise-in space-y-2.5">
       <button onClick={onBack} style={{ position: "fixed", bottom: 14, right: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Bakåt</button>
       <PaperCard>
-        <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Er egen grupp (om ni spelar Kimby Mästerskapet just nu) visas med riktiga resultat. Övriga tabeller/träd är troliga, baserade på klubbarnas styrka — inte nödvändigtvis den officiella gången.</div>
+        <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Er egen cupresa (om ni deltar) visas med riktiga resultat i en guldkantad ruta. Övriga tabeller/träd är troliga, baserade på klubbarnas styrka — inte nödvändigtvis den officiella gången.</div>
         <div className="grid grid-cols-1 gap-1.5">
           <button onClick={() => setSelected("domestic")} className="text-left px-3 py-2 rounded-xl text-sm font-semibold" style={selected === "domestic" ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.ink }}>{leagueName}s inhemska cup</button>
           <button onClick={() => setSelected("cup1")} className="text-left px-3 py-2 rounded-xl text-sm font-semibold" style={selected === "cup1" ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.ink }}>Kimby Mästerskapet</button>
@@ -7255,7 +7275,12 @@ function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId,
         </div>
       </PaperCard>
 
-      {selected === "domestic" && <CupBracketList rounds={domesticRounds} clubs={clubs} revealedRounds={domesticRevealed} userClubId={userClubId} />}
+      {selected === "domestic" && (
+        <>
+          <YourRealCupStatus cup={domesticLive} clubs={clubs} userClubId={userClubId} />
+          <CupBracketList rounds={domesticRounds} clubs={clubs} revealedRounds={domesticRevealed} userClubId={userClubId} />
+        </>
+      )}
 
       {selected === "cup1" && (
         <div className="space-y-2.5">
@@ -7276,11 +7301,17 @@ function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId,
             </PaperCard>
           ))}
           <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Slutspel</div>
+          {cup1Live && cup1Live.phase !== "groups" && <YourRealCupStatus cup={cup1Live} clubs={clubs} userClubId={userClubId} />}
           <CupBracketList rounds={cup1KnockoutRounds} clubs={clubs} revealedRounds={cup1KoRevealed} userClubId={userClubId} />
         </div>
       )}
 
-      {selected === "cup2" && <CupBracketList rounds={cup2Rounds} clubs={clubs} revealedRounds={cup2Revealed} userClubId={userClubId} />}
+      {selected === "cup2" && (
+        <>
+          <YourRealCupStatus cup={cup2Live} clubs={clubs} userClubId={userClubId} />
+          <CupBracketList rounds={cup2Rounds} clubs={clubs} revealedRounds={cup2Revealed} userClubId={userClubId} />
+        </>
+      )}
     </div>
   );
 }
@@ -7684,14 +7715,14 @@ function LeagueBrowserView({ allSchedules, clubs, userClubId, homeLeagueId, onBa
     </div>
   );
 }
-function TableTab({ standings, clubs, userClubId, division, cup, nextFixture, allSchedules, leagueId, season, currentRound, onSubViewChange, season1Qualifiers, schedule, cup1Live }) {
+function TableTab({ standings, clubs, userClubId, division, cup, nextFixture, allSchedules, leagueId, season, currentRound, onSubViewChange, season1Qualifiers, schedule, cup1Live, domesticLive, cup2Live }) {
   const [subView, setSubView] = useState("league");
   const [showBrowser, setShowBrowser] = useState(false);
   const [showCupBrowser, setShowCupBrowser] = useState(false);
   const [showStatsLeague, setShowStatsLeague] = useState(false);
   useEffect(() => { onSubViewChange?.(showBrowser || showCupBrowser || showStatsLeague); }, [showBrowser, showCupBrowser, showStatsLeague]);
   if (showBrowser) return <LeagueBrowserView allSchedules={allSchedules} clubs={clubs} userClubId={userClubId} homeLeagueId={leagueId} onBack={() => setShowBrowser(false)} />;
-  if (showCupBrowser) return <CupBrowserView clubs={clubs} homeLeagueId={leagueId} season={season} currentRound={currentRound} userClubId={userClubId} season1Qualifiers={season1Qualifiers} cup1Live={cup1Live} onBack={() => setShowCupBrowser(false)} />;
+  if (showCupBrowser) return <CupBrowserView clubs={clubs} homeLeagueId={leagueId} season={season} currentRound={currentRound} userClubId={userClubId} season1Qualifiers={season1Qualifiers} cup1Live={cup1Live} domesticLive={domesticLive} cup2Live={cup2Live} onBack={() => setShowCupBrowser(false)} />;
   if (showStatsLeague) return <StatsLeagueView clubs={clubs} leagueId={leagueId} division={division} userClubId={userClubId} onBack={() => setShowStatsLeague(false)} />;
   const n = standings.length;
   const nextOppId = nextFixture ? (nextFixture.home === userClubId ? nextFixture.away : nextFixture.home) : null;
@@ -7768,7 +7799,7 @@ function ScheduleBrowserView({ allSchedules, clubs, homeLeagueId, season, onBack
     </div>
   );
 }
-function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, tourOffers, lastTourResult, tourCompletedThisOffseason, onOpenTours, onStartTour, season, allSchedules, leagueId, onSubViewChange, season1Qualifiers, cup1Live }) {
+function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, tourOffers, lastTourResult, tourCompletedThisOffseason, onOpenTours, onStartTour, season, allSchedules, leagueId, onSubViewChange, season1Qualifiers, cup1Live, domesticLive, cup2Live }) {
   const [subView, setSubView] = useState("league");
   const [showBrowser, setShowBrowser] = useState(false);
   const [showCupBrowser, setShowCupBrowser] = useState(false);
@@ -7776,7 +7807,7 @@ function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, t
   const rivalId = clubs[userClubId]?.rivalId;
   const showCupTab = cup && !cup.champion && !cup.eliminated;
   if (showBrowser) return <ScheduleBrowserView allSchedules={allSchedules} clubs={clubs} homeLeagueId={leagueId} season={season} onBack={() => setShowBrowser(false)} />;
-  if (showCupBrowser) return <CupBrowserView clubs={clubs} homeLeagueId={leagueId} season={season} currentRound={currentRound} userClubId={userClubId} season1Qualifiers={season1Qualifiers} cup1Live={cup1Live} onBack={() => setShowCupBrowser(false)} />;
+  if (showCupBrowser) return <CupBrowserView clubs={clubs} homeLeagueId={leagueId} season={season} currentRound={currentRound} userClubId={userClubId} season1Qualifiers={season1Qualifiers} cup1Live={cup1Live} domesticLive={domesticLive} cup2Live={cup2Live} onBack={() => setShowCupBrowser(false)} />;
   return (
     <div className="rise-in">
       <div className="grid grid-cols-2 gap-2 mb-2.5">
