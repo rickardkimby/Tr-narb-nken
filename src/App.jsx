@@ -150,7 +150,7 @@ function rnd(min, max) { return Math.random() * (max - min) + min; }
 function rndInt(min, max) { return Math.floor(rnd(min, max + 1)); }
 function pick(arr) { return arr[rndInt(0, arr.length - 1)]; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-function uid() { return Math.random().toString(36).slice(2, 10); }
+function uid() { return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 8); }
 function shuffle(arr) { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = rndInt(0, i); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 function poisson(lambda) {
   const L = Math.exp(-lambda); let k = 0, p = 1;
@@ -341,7 +341,7 @@ const ARCHETYPE_DESC = {
 const ARCHETYPE_LABEL = { storklubb: "Storklubb", medelklubb: "Medelklubb", arbetarklubb: "Arbetarklubb", nyrik: "Nyrik klubb", akademiklubb: "Akademiklubb", utmanare: "Utmanare" };
 const ARCHETYPE_TRADEOFFS = {
   storklubb: {
-    pros: ["Stor startbudget (£11M) och bra faciliteter direkt", "Högt rykte gör värvningar enklare", "Stor hemmapublik ger bra matchdagsintäkter"],
+    pros: ["Stor startbudget för nivån och bra faciliteter direkt", "Högt rykte gör värvningar enklare", "Stor hemmapublik ger bra matchdagsintäkter"],
     cons: ["Höga förväntningar från styrelsen redan säsong 1", "Långsammare organisk tillväxt — redan nära toppen"],
   },
   medelklubb: {
@@ -350,15 +350,15 @@ const ARCHETYPE_TRADEOFFS = {
   },
   arbetarklubb: {
     pros: ["Bästa matchdagsintäkterna relativt storlek (+22%)", "Lojala fans redan från start"],
-    cons: ["Mycket liten startbudget (£2,6M)", "Långsam organisk tillväxt", "Lågt inledande rykte"],
+    cons: ["Mycket liten startbudget för nivån", "Långsam organisk tillväxt", "Lågt inledande rykte"],
   },
   nyrik: {
-    pros: ["Enorm startbudget (£19M) — värva fritt direkt", "Snabbast tillväxttakt av alla klubbtyper"],
+    pros: ["Mycket hög startbudget för nivån — värva fritt direkt", "Snabbast tillväxttakt av alla klubbtyper"],
     cons: ["Mycket lågt rykte — svårt att locka stjärnor trots pengarna", "Svag, skeptisk fanbase måste byggas upp", "Historielös identitet i ligan"],
   },
   akademiklubb: {
     pros: ["Bästa ungdomsakademin i ligan från start", "Billiga, lovande talanger att fostra"],
-    cons: ["Minst startbudget av alla klubbtyper (£2M)", "Svagast matchdagsekonomi (-15%)", "Tar tid innan akademin ger utdelning"],
+    cons: ["Minst startbudget för nivån av alla klubbtyper", "Svagast matchdagsekonomi (-15%)", "Tar tid innan akademin ger utdelning"],
   },
   utmanare: {
     pros: ["Stark tillväxttakt", "Redan gott rykte i förhållande till storleken"],
@@ -1413,14 +1413,66 @@ function getXI(squad, startingXI) {
 // Checks whether the manager's own saved starting XI (not the auto-fallback) is actually match-ready —
 // used to block kicking off a match and instead force the manager to fix their own lineup, rather than
 // silently substituting an unavailable player without them noticing.
-function lineupIssues(squad, startingXI) {
+const COMPETITION_LABEL = { league: "ligan", domestic: "den inhemska cupen", cup1: "Kimby Mästerskapet", cup2: "Kimby Cupen" };
+const SUSPENSION_FIELD = { league: "suspendedMatches", domestic: "suspendedDomestic", cup1: "suspendedCup1", cup2: "suspendedCup2" };
+// Full per-player match simulation for cup matches (injuries, cards -> competition-specific suspension,
+// appearances, ratings) — previously cup matches only computed the scoreline and never touched player
+// stats at all, so cup-only cards/injuries/apps simply couldn't happen. Deliberately a self-contained,
+// slightly simplified sibling of the league finalizer's player loop (no season-long chemistry bonus),
+// so it can be reused safely across all four cup competitions without touching the tuned league logic.
+function simulateCupMatchPlayerUpdates(xi, fullSquad, staff, tacticalSettings, difficulty, teamTalk, competition, scorers, assistProviders) {
+  const suspField = SUSPENSION_FIELD[competition] || "suspendedDomestic";
+  const yellowField = competition === "league" ? "yellowCards" : `yellowCards_${competition}`;
+  const physioLevel = staff?.physio ? staff.physio.level : 0;
+  const assistantLevel = staff?.assistant ? staff.assistant.level : 0;
+  const difficultySettings = DIFFICULTY_SETTINGS[difficulty] || DIFFICULTY_SETTINGS.normal;
+  const talkCardMult = (TEAM_TALK_OPTIONS[teamTalk] || TEAM_TALK_OPTIONS.neutral).cardMult;
+  const refereeStrictness = rnd(0.75, 1.3);
+  const tacticCardMult = combinedTacticalMods(tacticalSettings).cardMult * talkCardMult * refereeStrictness;
+  let injuredPlayer = null;
+  const cardEvents = {};
+  xi.forEach(pl => {
+    const attrs = getAttrs(pl);
+    const staminaRisk = clamp((70 - (pl.stamina ?? 100)) / 3000, 0, 0.015);
+    const chance = clamp((0.045 - attrs.physical / 2200 - physioLevel * 0.003 + staminaRisk) * difficultySettings.injuryMult * injuryProneMult(pl), 0.005, 0.12);
+    if (!injuredPlayer && Math.random() < chance) injuredPlayer = pl;
+    const personalityCardMult = pl.personality === "Problemspelare" ? 1.6 : 1;
+    const yellowChance = clamp((0.09 - assistantLevel * 0.008) * tacticCardMult * personalityCardMult, 0.02, 0.2);
+    const redChance = clamp((0.012 - assistantLevel * 0.001) * tacticCardMult * personalityCardMult, 0.002, 0.03);
+    if (Math.random() < redChance) cardEvents[pl.id] = "red";
+    else if (Math.random() < yellowChance) cardEvents[pl.id] = "yellow";
+  });
+  const fitnessCoachLevel = staff?.fitnessCoach ? staff.fitnessCoach.level : 0;
+  const xiIds = new Set(xi.map(p => p.id));
+  const newSquad = fullSquad.map(pl => {
+    // Anyone still serving a suspension in THIS competition has it tick down by one now that a match
+    // in this competition has been played, regardless of whether they personally featured.
+    const tickedSuspension = Math.max(0, (pl[suspField] || 0) - (xiIds.has(pl.id) ? 0 : 1));
+    if (!xiIds.has(pl.id)) return pl[suspField] > 0 ? { ...pl, [suspField]: tickedSuspension } : pl;
+    const goals = scorers.filter(s => s.id === pl.id).length;
+    const assists = assistProviders.filter(a => a && a.id === pl.id).length;
+    const rating = clamp(6.0 + rnd(-0.6, 0.6) + goals * 1.1 + assists * 0.5, 3.5, 9.8);
+    const gotInjured = injuredPlayer && injuredPlayer.id === pl.id;
+    const baseInjuryWeeks = gotInjured ? pick([1, 1, 2, 2, 3, 5, 8]) : pl.injuryWeeks;
+    const injuryWeeks = gotInjured ? Math.max(1, Math.round(baseInjuryWeeks * (1 - physioLevel * 0.06))) : baseInjuryWeeks;
+    const card = cardEvents[pl.id];
+    let yellowCards = pl[yellowField] || 0, suspended = pl[suspField] || 0;
+    if (card === "red") suspended += rndInt(1, 2);
+    else if (card === "yellow") { yellowCards += 1; if (yellowCards >= 5) { suspended += 1; yellowCards -= 5; } }
+    const newStamina = clamp((pl.stamina ?? 100) - Math.max(1, rndInt(4, 8) - fitnessCoachLevel * 0.4), 0, 100);
+    return { ...pl, apps: (pl.apps || 0) + 1, goals: (pl.goals || 0) + goals, assists: (pl.assists || 0) + assists, ratingSum: (pl.ratingSum || 0) + rating, recentRatings: [...(pl.recentRatings || []), rating].slice(-5), injuryWeeks, stamina: newStamina, [yellowField]: yellowCards, [suspField]: suspended };
+  });
+  return { newSquad, injuredPlayer, cardEvents };
+}
+function lineupIssues(squad, startingXI, competition = "league") {
   if (!startingXI || startingXI.length !== 11) return ["Ingen komplett startelva vald (11 spelare krävs)."];
+  const suspField = SUSPENSION_FIELD[competition] || "suspendedMatches";
   const issues = [];
   startingXI.forEach(id => {
     const p = squad.find(pl => pl.id === id);
     if (!p) { issues.push("En vald spelare i startelvan finns inte längre i truppen."); return; }
     if (p.injuryWeeks > 0) issues.push(`${p.name} är skadad — ${p.injuryWeeks} omgångar kvar.`);
-    else if (p.suspendedMatches > 0) issues.push(`${p.name} är avstängd — ${p.suspendedMatches} omgångar kvar.`);
+    else if ((p[suspField] || 0) > 0) issues.push(`${p.name} är avstängd i ${COMPETITION_LABEL[competition] || "tävlingen"} — ${p[suspField]} omgångar kvar.`);
     else if (p.internationalDuty) issues.push(`${p.name} är på landslagsuppdrag.`);
   });
   return issues;
@@ -1433,12 +1485,17 @@ function parseFormation(code) {
   const n = lines.length;
   const slots = [{ id: "gk", role: "MV", x: 6, y: 50 }];
   lines.forEach((count, li) => {
-    const x = 22 + (n === 1 ? 0 : (li / (n - 1)) * 66);
+    // A front line of exactly two should read as two central strikers (ST) by default, not spread all the
+    // way to the wide edges like a back four or midfield four would — that's what previously turned "two
+    // strikers" into two wide attacking midfielders. It also needs to sit far enough forward to actually
+    // land on the striker column instead of the attacking-midfielder column just behind it.
+    const isNarrowAttackPair = li === n - 1 && count === 2;
+    const x = isNarrowAttackPair ? 94 : 22 + (n === 1 ? 0 : (li / (n - 1)) * 66);
     let role = "MF";
     if (li === 0) role = "FÖ";
     else if (li === n - 1) role = "AN";
     for (let i = 0; i < count; i++) {
-      const y = count === 1 ? 50 : 10 + (i / (count - 1)) * 80;
+      const y = count === 1 ? 50 : isNarrowAttackPair ? 25 + i * 50 : 10 + (i / (count - 1)) * 80;
       slots.push({ id: `${li}-${i}`, role, x, y });
     }
   });
@@ -1545,7 +1602,8 @@ function generateSponsorOffers(slotType, reputation) {
     const income = Math.round(baseIncome * repMult * rnd(0.8, 1.3));
     const bonus = Math.round(income * rnd(2, 5));
     const type = pick(Object.keys(SPONSOR_TYPES));
-    return { id: uid(), name, income, bonus, type };
+    const contractLength = rndInt(19, 38);
+    return { id: uid(), name, income, bonus, type, contractLength };
   });
 }
 function negotiateSponsor(offer, reputation, attemptsUsed = 0) {
@@ -1681,13 +1739,28 @@ function wageBudgetCap(reputation, division, sponsringLevel) {
 }
 function totalWageBill(squad) { return squad.reduce((s, p) => s + effectiveWage(p), 0); }
 function effectiveWage(p) { return p.loanWeeksLeft ? Math.round((p.wage || 0) * (p.loanWageSharePct ?? 100) / 100) : (p.wage || 0); }
-function wageDemand(player) {
+function wageDemand(player, clubReputation = 50, clubBudget = null) {
   const rng = seededRandom(String(player.id) + "wage" + player.contractYears);
   const avgRating = player.apps ? player.ratingSum / player.apps : 6.2;
-  const formBonus = clamp((avgRating - 6) * 0.2, -0.2, 0.4);
+  // Performance: sustained good form pushes demands up, poor form pulls them down — the single biggest lever.
+  const formBonus = clamp((avgRating - 6) * 0.25, -0.25, 0.5);
   const overallish = (player.attack + player.defense) / 2;
-  const target = Math.max(player.wage, Math.round(overallish * 0.55 * (1 + formBonus) + rng() * 8));
-  return Math.round(target);
+  // Potential: young players with a big gap between current ability and ceiling can reasonably ask for a bit
+  // more on the promise of growth — but this fades out for players who've already matured (25+).
+  const potentialGap = Math.max(0, (player.potential ?? overallish) - overallish);
+  const youthPremium = player.age <= 24 ? clamp(potentialGap * 0.16, 0, 9) : player.age <= 27 ? clamp(potentialGap * 0.06, 0, 4) : 0;
+  // Age: past-peak players (30+) see their leverage taper off as sporting value depreciates, regardless of
+  // a still-decent current rating — an aging player shouldn't keep demanding ever-higher wages forever.
+  const ageFactor = player.age <= 29 ? 1 : clamp(1 - (player.age - 29) * 0.045, 0.55, 1);
+  // Club economy: a player can reasonably point to a wealthier, higher-reputation club's ability to pay —
+  // but this alone can't manufacture a demand out of nowhere; it's a moderate multiplier, not the main driver.
+  const repFactor = clamp(0.82 + (clubReputation ?? 50) / 250, 0.82, 1.18);
+  const budgetFactor = clubBudget != null ? clamp(0.9 + clubBudget / 60000, 0.85, 1.15) : 1;
+  const rawTarget = (overallish * 0.55 + youthPremium) * (1 + formBonus) * ageFactor * repFactor * budgetFactor + rng() * 6;
+  // Hard guardrail: without this, a single strong run of form or a lucky roll could double someone's wage
+  // demand overnight. Cap any single renegotiation to a season-reasonable band around the current wage.
+  const capped = clamp(rawTarget, player.wage * 0.75, player.wage * 1.4);
+  return Math.round(Math.max(4, Math.max(player.wage, capped)));
 }
 function negotiateWage(offerWage, targetWage, reputation, sweetenerScore = 0, isDerby = false) {
   const derbyPenalty = isDerby ? 1.3 : 1;
@@ -1887,6 +1960,19 @@ function processRandomEvents(squad, youthSquad, sponsors, incomingOffers, clubs,
   const importantEvents = [];
   let newYouth = youthSquad;
   let newSponsors = sponsors;
+  // Tick down active sponsor contracts one round at a time — this is the only place contracts end
+  // (expiry) or persist; signing a new one mid-contract is blocked elsewhere, and early termination
+  // goes through its own explicit, penalised action.
+  Object.entries(sponsors || {}).forEach(([slot, deal]) => {
+    if (!deal || deal.roundsRemaining === undefined) return;
+    const remaining = deal.roundsRemaining - 1;
+    if (remaining <= 0) {
+      newSponsors = { ...newSponsors, [slot]: null };
+      importantEvents.push({ text: `Sponsoravtalet med ${deal.name} har löpt ut.`, category: "Ekonomi" });
+    } else {
+      newSponsors = { ...newSponsors, [slot]: { ...deal, roundsRemaining: remaining } };
+    }
+  });
   let newOffers = incomingOffers;
   let newSquad = squad;
   let budgetDelta = 0;
@@ -1898,10 +1984,11 @@ function processRandomEvents(squad, youthSquad, sponsors, incomingOffers, clubs,
     messages.push(`${youthSquad[idx].name} gör ett genombrott på träningen!`);
   }
 
-  const underpaid = squad.filter(p => p.wage < wageDemand(p) * 0.8 && overallOf(p) >= 68);
+  const clubBudgetForWages = clubs[userClubId]?.budget;
+  const underpaid = squad.filter(p => p.wage < wageDemand(p, reputation, clubBudgetForWages) * 0.8 && overallOf(p) >= 68);
   if (underpaid.length && Math.random() < 0.08) {
     const p = pick(underpaid);
-    const newWage = Math.round(wageDemand(p) * rnd(0.9, 1.05));
+    const newWage = Math.round(wageDemand(p, reputation, clubBudgetForWages) * rnd(0.9, 1.05));
     newSquad = squad.map(pl => pl.id === p.id ? { ...pl, wage: newWage } : pl);
     messages.push(`${p.name}s agent förhandlar fram en löneförhöjning till ${formatMoney(newWage)}/omg.`);
   }
@@ -2260,8 +2347,16 @@ function computeSeasonAwards(clubs, userClubId, userSquad, worldStandings) {
 }
 function distributeMatchStats(squad, goalCount) {
   if (!squad.length) return squad;
-  const outfield = squad.filter(p => p.pos !== "MV");
-  if (!outfield.length) return squad;
+  // Tick down existing injuries/suspensions first, and figure out who's actually available this match —
+  // without this, AI clubs' best players would play every single game forever, which skews stats unrealistically.
+  const ticked = squad.map(p => ({
+    ...p,
+    injuryWeeks: Math.max(0, (p.injuryWeeks || 0) - 1),
+    suspendedMatches: Math.max(0, (p.suspendedMatches || 0) - 1),
+  }));
+  const available = ticked.filter(p => p.injuryWeeks === 0 && p.suspendedMatches === 0);
+  const outfield = available.filter(p => p.pos !== "MV");
+  if (!outfield.length) return ticked;
   const scorerWeighted = [];
   outfield.forEach(p => { const w = p.pos === "AN" ? 3 : p.pos === "MF" ? 1.5 : 0.6; const weight = Math.max(1, Math.round(w * 2)); for (let i = 0; i < weight; i++) scorerWeighted.push(p.id); });
   const assistWeighted = [];
@@ -2276,20 +2371,35 @@ function distributeMatchStats(squad, goalCount) {
     }
   }
   const yellowInc = new Set(), redInc = new Set();
-  squad.forEach(p => {
+  available.forEach(p => {
     const roll = Math.random();
     if (roll < 0.003) redInc.add(p.id);
     else if (roll < 0.05) yellowInc.add(p.id);
   });
-  if (!Object.keys(goalInc).length && !Object.keys(assistInc).length && !yellowInc.size && !redInc.size) return squad;
-  return squad.map(p => {
-    if (!goalInc[p.id] && !assistInc[p.id] && !yellowInc.has(p.id) && !redInc.has(p.id)) return p;
+  // A plausible "starting XI" (1 keeper + best ~10 outfield by attribute, roughly matching a real lineup)
+  // actually plays this match, drawn only from currently available (non-injured, non-suspended) players.
+  const keeper = available.find(p => p.pos === "MV");
+  const rankedOutfield = [...outfield].sort((a, b) => overallOf(b) - overallOf(a));
+  const playedIds = new Set([keeper?.id, ...rankedOutfield.slice(0, 10).map(p => p.id)].filter(Boolean));
+  const newInjuryWeeks = {};
+  playedIds.forEach(id => {
+    if (Math.random() < 0.035) newInjuryWeeks[id] = rndInt(1, 4);
+  });
+  return ticked.map(p => {
+    const played = playedIds.has(p.id);
+    const gotRed = redInc.has(p.id);
+    if (!played && !goalInc[p.id] && !assistInc[p.id] && !yellowInc.has(p.id) && !gotRed) return p;
+    const rating = played ? clamp(6.1 + (goalInc[p.id] || 0) * 0.7 + (assistInc[p.id] || 0) * 0.4 - (gotRed ? 1.2 : 0) - (yellowInc.has(p.id) ? 0.15 : 0) + rnd(-0.5, 0.5), 3, 10) : 0;
     return {
       ...p,
       goals: (p.goals || 0) + (goalInc[p.id] || 0),
       assists: (p.assists || 0) + (assistInc[p.id] || 0),
       seasonYellowCards: (p.seasonYellowCards || 0) + (yellowInc.has(p.id) ? 1 : 0),
-      seasonRedCards: (p.seasonRedCards || 0) + (redInc.has(p.id) ? 1 : 0),
+      seasonRedCards: (p.seasonRedCards || 0) + (gotRed ? 1 : 0),
+      apps: (p.apps || 0) + (played ? 1 : 0),
+      ratingSum: (p.ratingSum || 0) + rating,
+      injuryWeeks: newInjuryWeeks[p.id] ?? p.injuryWeeks,
+      suspendedMatches: gotRed ? Math.max(p.suspendedMatches, rndInt(1, 2)) : p.suspendedMatches,
     };
   });
 }
@@ -2309,19 +2419,40 @@ function simulatePenaltyShootout(userSquad, oppSquad, userAttack, oppStrength, s
   const userProb = clamp(0.72 + (userAttack - oppStrength) / 400, 0.55, 0.9);
   const oppProb = clamp(0.72 + (oppStrength - userAttack) / 400, 0.55, 0.9);
   const kicks = [];
-  let userScore = 0, oppScore = 0, round = 0;
+  let userScore = 0, oppScore = 0, userTaken = 0, oppTaken = 0;
   const nextTaker = (order, idx) => order[idx % order.length] || { name: "Okänd spelare" };
-  while (true) {
-    const uP = nextTaker(userOrder, round), oP = nextTaker(oppOrder, round);
+  // Mathematically decided once the trailing side can no longer catch up even scoring every remaining kick —
+  // real shootouts end the moment that happens rather than always going through all 5 kicks each.
+  const decided = () => userScore > oppScore + (5 - oppTaken) || oppScore > userScore + (5 - userTaken);
+
+  let round = 0;
+  while (round < 5 && !decided()) {
+    if (!decided()) {
+      const p = nextTaker(userOrder, round);
+      const scored = Math.random() < userProb;
+      if (scored) userScore++;
+      userTaken++;
+      kicks.push({ team: "user", playerName: p.name, scored, round: round + 1 });
+    }
+    if (!decided()) {
+      const p = nextTaker(oppOrder, round);
+      const scored = Math.random() < oppProb;
+      if (scored) oppScore++;
+      oppTaken++;
+      kicks.push({ team: "opp", playerName: p.name, scored, round: round + 1 });
+    }
+    round++;
+  }
+  let sdRound = round;
+  while (userScore === oppScore && sdRound < round + 15) {
+    const uP = nextTaker(userOrder, sdRound), oP = nextTaker(oppOrder, sdRound);
     const uScored = Math.random() < userProb;
     if (uScored) userScore++;
-    kicks.push({ team: "user", playerName: uP.name, scored: uScored, round: round + 1 });
+    kicks.push({ team: "user", playerName: uP.name, scored: uScored, round: sdRound + 1 });
     const oScored = Math.random() < oppProb;
     if (oScored) oppScore++;
-    kicks.push({ team: "opp", playerName: oP.name, scored: oScored, round: round + 1 });
-    round++;
-    if (round >= 5 && userScore !== oppScore) break;
-    if (round > 20) break; // safety cap
+    kicks.push({ team: "opp", playerName: oP.name, scored: oScored, round: sdRound + 1 });
+    sdRound++;
   }
   return { kicks, userScore, oppScore, userWon: userScore > oppScore, label: `${userScore}-${oppScore}` };
 }
@@ -2761,6 +2892,7 @@ export default function TranarbankenAppRoot() {
 }
 function TranarbankenApp() {
   const [previewWorld, setPreviewWorld] = useState(() => generateWorld());
+  const [activeDbLabel, setActiveDbLabel] = useState("Standarddatabas");
   const season1Qualifiers = useMemo(() => buildSeason1Qualifiers(previewWorld), [previewWorld]);
   const [g, setG] = useState({ setupDone: false });
   const [screen, setScreen] = useState("loading");
@@ -2835,6 +2967,7 @@ function TranarbankenApp() {
       pendingSelectedPlayerId: null,
       pendingShootout: parsed.pendingShootout || null,
       transferHistory: parsed.transferHistory || [],
+      squadViewPrefs: parsed.squadViewPrefs || { rowMode: "detaljerad", showAllBench: false },
       jobOffers: parsed.jobOffers || null,
       jobMarketMandatory: parsed.jobMarketMandatory || false,
       partnerClubId: parsed.partnerClubId || null,
@@ -3026,12 +3159,13 @@ function TranarbankenApp() {
     reader.readAsText(file);
   }
 
-  function handleConfirmSetup(countryId, division, clubId, managerName, pressChoice) {
-    const clubs = previewWorld;
+  function handleConfirmSetup(countryId, division, clubId, managerName, pressChoice, selectedWorld) {
+    const clubs = selectedWorld || previewWorld;
     const club = clubs[clubId];
+    const activeSeason1Qualifiers = selectedWorld ? buildSeason1Qualifiers(selectedWorld) : season1Qualifiers;
     const initialCupQueue = ["domestic"];
-    if (season1Qualifiers.cup1.includes(clubId)) initialCupQueue.push("cup1");
-    else if (season1Qualifiers.cup2.includes(clubId)) initialCupQueue.push("cup2");
+    if (activeSeason1Qualifiers.cup1.includes(clubId)) initialCupQueue.push("cup1");
+    else if (activeSeason1Qualifiers.cup2.includes(clubId)) initialCupQueue.push("cup2");
     const arche = ARCHETYPES[club.archetype];
     const divMult = { 1: 1, 2: 0.5, 3: 0.28 }[division];
     const devReduce = division - 1;
@@ -3064,7 +3198,7 @@ function TranarbankenApp() {
       arenaStands: startArenaStands(club, division), arenaFacilities: { restaurant: startPartLevel(3), shop: startPartLevel(3) },
       akademiParts: { tranare: startPartLevel(3), intag: startPartLevel(3) }, scoutingParts: { analys: startPartLevel(3), kontakter: startPartLevel(3) },
       sponsors: { main: null, stadium: null, local: null },
-      staff: { assistant: null, physio: null, scout: null, gkCoach: null, analyst: null, fitnessCoach: null }, boardConfidence: startBoardConfidence, boardCrisisWarned: false, jobOffers: null, plannedSub: null, incomingOffers: [], loans: [], loanOffers: [], transferHistory: [],
+      staff: { assistant: null, physio: null, scout: null, gkCoach: null, analyst: null, fitnessCoach: null }, boardConfidence: startBoardConfidence, boardCrisisWarned: false, jobOffers: null, plannedSub: null, incomingOffers: [], loans: [], loanOffers: [], transferHistory: [], squadViewPrefs: { rowMode: "detaljerad", showAllBench: false },
       seasonIncomeTotal: 0, seasonWageTotal: 0, difficulty: "normal", savedScoutProfiles: [], clubRecords: {}, seasonStaffImpact: { physio: 0, assistant: 0, analyst: 0, gkCoach: 0, fitnessCoach: 0 },
       setPieceTakers: { penalties: [], freeKick: null, cornerLeft: null, cornerRight: null }, chemistryPairs: {}, newsFeed: [], captainId: null, clubGoodwill: {}, blacklistedPlayers: {}, staffCandidates: {}, recentMatchFinances: [],
       formationCode: "4-4-2", tacticalSettings: { ...DEFAULT_TACTICAL_SETTINGS }, lineupCells: null,
@@ -3075,7 +3209,7 @@ function TranarbankenApp() {
       manager, assistantManager: null,
       youthSquad: [generateYouthProspect(dev.akademi, 1, countryId)], youthMarket: Array.from({ length: 6 }, () => generateYouthProspect(clamp(dev.scouting, 1, 5), 1)),
       lastMatchReport: null, view: "home", activeTab: "home", pendingAfterResult: "home",
-      cups: { domestic: null, cup1: null, cup2: null }, activeCupType: null, qualifiedCupTypes: initialCupQueue, season1Qualifiers, lastSeasonSummary: null, seasonEndSnapshot: null, history: [], scoutMission: null, ticketPrice: "t3", merchandisePricing: "standard", arenaConstruction: null, outgoingLoans: [], sillySeasonWeeksLeft: 4,
+      cups: { domestic: null, cup1: null, cup2: null }, activeCupType: null, qualifiedCupTypes: initialCupQueue, season1Qualifiers: activeSeason1Qualifiers, lastSeasonSummary: null, seasonEndSnapshot: null, history: [], scoutMission: null, ticketPrice: "t3", merchandisePricing: "standard", arenaConstruction: null, outgoingLoans: [], sillySeasonWeeksLeft: 4,
     };
     const id = uid();
     const entry = { id, ...saveSummary(initial) };
@@ -3089,7 +3223,7 @@ function TranarbankenApp() {
 
   if (screen === "loading") return <div style={{ background: C.turfDeep, minHeight: "100vh" }} />;
   if (screen === "select") return <SaveSelectView saves={saveIndex} onSelect={switchToSave} onNew={goToNewCareer} onDelete={deleteSave} onExport={exportSave} onImport={importSaveFile} onOpenDatabase={() => setScreen("database")} />;
-  if (screen === "database") return <DatabaseView world={previewWorld} onSave={editedWorld => { setPreviewWorld(editedWorld); setScreen("select"); }} onBack={() => setScreen("select")} />;
+  if (screen === "database") return <DatabaseManagerView standardWorld={previewWorld} onUseDatabase={(id, name, clubs) => { setPreviewWorld(clubs); setActiveDbLabel(name); setScreen("onboarding"); }} onBack={() => setScreen("select")} />;
   if (screen === "onboarding") return <Onboarding world={previewWorld} onConfirm={handleConfirmSetup} onCancel={() => setScreen("select")} />;
 
   const userClub = g.clubs[g.userClubId];
@@ -3131,7 +3265,7 @@ function setupCup(type, base) {
 
   function beginRound() {
     if (seasonOver) return;
-    const issues = lineupIssues(g.squad, g.startingXI);
+    const issues = lineupIssues(g.squad, g.startingXI, "league");
     if (issues.length) { showToast(`⚠️ Ni har ingen matchklar startelva — byt ut spelare i Trupp-fliken: ${issues[0]}`); return; }
     const newClubs = { ...g.clubs };
     const xi = getXI(g.squad, g.startingXI);
@@ -3281,6 +3415,8 @@ function setupCup(type, base) {
       incomeTickets = Math.round(attendance * 0.009 * userArchetype.incomeMult * ticketTier.incomeMult) + Object.values(g.arenaStands).reduce((s, l) => s + l, 0) * 8;
       incomeRestaurant = g.arenaFacilities.restaurant * 18;
       incomeShop += g.arenaFacilities.shop * 18;
+      matchReport.attendance = attendance;
+      matchReport.arenaCapacity = arenaCapacityOf(g.dev, g.arenaStands);
     }
     let income = incomeSponsring + incomeSponsorDeals + incomeTv + incomeShop + incomeTickets + incomeRestaurant;
 
@@ -3366,7 +3502,7 @@ function setupCup(type, base) {
     };
     const matchFinanceRecord = {
       round: g.round, oppName: p.oppName, userIsHome: p.userIsHome, ticketPrice: g.ticketPrice,
-      attendance, income: Math.round(incomeTickets + incomeRestaurant + incomeShop + incomeSponsring + incomeSponsorDeals + incomeTv),
+      attendance, arenaCapacity: arenaCapacityOf(g.dev, g.arenaStands), income: Math.round(incomeTickets + incomeRestaurant + incomeShop + incomeSponsring + incomeSponsorDeals + incomeTv),
     };
     const newRound = g.round + 1;
     const newMonthKey = monthKeyFor(g.season, newRound);
@@ -3613,7 +3749,7 @@ function setupCup(type, base) {
   // --- domestic cup handlers ---
   function playDomesticCupRound() {
     const cup = g.cups.domestic;
-    const issues = lineupIssues(g.squad, g.startingXI);
+    const issues = lineupIssues(g.squad, g.startingXI, "domestic");
     if (issues.length) { showToast(`⚠️ Ni har ingen matchklar startelva — byt ut spelare i Trupp-fliken: ${issues[0]}`); return; }
     const seed = `domesticpair${cup.roundIndex || 1}${cup.teams.join(",")}`;
     const { pairs, byeTeam } = resolveDomesticPairing(cup.teams, seed);
@@ -3643,9 +3779,13 @@ function setupCup(type, base) {
       userWon = shootout.userWon;
       penalties = shootout.label;
     } else userWon = userGoals > oppGoals;
-    const scorers = (scoredByIds && scoredByIds.length === userGoals)
-      ? scoredByIds.map(id => (xi.find(pl => pl.id === id) || pick(xi))?.name)
-      : pickScorer(xi, userGoals).map(pl => pl.name);
+    const scorerObjects = (scoredByIds && scoredByIds.length === userGoals)
+      ? scoredByIds.map(id => xi.find(pl => pl.id === id) || pick(xi))
+      : pickScorer(xi, userGoals);
+    const assistProviders = scorerObjects.map(s => pickAssist(xi, s, g.setPieceTakers));
+    const scorers = scorerObjects.map(pl => pl.name);
+    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, "domestic", scorerObjects, assistProviders);
+    if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i cupmatchen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
     const ratings = ratingsForResult(xi, scorers, userWon ? "win" : "loss");
     const winnerId = userWon ? g.userClubId : p.oppId;
     const winners = [...ctx.winners, winnerId];
@@ -3663,7 +3803,7 @@ function setupCup(type, base) {
         });
       }
     }
-    setG(prev => ({ ...prev, view: shootout ? "penaltyshootout" : "cup", activeCupType: "domestic", pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, domestic: { ...prev.cups.domestic, pendingWinners: winners, userReport } } }));
+    setG(prev => ({ ...prev, view: shootout ? "penaltyshootout" : "cup", activeCupType: "domestic", squad: newSquad, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, domestic: { ...prev.cups.domestic, pendingWinners: winners, userReport } } }));
   }
   function continueDomesticCupRound() {
     const cup = g.cups.domestic;
@@ -3678,7 +3818,7 @@ function setupCup(type, base) {
   // --- cup1 group stage handlers ---
   function playGroupMatch() {
     const cup = g.cups.cup1;
-    const issues = lineupIssues(g.squad, g.startingXI);
+    const issues = lineupIssues(g.squad, g.startingXI, "cup1");
     if (issues.length) { showToast(`⚠️ Ni har ingen matchklar startelva — byt ut spelare i Trupp-fliken: ${issues[0]}`); return; }
     const round = cup.groupSchedule[cup.groupRound];
     let userIsHome = null, oppId2 = null;
@@ -3712,9 +3852,13 @@ function setupCup(type, base) {
         });
       }
     }
-    const scorers = (scoredByIds && scoredByIds.length === userGoals)
-      ? scoredByIds.map(id => (xi.find(pl => pl.id === id) || pick(xi))?.name)
-      : pickScorer(xi, userGoals).map(pl => pl.name);
+    const scorerObjects = (scoredByIds && scoredByIds.length === userGoals)
+      ? scoredByIds.map(id => xi.find(pl => pl.id === id) || pick(xi))
+      : pickScorer(xi, userGoals);
+    const assistProviders = scorerObjects.map(s => pickAssist(xi, s, g.setPieceTakers));
+    const scorers = scorerObjects.map(pl => pl.name);
+    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, "cup1", scorerObjects, assistProviders);
+    if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i cupmatchen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
     const ratings = ratingsForResult(xi, scorers, result);
     const capturedReport = { oppName: p.oppName, oppColor: g.clubs[p.oppId]?.color, userColor: g.clubs[g.userClubId]?.color, userIsHome: p.userIsHome, userGoals, oppGoals, result, ratings };
     setG(prev => {
@@ -3727,7 +3871,7 @@ function setupCup(type, base) {
           return { ...f, homeGoals: p.userIsHome ? userGoals : oppGoals, awayGoals: p.userIsHome ? oppGoals : userGoals };
         });
       });
-      return { ...prev, view: "cup", activeCupType: "cup1", pendingRound: null, pendingCupContext: null, cups: { ...prev.cups, cup1: { ...cup, groupSchedule: newGroupSchedule, pendingReport: capturedReport } } };
+      return { ...prev, view: "cup", activeCupType: "cup1", squad: newSquad, pendingRound: null, pendingCupContext: null, cups: { ...prev.cups, cup1: { ...cup, groupSchedule: newGroupSchedule, pendingReport: capturedReport } } };
     });
   }
   function continueGroupRound() {
@@ -3746,7 +3890,7 @@ function setupCup(type, base) {
   // --- two-legged knockout handlers (cup1 QF/SF, cup2 R16/QF/SF) — target whichever cup is currently active ---
   function playCupLeg() {
     const cupType = g.activeCupType;
-    const issues = lineupIssues(g.squad, g.startingXI);
+    const issues = lineupIssues(g.squad, g.startingXI, g.activeCupType);
     if (issues.length) { showToast(`⚠️ Ni har ingen matchklar startelva — byt ut spelare i Trupp-fliken: ${issues[0]}`); return; }
     const cup = g.cups[cupType];
     const opp = g.clubs[cup.tie.oppId];
@@ -3760,14 +3904,18 @@ function setupCup(type, base) {
     const p = g.pendingRound, ctx = g.pendingCupContext;
     const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
     const result = userGoals > oppGoals ? "win" : userGoals < oppGoals ? "loss" : "draw";
-    const scorers = (scoredByIds && scoredByIds.length === userGoals)
-      ? scoredByIds.map(id => (xi.find(pl => pl.id === id) || pick(xi))?.name)
-      : pickScorer(xi, userGoals).map(pl => pl.name);
+    const scorerObjects = (scoredByIds && scoredByIds.length === userGoals)
+      ? scoredByIds.map(id => xi.find(pl => pl.id === id) || pick(xi))
+      : pickScorer(xi, userGoals);
+    const assistProviders = scorerObjects.map(s => pickAssist(xi, s, g.setPieceTakers));
+    const scorers = scorerObjects.map(pl => pl.name);
+    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, ctx.cupType, scorerObjects, assistProviders);
+    if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i cupmatchen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
     const ratings = ratingsForResult(xi, scorers, result);
     const legResult = { userGoals, oppGoals, userWon: userGoals > oppGoals, ratings };
     const report = { oppName: p.oppName, oppColor: g.clubs[p.oppId]?.color, userColor: g.clubs[g.userClubId]?.color, userIsHome: true, userGoals, oppGoals, penalties: null, result, ratings };
     const legKey = ctx.legNum === 1 ? "leg1" : "leg2";
-    setG(prev => ({ ...prev, view: "cup", activeCupType: ctx.cupType, pendingRound: null, pendingCupContext: null, cups: { ...prev.cups, [ctx.cupType]: { ...prev.cups[ctx.cupType], tie: { ...prev.cups[ctx.cupType].tie, [legKey]: legResult }, pendingReport: report } } }));
+    setG(prev => ({ ...prev, view: "cup", activeCupType: ctx.cupType, squad: newSquad, pendingRound: null, pendingCupContext: null, cups: { ...prev.cups, [ctx.cupType]: { ...prev.cups[ctx.cupType], tie: { ...prev.cups[ctx.cupType].tie, [legKey]: legResult }, pendingReport: report } } }));
   }
   function continueCupLeg(precomputedShootout = null) {
     const cupType = g.activeCupType;
@@ -3781,16 +3929,34 @@ function setupCup(type, base) {
     else if (userLegWins === 0) advanced = false;
     else if (userGoalsAgg > oppGoalsAgg) advanced = true;
     else if (oppGoalsAgg > userGoalsAgg) advanced = false;
-    else if (precomputedShootout) {
-      advanced = precomputedShootout.userWon;
-      shootoutNote = `Lika efter båda matcherna (${userGoalsAgg}-${oppGoalsAgg} sammanlagt) — straffar avgjorde: ${precomputedShootout.label}.`;
-    } else {
-      const xi = getXI(g.squad, g.startingXI);
-      const strength2 = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings);
-      const oppStrength = g.clubs[cup.tie.oppId].strength;
-      const shootout = simulatePenaltyShootout(xi, g.clubs[cup.tie.oppId]?.squad || [], strength2.attack, oppStrength, g.setPieceTakers);
-      setG(prev => ({ ...prev, view: "penaltyshootout", pendingShootout: { ...shootout, oppId: cup.tie.oppId, targetView: "cup", resumeCupLeg: true } }));
-      return;
+    else {
+      // Aggregate tied — no away-goals rule here, straight to extra time. The ET result is computed once
+      // and persisted on the tie so it stays consistent if we need to resume after a penalty shootout.
+      let et = cup.tie.extraTime;
+      if (!et) {
+        const xi = getXI(g.squad, g.startingXI);
+        const strength2 = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings);
+        const oppStrength = g.clubs[cup.tie.oppId].strength;
+        const diff = (strength2.attack - oppStrength) / 100;
+        const etUser = Math.random() < clamp(0.22 + diff, 0.08, 0.42) ? (Math.random() < 0.15 ? 2 : 1) : 0;
+        const etOpp = Math.random() < clamp(0.22 - diff, 0.08, 0.42) ? (Math.random() < 0.15 ? 2 : 1) : 0;
+        et = { userGoals: etUser, oppGoals: etOpp };
+        setG(prev => ({ ...prev, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], tie: { ...prev.cups[cupType].tie, extraTime: et } } } }));
+      }
+      const etUserAgg = userGoalsAgg + et.userGoals, etOppAgg = oppGoalsAgg + et.oppGoals;
+      if (etUserAgg > etOppAgg) { advanced = true; showToast(`Efter förlängning (${et.userGoals}-${et.oppGoals}): ${etUserAgg}-${etOppAgg} sammanlagt — ni går vidare!`); }
+      else if (etOppAgg > etUserAgg) { advanced = false; showToast(`Efter förlängning (${et.userGoals}-${et.oppGoals}): ${etUserAgg}-${etOppAgg} sammanlagt — ni är utslagna.`); }
+      else if (precomputedShootout) {
+        advanced = precomputedShootout.userWon;
+        shootoutNote = `Lika även efter förlängning (${etUserAgg}-${etOppAgg} sammanlagt) — straffar avgjorde: ${precomputedShootout.label}.`;
+      } else {
+        const xi = getXI(g.squad, g.startingXI);
+        const strength2 = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings);
+        const oppStrength = g.clubs[cup.tie.oppId].strength;
+        const shootout = simulatePenaltyShootout(xi, g.clubs[cup.tie.oppId]?.squad || [], strength2.attack, oppStrength, g.setPieceTakers);
+        setG(prev => ({ ...prev, view: "penaltyshootout", pendingShootout: { ...shootout, oppId: cup.tie.oppId, targetView: "cup", resumeCupLeg: true } }));
+        return;
+      }
     }
     if (advanced) {
       const gap = (g.clubs[cup.tie.oppId]?.strength || 50) - squadOverallRating(g.squad);
@@ -3821,7 +3987,7 @@ function setupCup(type, base) {
   }
   function playCupFinal() {
     const cupType = g.activeCupType;
-    const issues = lineupIssues(g.squad, g.startingXI);
+    const issues = lineupIssues(g.squad, g.startingXI, g.activeCupType);
     if (issues.length) { showToast(`⚠️ Ni har ingen matchklar startelva — byt ut spelare i Trupp-fliken: ${issues[0]}`); return; }
     const cup = g.cups[cupType];
     const opp = g.clubs[cup.finalOpponentId];
@@ -3854,12 +4020,16 @@ function setupCup(type, base) {
         });
       }
     }
-    const scorers = (scoredByIds && scoredByIds.length === userGoals)
-      ? scoredByIds.map(id => (xi.find(pl => pl.id === id) || pick(xi))?.name)
-      : pickScorer(xi, userGoals).map(pl => pl.name);
+    const scorerObjects = (scoredByIds && scoredByIds.length === userGoals)
+      ? scoredByIds.map(id => xi.find(pl => pl.id === id) || pick(xi))
+      : pickScorer(xi, userGoals);
+    const assistProviders = scorerObjects.map(s => pickAssist(xi, s, g.setPieceTakers));
+    const scorers = scorerObjects.map(pl => pl.name);
+    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, ctx.cupType, scorerObjects, assistProviders);
+    if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i finalen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
     const ratings = ratingsForResult(xi, scorers, result);
     const report = { oppName: p.oppName, oppColor: g.clubs[p.oppId]?.color, userColor: g.clubs[g.userClubId]?.color, userIsHome: true, userGoals, oppGoals, penalties, result, ratings };
-    setG(prev => ({ ...prev, view: shootout ? "penaltyshootout" : "cup", activeCupType: ctx.cupType, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, [ctx.cupType]: { ...prev.cups[ctx.cupType], pendingReport: report, finalWon: userWon } } }));
+    setG(prev => ({ ...prev, view: shootout ? "penaltyshootout" : "cup", activeCupType: ctx.cupType, squad: newSquad, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, [ctx.cupType]: { ...prev.cups[ctx.cupType], pendingReport: report, finalWon: userWon } } }));
   }
   function continueCupFinal() {
     const cupType = g.activeCupType;
@@ -4162,6 +4332,9 @@ function setupCup(type, base) {
     setG(prev => ({ ...prev, formationCode: code, startingXI: ids, lineupCells: cells || null, formationFamiliarity: code === prev.formationCode ? prev.formationFamiliarity : Math.round((prev.formationFamiliarity || 0) * 0.3) }));
     showToast(`Startelva sparad (${code}).`);
   }
+  function setSquadViewPrefs(prefs) {
+    setG(prev => ({ ...prev, squadViewPrefs: prefs }));
+  }
   function chatWithPlayer(playerId, approach) {
     const player = g.squad.find(p => p.id === playerId);
     if (!player) return 0;
@@ -4248,7 +4421,7 @@ function setupCup(type, base) {
       const player = prev.squad.find(p => p.id === playerId);
       if (!player) return prev;
       const demand = contractDemand(player);
-      const newWage = negotiatedWage || wageDemand(player);
+      const newWage = negotiatedWage || wageDemand(player, prev.reputation, prev.budget);
       const releaseClause = includeClause ? Math.round(demand.newValue * 1.6) : null;
       return { ...prev, squad: prev.squad.map(p => p.id === playerId ? { ...p, contractYears: demand.years, value: demand.newValue, wage: newWage, releaseClause } : p) };
     });
@@ -4440,13 +4613,32 @@ function setupCup(type, base) {
     showToast(`Ombyggnad påbörjad — klar om ${durationLabel}.`);
   }
   function signSponsor(slot, offer) {
-    setG(prev => ({ ...prev, budget: prev.budget + offer.bonus, sponsors: { ...prev.sponsors, [slot]: { name: offer.name, income: offer.income } }, customArenaName: slot === "stadium" ? null : prev.customArenaName }));
-    showToast(`${offer.name} är nu er sponsor! (+${formatMoney(offer.bonus)} signeringsbonus)`);
+    setG(prev => {
+      const current = prev.sponsors[slot];
+      if (current && current.roundsRemaining > 0) { showToast(`${current.name} har fortfarande ${current.roundsRemaining} omgångar kvar på avtalet — det går inte att byta sponsor förrän det löper ut, eller genom att säga upp det i förtid.`); return prev; }
+      return { ...prev, budget: prev.budget + offer.bonus, sponsors: { ...prev.sponsors, [slot]: { name: offer.name, income: offer.income, roundsRemaining: offer.contractLength, totalLength: offer.contractLength } }, customArenaName: slot === "stadium" ? null : prev.customArenaName };
+    });
+    showToast(`${offer.name} är nu er sponsor i ${offer.contractLength} omgångar! (+${formatMoney(offer.bonus)} signeringsbonus)`);
+  }
+  function terminateSponsor(slot) {
+    setG(prev => {
+      const current = prev.sponsors[slot];
+      if (!current) return prev;
+      // Breaking a live contract early costs real money — otherwise there'd be no reason contracts exist
+      // at all. The penalty scales with how much of the deal is left, so bailing right after signing hurts
+      // the most, while riding out a near-finished contract costs very little.
+      const remainingRatio = current.roundsRemaining / (current.totalLength || current.roundsRemaining || 1);
+      const penalty = Math.round(current.income * (current.totalLength || 20) * 0.35 * remainingRatio);
+      if (prev.budget < penalty) { showToast(`Otillräcklig budget — det kostar ${formatMoney(penalty)} att säga upp avtalet med ${current.name} i förtid.`); return prev; }
+      showToast(`Avtalet med ${current.name} sades upp i förtid för ${formatMoney(penalty)}.`);
+      return { ...prev, budget: prev.budget - penalty, sponsors: { ...prev.sponsors, [slot]: null } };
+    });
   }
   function nameOwnArena(name) {
     const trimmed = (name || "").trim();
     if (!trimmed) return;
     if (g.budget < 5000) { showToast("Otillräcklig budget — det kostar £5,0M att döpa arenan själva."); return; }
+    if (g.sponsors.stadium && g.sponsors.stadium.roundsRemaining > 0) { showToast(`${g.sponsors.stadium.name} har fortfarande ${g.sponsors.stadium.roundsRemaining} omgångar kvar på avtalet — säg upp det i förtid (mot en avgift) innan ni döper arenan själva.`); return; }
     setG(prev => ({ ...prev, budget: prev.budget - 5000, customArenaName: trimmed, sponsors: { ...prev.sponsors, stadium: null } }));
     showToast(`Arenan heter nu ${trimmed}! Ni betalade £5,0M själva — ingen stadionsponsor längre.`);
   }
@@ -5035,7 +5227,7 @@ function setupCup(type, base) {
                   setPieceTakers={g.setPieceTakers} onSetSetPieceTakers={setSetPieceTakers} chemistryPairs={g.chemistryPairs} onAssessPlayer={assessPlayer}
                   tactic={g.tactic} onTactic={t => setG(prev => ({ ...prev, tactic: t }))} tacticalSettings={g.tacticalSettings} onSetTactical={setTacticalOption}
                   spelide={g.spelide} onSetSpelide={setSpelide} captainId={g.captainId} onSetCaptain={setCaptain}
-                  dev={g.dev} budget={g.budget} akademiParts={g.akademiParts} youthSquad={g.youthSquad} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSellYouth={sellYouth} onPromoteYouth={promoteYouth} onSubViewChange={setSubViewOpen} pendingSelectedPlayerId={g.pendingSelectedPlayerId} onClearPendingSelection={() => setG(prev => ({ ...prev, pendingSelectedPlayerId: null }))} />
+                  dev={g.dev} budget={g.budget} akademiParts={g.akademiParts} youthSquad={g.youthSquad} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSellYouth={sellYouth} onPromoteYouth={promoteYouth} onSubViewChange={setSubViewOpen} pendingSelectedPlayerId={g.pendingSelectedPlayerId} onClearPendingSelection={() => setG(prev => ({ ...prev, pendingSelectedPlayerId: null }))} reputation={g.reputation} squadViewPrefs={g.squadViewPrefs} onSetSquadViewPrefs={setSquadViewPrefs} />
               ) : g.activeTab === "club" ? (
                 <ClubTab club={userClub} dev={g.dev} budget={g.budget} history={g.history} reputation={g.reputation} fanbase={g.fanbase}
                   sponsors={g.sponsors} staff={g.staff} boardConfidence={g.boardConfidence} boardTarget={boardTargetLabel(userClub.archetype, userClub.division).label}
@@ -5048,7 +5240,7 @@ function setupCup(type, base) {
                 <EconomyTab budget={g.budget} reputation={g.reputation} division={userClub.division} sponsringLevel={g.dev.sponsring} squad={g.squad} history={g.history}
                   season={g.season} round={g.round} totalRounds={g.schedule.length} seasonIncomeTotal={g.seasonIncomeTotal || 0} seasonWageTotal={g.seasonWageTotal || 0}
                   ticketPrice={g.ticketPrice} onSetTicketPrice={setTicketPrice}
-                  loans={g.loans} onTakeLoan={takeLoan} sponsors={g.sponsors} dev={g.dev} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSignSponsor={signSponsor}
+                  loans={g.loans} onTakeLoan={takeLoan} sponsors={g.sponsors} dev={g.dev} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSignSponsor={signSponsor} onTerminateSponsor={terminateSponsor}
                   club={userClub} arenaStands={g.arenaStands} arenaFacilities={g.arenaFacilities} arenaConstruction={g.arenaConstruction} onStartConstruction={startArenaConstruction} recentMatchFinances={g.recentMatchFinances} transferInstallments={g.transferInstallments} onSubViewChange={setSubViewOpen} customArenaName={g.customArenaName} onNameArena={nameOwnArena} />
               ) : g.activeTab === "personal" ? (
                 <PersonalTab budget={g.budget} staff={g.staff} reputation={g.reputation} homeCountry={userClub.league} staffCandidates={g.staffCandidates}
@@ -5194,7 +5386,188 @@ function SaveSelectView({ saves, onSelect, onNew, onDelete, onExport, onImport, 
 }
 
 const ONBOARDING_FONT_STYLE = `@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap'); .font-display{font-family:'Fraunces','Inter',serif;font-weight:700;letter-spacing:-0.005em;} ::-webkit-scrollbar{display:none;}`;
-function DatabaseView({ world, onSave, onBack }) {
+// Validates an imported/user-created database JSON against the same structure the standard database
+// (generateWorld()) produces: an object keyed by club id, each club holding a squad array of players.
+// Checks required fields, duplicate IDs (both clubs and players), and relational validity (league/division).
+function validateDatabaseJSON(data) {
+  const errors = [];
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return { valid: false, errors: ["Filen måste vara ett JSON-objekt med klubb-ID:n som nycklar (samma struktur som standarddatabasen)."] };
+  }
+  const clubKeys = Object.keys(data);
+  if (!clubKeys.length) return { valid: false, errors: ["Databasen innehåller inga klubbar."] };
+  const validLeagueIds = new Set(LEAGUES.map(l => l.id));
+  const requiredClubFields = ["id", "name", "league", "division", "color", "strength", "archetype", "squad"];
+  const requiredPlayerFields = ["id", "name", "age", "attack", "defense", "pos", "specificPosition", "value", "wage"];
+  const seenClubIds = new Set();
+  const seenPlayerIds = new Set();
+  clubKeys.forEach(key => {
+    const c = data[key];
+    if (!c || typeof c !== "object") { errors.push(`Klubben "${key}" är inte ett giltigt objekt.`); return; }
+    requiredClubFields.forEach(f => { if (c[f] === undefined) errors.push(`Klubben "${key}" saknar obligatoriskt fält: "${f}".`); });
+    if (c.id && c.id !== key) errors.push(`Klubben "${key}" har ett id ("${c.id}") som inte matchar dess nyckel — ogiltig relation.`);
+    if (c.id) { if (seenClubIds.has(c.id)) errors.push(`Dubblerat klubb-ID: "${c.id}".`); seenClubIds.add(c.id); }
+    if (c.league !== undefined && !validLeagueIds.has(c.league)) errors.push(`Klubben "${key}" har ett okänt land: "${c.league}" (måste vara ett av: ${[...validLeagueIds].join(", ")}).`);
+    if (c.division !== undefined && ![1, 2, 3].includes(c.division)) errors.push(`Klubben "${key}" har en ogiltig division: "${c.division}" (måste vara 1, 2 eller 3).`);
+    if (c.squad !== undefined && !Array.isArray(c.squad)) errors.push(`Klubben "${key}" har en ogiltig trupp — "squad" måste vara en lista.`);
+    else if (Array.isArray(c.squad)) {
+      c.squad.forEach((p, i) => {
+        if (!p || typeof p !== "object") { errors.push(`Spelare #${i + 1} i "${key}" är inte ett giltigt objekt.`); return; }
+        requiredPlayerFields.forEach(f => { if (p[f] === undefined) errors.push(`Spelaren "${p.name || "#" + (i + 1)}" i "${key}" saknar obligatoriskt fält: "${f}".`); });
+        if (p.id) { if (seenPlayerIds.has(p.id)) errors.push(`Dubblerat spelar-ID: "${p.id}".`); seenPlayerIds.add(p.id); }
+      });
+    }
+  });
+  return { valid: errors.length === 0, errors: errors.slice(0, 60) };
+}
+function downloadJSONFile(data, filename) {
+  try {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (e) {}
+}
+function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
+  const [customDbs, setCustomDbs] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [editingDb, setEditingDb] = useState(null); // { id, name, isCustom, data }
+  const [importErrors, setImportErrors] = useState(null);
+  const [namePromptFor, setNamePromptFor] = useState(null); // "create" | "saveas" | { renameId }
+  const [nameInput, setNameInput] = useState("");
+  const [toast, setToast] = useState(null);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => { (async () => {
+    try { const res = await window.storage?.get("tranarbanken-db-index"); setCustomDbs(res ? JSON.parse(res.value) : []); } catch (e) { setCustomDbs([]); }
+    setLoaded(true);
+  })(); }, []);
+
+  function flash(msg) { setToast(msg); setTimeout(() => setToast(null), 3500); }
+  async function persistList(list) { setCustomDbs(list); try { await window.storage?.set("tranarbanken-db-index", JSON.stringify(list)); } catch (e) {} }
+  async function loadDbData(id) { try { const res = await window.storage?.get(`tranarbanken-db-${id}`); return res ? JSON.parse(res.value) : null; } catch (e) { return null; } }
+  async function saveDbData(id, data) { try { await window.storage?.set(`tranarbanken-db-${id}`, JSON.stringify(data)); } catch (e) {} }
+
+  async function confirmCreateOrSaveAs(sourceData) {
+    const name = nameInput.trim() || "Namnlös databas";
+    const id = uid();
+    await saveDbData(id, sourceData);
+    await persistList([...customDbs, { id, name, createdAt: new Date().toISOString() }]);
+    setNamePromptFor(null); setNameInput("");
+    setEditingDb({ id, name, isCustom: true, data: sourceData });
+    flash(`"${name}" skapad.`);
+  }
+  async function deleteDb(id) {
+    await persistList(customDbs.filter(d => d.id !== id));
+    try { await window.storage?.delete(`tranarbanken-db-${id}`); } catch (e) {}
+    flash("Databas borttagen.");
+  }
+  async function openCustomDb(entry) {
+    const data = await loadDbData(entry.id);
+    if (!data) { flash("Kunde inte läsa databasen."); return; }
+    setEditingDb({ id: entry.id, name: entry.name, isCustom: true, data });
+  }
+  function handleImportFile(file) {
+    const reader = new FileReader();
+    reader.onload = async e => {
+      let data;
+      try { data = JSON.parse(e.target.result); } catch (err) { setImportErrors(["Kunde inte tolka filen som giltig JSON."]); return; }
+      const { valid, errors } = validateDatabaseJSON(data);
+      if (!valid) { setImportErrors(errors); return; }
+      setImportErrors(null);
+      const id = uid();
+      const name = file.name.replace(/\.json$/i, "") || `Importerad databas ${customDbs.length + 1}`;
+      await saveDbData(id, data);
+      await persistList([...customDbs, { id, name, createdAt: new Date().toISOString() }]);
+      flash(`"${name}" importerad och validerad utan fel.`);
+    };
+    reader.readAsText(file);
+  }
+
+  if (editingDb) {
+    return <DatabaseView world={editingDb.data} dbName={editingDb.name} isCustom={editingDb.isCustom}
+      onBack={() => setEditingDb(null)}
+      onSave={async clubs => { await saveDbData(editingDb.id, clubs); flash(`"${editingDb.name}" sparad.`); }}
+      onSaveAs={clubs => { setNamePromptFor({ type: "saveas", data: clubs }); setNameInput(`${editingDb.name} (kopia)`); }}
+      onExport={(clubs, name) => downloadJSONFile(clubs, `${(name || "databas").replace(/\s+/g, "_")}.json`)}
+      onSaveAndPlay={clubs => onUseDatabase(editingDb.id, editingDb.name, clubs)} />;
+  }
+
+  return (
+    <div style={{ background: C.turfDeep, minHeight: "100vh", color: C.paper }} className="p-5">
+      <input ref={fileInputRef} type="file" accept="application/json,.json" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) handleImportFile(f); e.target.value = ""; }} />
+      <button onClick={onBack} className="text-sm mb-3" style={{ color: C.goldSoft }}>← Avbryt</button>
+      <div className="font-display text-2xl mb-1" style={{ color: C.goldSoft }}>Databashanterare</div>
+      <div className="text-11 mb-4" style={{ color: C.paperDim, maxWidth: 520 }}>Skapa egna databaser baserade på standarddatabasen, importera egna JSON-filer, eller ladda ner en mall att fylla i. Standarddatabasen kan aldrig skrivas över.</div>
+
+      {toast && <div className="text-11 mb-3 px-3 py-2 rounded-lg" style={{ background: "rgba(201,154,62,0.18)", border: `1px solid ${C.gold}`, color: C.goldSoft, maxWidth: 520 }}>{toast}</div>}
+      {importErrors && (
+        <div className="mb-3 p-3 rounded-lg" style={{ background: "rgba(180,68,59,0.15)", border: `1px solid #B4443B`, maxWidth: 520 }}>
+          <div className="text-11 font-bold mb-1" style={{ color: "#E08A82" }}>Importen misslyckades ({importErrors.length} fel):</div>
+          <div className="text-9 space-y-0.5" style={{ color: "#E0B8B4", maxHeight: 160, overflowY: "auto" }}>
+            {importErrors.map((e, i) => <div key={i}>• {e}</div>)}
+          </div>
+          <button onClick={() => setImportErrors(null)} className="text-9 font-semibold mt-2" style={{ color: C.goldSoft }}>Stäng</button>
+        </div>
+      )}
+
+      <div style={{ maxWidth: 520 }} className="space-y-1.5 mb-4">
+        <div className="text-9 uppercase tracking-wide font-semibold mb-1" style={{ color: C.paperDim }}>Standarddatabas</div>
+        <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl" style={{ background: "rgba(255,255,255,0.08)", border: `1px solid ${C.gold}` }}>
+          <span style={{ fontSize: 20 }}>🌍</span>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold">Standarddatabas</div>
+            <div className="text-9" style={{ color: C.paperDim }}>Spelets ursprungliga, slumpmässigt genererade värld. Kan aldrig skrivas över.</div>
+          </div>
+          <button onClick={() => setEditingDb({ id: null, name: "Standarddatabas", isCustom: false, data: standardWorld })} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg shrink-0" style={{ background: "rgba(255,255,255,0.12)", color: C.paper }}>Visa</button>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 520 }} className="grid grid-cols-3 gap-2 mb-4">
+        <button onClick={() => { setNamePromptFor({ type: "create", data: standardWorld }); setNameInput(`Min databas ${customDbs.length + 1}`); }} className="py-2.5 rounded-xl text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>➕ Ny databas</button>
+        <button onClick={() => fileInputRef.current?.click()} className="py-2.5 rounded-xl text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paper }}>⬆️ Importera JSON</button>
+        <button onClick={() => downloadJSONFile(standardWorld, "tranarbanken_databasmall.json")} className="py-2.5 rounded-xl text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paper }}>📄 Ladda ner mall</button>
+      </div>
+
+      <div style={{ maxWidth: 520 }}>
+        <div className="text-9 uppercase tracking-wide font-semibold mb-1" style={{ color: C.paperDim }}>Dina databaser ({customDbs.length})</div>
+        {!loaded ? null : customDbs.length === 0 ? (
+          <div className="text-11 py-3" style={{ color: C.paperDim }}>Inga egna databaser ännu. Skapa en kopia eller importera en JSON-fil ovan.</div>
+        ) : (
+          <div className="space-y-1.5">
+            {customDbs.map(d => (
+              <div key={d.id} className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl" style={{ background: "rgba(255,255,255,0.06)" }}>
+                <span style={{ fontSize: 20 }}>🗂️</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold truncate">{d.name}</div>
+                  <div className="text-9" style={{ color: C.paperDim }}>Skapad {new Date(d.createdAt).toLocaleDateString("sv-SE")}</div>
+                </div>
+                <button onClick={() => openCustomDb(d)} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg shrink-0" style={{ background: "rgba(255,255,255,0.12)", color: C.paper }}>Redigera</button>
+                <button onClick={() => deleteDb(d.id)} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg shrink-0" style={{ background: "rgba(180,68,59,0.2)", color: "#E08A82" }}>Ta bort</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {namePromptFor && (
+        <>
+          <div onClick={() => setNamePromptFor(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 40 }} />
+          <div style={{ position: "fixed", top: "35%", left: 20, right: 20, maxWidth: 400, margin: "0 auto", background: C.paper, color: C.ink, borderRadius: 16, padding: 20, zIndex: 41 }}>
+            <div className="font-display text-lg mb-1">{namePromptFor.type === "create" ? "Namnge din nya databas" : "Namnge kopian"}</div>
+            <input autoFocus value={nameInput} onChange={e => setNameInput(e.target.value)} className="w-full px-3 py-2 rounded-lg text-sm mt-2 mb-3" style={{ background: C.paperDim, color: C.ink }} placeholder="Databasnamn" />
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => setNamePromptFor(null)} className="py-2 rounded-xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.inkSoft }}>Avbryt</button>
+              <button onClick={() => confirmCreateOrSaveAs(namePromptFor.data)} className="py-2 rounded-xl text-sm font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Skapa</button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+function DatabaseView({ world, dbName, isCustom, onSave, onSaveAs, onExport, onSaveAndPlay, onBack }) {
   const [clubs, setClubs] = useState(world);
   const [leagueId, setLeagueId] = useState(LEAGUES[0].id);
   const [division, setDivision] = useState(1);
@@ -5321,9 +5694,9 @@ function DatabaseView({ world, onSave, onBack }) {
 
   return (
     <div style={{ background: C.turfDeep, minHeight: "100vh", color: C.paper }} className="p-5">
-      <button onClick={onBack} className="text-sm mb-3" style={{ color: C.goldSoft }}>← Avbryt</button>
-      <div className="font-display text-2xl mb-1" style={{ color: C.goldSoft }}>Databas</div>
-      <div className="text-11 mb-4" style={{ color: C.paperDim }}>Redigera lag och spelare i hela spelvärlden. Ändringar sparas till en ny karriär du startar.</div>
+      <button onClick={onBack} className="text-sm mb-3" style={{ color: C.goldSoft }}>← Tillbaka till databaslistan</button>
+      <div className="font-display text-2xl mb-1" style={{ color: C.goldSoft }}>{dbName || "Databas"}</div>
+      <div className="text-11 mb-4" style={{ color: C.paperDim }}>Redigera lag och spelare. {isCustom ? "Spara databasen för att behålla ändringarna permanent, eller fortsätt direkt till klubbval." : "Standarddatabasen kan inte sparas över — spara som en ny databas istället."}</div>
       <div className="flex gap-1.5 overflow-x-auto pb-1 mb-2">
         {LEAGUES.map(l => (
           <button key={l.id} onClick={() => setLeagueId(l.id)} className="px-3 py-1.5 rounded-full text-11 font-semibold shrink-0" style={leagueId === l.id ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.1)", color: C.paperDim }}>{l.name}</button>
@@ -5343,7 +5716,15 @@ function DatabaseView({ world, onSave, onBack }) {
           </button>
         ))}
       </div>
-      <button onClick={() => onSave(clubs)} className="pulse-cta w-full py-2.5 rounded-xl font-display text-sm tracking-wide mt-5" style={{ background: C.gold, color: C.turfDeep, maxWidth: 480 }}>✅ SPARA & FORTSÄTT TILL KLUBBVAL</button>
+      <div className="grid grid-cols-2 gap-2 mt-5" style={{ maxWidth: 480 }}>
+        {isCustom ? (
+          <button onClick={() => onSave(clubs)} className="py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: "rgba(255,255,255,0.1)", color: C.paper }}>💾 Spara databas</button>
+        ) : (
+          <button onClick={() => onSaveAs(clubs)} className="py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: "rgba(255,255,255,0.1)", color: C.paper }}>💾 Spara som ny databas</button>
+        )}
+        <button onClick={() => onExport(clubs, dbName)} className="py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: "rgba(255,255,255,0.1)", color: C.paper }}>⬇️ Exportera JSON</button>
+      </div>
+      <button onClick={() => onSaveAndPlay(clubs)} className="pulse-cta w-full py-2.5 rounded-xl font-display text-sm tracking-wide mt-2.5" style={{ background: C.gold, color: C.turfDeep, maxWidth: 480 }}>✅ ANVÄND DENNA DATABAS & FORTSÄTT TILL KLUBBVAL</button>
     </div>
   );
 }
@@ -5404,10 +5785,24 @@ function Onboarding({ world, onConfirm, onCancel }) {
   const [viewingSquadId, setViewingSquadId] = useState(null);
   const [step, setStep] = useState(null); // null | "name" | "press"
   const [managerName, setManagerName] = useState("");
-  const season1Qualifiers = useMemo(() => buildSeason1Qualifiers(world), [world]);
+  const [customDbs, setCustomDbs] = useState([]);
+  const [selectedDbId, setSelectedDbId] = useState(null); // null = standard database (the `world` prop)
+  const [activeWorld, setActiveWorld] = useState(world);
+  useEffect(() => { (async () => {
+    try { const res = await window.storage?.get("tranarbanken-db-index"); setCustomDbs(res ? JSON.parse(res.value) : []); } catch (e) { setCustomDbs([]); }
+  })(); }, []);
+  async function selectDatabase(id) {
+    setSelectedDbId(id);
+    if (!id) { setActiveWorld(world); return; }
+    try {
+      const res = await window.storage?.get(`tranarbanken-db-${id}`);
+      if (res) setActiveWorld(JSON.parse(res.value));
+    } catch (e) {}
+  }
+  const season1Qualifiers = useMemo(() => buildSeason1Qualifiers(activeWorld), [activeWorld]);
 
   if (viewingSquadId) {
-    return <ClubSquadPreviewView club={world[viewingSquadId]} onBack={() => setViewingSquadId(null)} />;
+    return <ClubSquadPreviewView club={activeWorld[viewingSquadId]} onBack={() => setViewingSquadId(null)} />;
   }
 
   if (!leagueId) {
@@ -5417,6 +5812,13 @@ function Onboarding({ world, onConfirm, onCancel }) {
           {onCancel && <button onClick={onCancel} style={{ position: "fixed", bottom: 14, right: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Bakåt</button>}
           <div className="font-display text-3xl" style={{ color: C.goldSoft }}>TRÄNARBÄNKEN</div>
           <div className="text-sm mt-1" style={{ color: C.paperDim }}>Välj land att starta din managerkarriär i.</div>
+          <div className="mt-4">
+            <div className="text-9 uppercase tracking-wide font-semibold mb-1" style={{ color: C.paperDim }}>Databas</div>
+            <select value={selectedDbId || ""} onChange={e => selectDatabase(e.target.value || null)} className="w-full px-3 py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.paper, color: C.ink }}>
+              <option value="">🌍 Standarddatabas</option>
+              {customDbs.map(d => <option key={d.id} value={d.id}>🗂️ {d.name}</option>)}
+            </select>
+          </div>
         </div>
         <div className="max-w-md mx-auto w-full px-5 space-y-3 pb-10">
           {LEAGUES.map(l => (
@@ -5452,8 +5854,8 @@ function Onboarding({ world, onConfirm, onCancel }) {
     );
   }
 
-  const clubs = Object.values(world).filter(c => c.league === leagueId && c.division === division);
-  const selectedClub = clubId ? world[clubId] : null;
+  const clubs = Object.values(activeWorld).filter(c => c.league === leagueId && c.division === division);
+  const selectedClub = clubId ? activeWorld[clubId] : null;
 
   if (clubId && step === "name") {
     return (
@@ -5491,7 +5893,7 @@ function Onboarding({ world, onConfirm, onCancel }) {
           </div>
           <div className="text-11 px-1" style={{ color: C.paperDim }}>Journalisterna vill veta hur du ser på uppdraget. Vad säger du?</div>
           {options.map(opt => (
-            <button key={opt.key} onClick={() => onConfirm(leagueId, division, clubId, managerName.trim(), opt.key)} className="w-full text-left rounded-2xl p-4" style={{ background: C.paper, color: C.ink }}>
+            <button key={opt.key} onClick={() => onConfirm(leagueId, division, clubId, managerName.trim(), opt.key, activeWorld)} className="w-full text-left rounded-2xl p-4" style={{ background: C.paper, color: C.ink }}>
               <div className="font-semibold text-sm">{opt.label}</div>
               <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>{opt.desc}</div>
             </button>
@@ -5924,7 +6326,7 @@ function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRo
 }
 
 function MatchPrepView({ g, userClub, oppClub, countryName, isHome, onBack, onSetPlannedSub, onSetTeamTalk, onRestStars, onSetTicketPrice, onGotoSquad, onPlay }) {
-  const matchIssues = lineupIssues(g.squad, g.startingXI);
+  const matchIssues = lineupIssues(g.squad, g.startingXI, "league");
   const xiPreview = getXI(g.squad, g.startingXI);
   const strengthPreview = userStrength(xiPreview, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff);
   const report = oppClub ? scoutingReport(strengthPreview.attack, strengthPreview.defense, oppClub) : null;
@@ -6080,6 +6482,12 @@ function MatchResultView({ report, userTeamName, competitionLabel, onContinue })
             <span className="flex items-center gap-1.5 w-28"><span style={{ width: 18, height: 18, borderRadius: "50%", background: (report.userIsHome ? report.oppColor : report.userColor) || C.paperDim, border: "2px solid rgba(30,42,34,0.15)", flexShrink: 0 }} /><span className="text-sm font-medium text-left truncate">{awayName}</span></span>
           </div>
           {penalties && <div className="text-xs mt-1.5 font-mono" style={{ color: C.inkSoft }}>Straffar: {penalties}</div>}
+          {report.attendance != null && (
+            <div className="text-10 mt-2 font-mono" style={{ color: C.inkSoft }}>
+              🎟️ {report.attendance.toLocaleString("sv-SE")} åskådare
+              {report.arenaCapacity ? ` · ${Math.round((report.attendance / report.arenaCapacity) * 100)}% beläggning` : ""}
+            </div>
+          )}
         </div>
       </div>
       <button onClick={onContinue} className="pulse-cta w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-1" style={{ background: C.gold, color: C.turfDeep }}>
@@ -6443,10 +6851,13 @@ function PenaltyShootoutView({ shootout, userClub, oppClub, onComplete }) {
       </PaperCard>
       <PaperCard>
         <div className="text-9 uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Straffar</div>
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-2">
           {visibleKicks.map((k, i) => (
-            <div key={i} className="w-7 h-7 rounded-full flex items-center justify-center text-xs" style={{ background: k.team === "user" ? (k.scored ? "rgba(63,138,107,0.25)" : "rgba(180,68,59,0.25)") : (k.scored ? "rgba(63,138,107,0.12)" : "rgba(180,68,59,0.12)"), border: `1.5px solid ${k.team === "user" ? C.gold : C.paperDim}` }}>
-              {k.scored ? "⚽" : "❌"}
+            <div key={i} className="flex flex-col items-center" style={{ width: 44 }}>
+              <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs" style={{ background: k.team === "user" ? (k.scored ? "rgba(63,138,107,0.25)" : "rgba(180,68,59,0.25)") : (k.scored ? "rgba(63,138,107,0.12)" : "rgba(180,68,59,0.12)"), border: `1.5px solid ${k.team === "user" ? C.gold : C.paperDim}` }}>
+                {k.scored ? "⚽" : "❌"}
+              </div>
+              <div className="text-9 font-semibold mt-0.5 truncate" style={{ maxWidth: 44, color: C.inkSoft }}>{k.playerName.split(" ").slice(-1)[0]}</div>
             </div>
           ))}
         </div>
@@ -6993,14 +7404,21 @@ function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onConti
   // knockout phase (two-legged)
   if (cup.tie.leg1 && cup.tie.leg === 2 && !cup.tie.leg2 && !cup.pendingReport) {
     const opp = clubs[cup.tie.oppId];
-    const leg1Score = cup.tie.userHomeLeg1 ? `${cup.tie.leg1.userGoals}–${cup.tie.leg1.oppGoals}` : `${cup.tie.leg1.oppGoals}–${cup.tie.leg1.userGoals}`;
+    const userClub = clubs[userClubId];
+    const userGoals1 = cup.tie.leg1.userGoals, oppGoals1 = cup.tie.leg1.oppGoals;
+    const status = userGoals1 > oppGoals1 ? { text: "Ni leder efter match 1!", color: C.win } : userGoals1 < oppGoals1 ? { text: "Ni ligger under efter match 1.", color: C.loss } : { text: "Lika efter match 1 — allt att spela om.", color: C.gold };
     return (
       <div className="rise-in space-y-2.5">
         <PaperCard>
           <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{cup.label} · {cup.roundName} · Match 2 av 2</div>
-          <div className="text-center text-sm mt-2" style={{ color: C.inkSoft }}>Efter första mötet: {leg1Score}</div>
-          <div className="flex items-center justify-center gap-3 mt-3"><span className="text-sm font-medium">{userTeamName}</span><span className="font-display text-xl" style={{ color: C.inkSoft }}>VS</span><span className="text-sm font-medium">{opp.name}</span></div>
-          <button onClick={onPlayLeg} className="mt-4 w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-2" style={{ background: C.gold, color: C.turfDeep }}><Play size={16} fill={C.turfDeep} /> SPELA MATCH 2</button>
+          <div className="text-9 uppercase tracking-wide font-semibold text-center mt-3" style={{ color: C.inkSoft }}>Resultat från match 1 ({cup.tie.userHomeLeg1 ? "hemma" : "borta"})</div>
+          <div className="flex items-center justify-center gap-4 mt-1.5">
+            <div className="flex flex-col items-center gap-1"><ClubJersey club={userClub} size={30} /><span className="text-11 font-semibold">{userTeamName}</span></div>
+            <div className="font-display text-2xl">{userGoals1} – {oppGoals1}</div>
+            <div className="flex flex-col items-center gap-1"><ClubJersey club={opp} size={30} /><span className="text-11 font-semibold">{opp.name}</span></div>
+          </div>
+          <div className="text-center text-sm font-bold mt-2.5 py-1.5 rounded-lg" style={{ color: status.color, background: `${status.color}1a` }}>{status.text}</div>
+          <button onClick={onPlayLeg} className="mt-3 w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-2" style={{ background: C.gold, color: C.turfDeep }}><Play size={16} fill={C.turfDeep} /> SPELA MATCH 2</button>
         </PaperCard>
       </div>
     );
@@ -8084,8 +8502,17 @@ function formationPresetToCells(code, squad, xiIds) {
 function initialLineup(squad, startingXI, formationCode, savedCells) {
   if (savedCells && Object.keys(savedCells).length) {
     const valid = {};
-    Object.entries(savedCells).forEach(([k, id]) => { if (squad.some(p => p.id === id)) valid[k] = id; });
-    if (Object.keys(valid).length) return valid;
+    Object.entries(savedCells).forEach(([k, id]) => { if (!id || squad.some(p => p.id === id)) valid[k] = id; });
+    const entries = Object.entries(valid);
+    const maxSlots = (startingXI && startingXI.length) || 11;
+    if (entries.length > maxSlots) {
+      // More cells than the starting XI can ever fill — almost always a leftover from switching formations
+      // or an older save. Keep filled cells first, then trim any excess empty placeholders.
+      entries.sort(([, a], [, b]) => (b ? 1 : 0) - (a ? 1 : 0));
+      const trimmed = {};
+      entries.slice(0, maxSlots).forEach(([k, id]) => { trimmed[k] = id; });
+      if (Object.keys(trimmed).length) return trimmed;
+    } else if (entries.length) return valid;
   }
   return formationPresetToCells(formationCode || "4-4-2", squad, startingXI);
 }
@@ -8546,12 +8973,10 @@ function deriveFormationLabel(lineup, squad) {
   });
   return `${counts.FÖ}-${counts.MF}-${counts.AN}`;
 }
-function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSaveFormation, onSelectPlayer }) {
+function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSaveFormation, onSelectPlayer, rowMode, onSetRowMode, showAllBench, onSetShowAllBench, clubOverall, squadSize }) {
   const [lineup, setLineup] = useState(() => initialLineup(squad, startingXI, formationCode, lineupCells));
   const [selectedSlotKey, setSelectedSlotKey] = useState(null);
   const [selectedBenchId, setSelectedBenchId] = useState(null);
-  const [rowMode, setRowMode] = useState("detaljerad");
-  const [showAllBench, setShowAllBench] = useState(false);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
   const [dragTileId, setDragTileId] = useState(null);
   const [dragPos, setDragPos] = useState(null);
@@ -8710,8 +9135,8 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
           <div className="flex items-center justify-between px-2.5 pt-2.5 pb-1">
             <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Startelva ({filledStarterRows.length}/11)</div>
             <div className="flex rounded-lg overflow-hidden" style={{ border: `1px solid ${C.paperDim}` }}>
-              <button onClick={() => setRowMode("detaljerad")} className="px-2 py-0.5 text-9 font-semibold" style={rowMode === "detaljerad" ? { background: C.turf, color: C.paper } : { background: "transparent", color: C.inkSoft }}>Detaljerad</button>
-              <button onClick={() => setRowMode("kompakt")} className="px-2 py-0.5 text-9 font-semibold" style={rowMode === "kompakt" ? { background: C.turf, color: C.paper } : { background: "transparent", color: C.inkSoft }}>Kompakt</button>
+              <button onClick={() => onSetRowMode("detaljerad")} className="px-2 py-0.5 text-9 font-semibold" style={rowMode === "detaljerad" ? { background: C.turf, color: C.paper } : { background: "transparent", color: C.inkSoft }}>Detaljerad</button>
+              <button onClick={() => onSetRowMode("kompakt")} className="px-2 py-0.5 text-9 font-semibold" style={rowMode === "kompakt" ? { background: C.turf, color: C.paper } : { background: "transparent", color: C.inkSoft }}>Kompakt</button>
             </div>
           </div>
           {rowMode === "detaljerad" && (
@@ -8726,22 +9151,33 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
           <div className="flex items-center justify-between px-2.5 pt-2.5 pb-1">
             <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Bänken ({benchPlayers.length})</div>
             {benchPlayers.length > 4 && (
-              <button onClick={() => setShowAllBench(v => !v)} className="text-9 font-semibold px-2 py-0.5 rounded-lg" style={{ background: C.paperDim, color: C.inkSoft }}>{showAllBench ? "Visa färre ▲" : `Visa alla ▼`}</button>
+              <button onClick={() => onSetShowAllBench(!showAllBench)} className="text-9 font-semibold px-2 py-0.5 rounded-lg" style={{ background: C.paperDim, color: C.inkSoft }}>{showAllBench ? "Visa färre ▲" : `Visa alla ▼`}</button>
             )}
           </div>
           {(showAllBench ? benchPlayers : benchPlayers.slice(0, 4)).map(p => <LineupTablePlayerRow key={p.id} player={p} compact={rowMode === "kompakt"} {...rowProps} />)}
         </PaperCard>
       </div>
       <PaperCard style={{ minWidth: 0 }}>
-        <div className="text-9 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Startelvans overall</div>
-        <div className="mt-1 mb-2"><StarRating rating={overallToStars(squadOverallRating(filledStarterRows.map(r => r.player)))} size={10} /></div>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <div className="text-9 uppercase tracking-wide font-semibold truncate" style={{ color: C.inkSoft }}>Truppen <span className="font-mono" style={{ color: startingXI.length === 11 ? C.win : C.loss }}>({startingXI.length}/11)</span></div>
+            <div className="mt-0.5 flex items-center gap-1"><StarRating rating={overallToStars(clubOverall)} size={6} showLabel={false} /><span className="font-mono text-9 font-bold" style={{ color: C.ink }}>{(clubOverall / 10).toFixed(1)}</span></div>
+          </div>
+          <div style={{ borderLeft: `1px dashed ${C.paperDim}`, paddingLeft: 8 }}>
+            <div className="text-9 uppercase tracking-wide font-semibold truncate" style={{ color: C.inkSoft }}>Startelvan</div>
+            <div className="mt-0.5 flex items-center gap-1">
+              <StarRating rating={overallToStars(squadOverallRating(filledStarterRows.map(r => r.player)))} size={6} showLabel={false} />
+              <span className="font-mono text-9 font-bold" style={{ color: C.ink }}>{(squadOverallRating(filledStarterRows.map(r => r.player)) / 10).toFixed(1)}</span>
+            </div>
+          </div>
+        </div>
         {selectedSlotKey ? (
-          <div className="flex items-center justify-between gap-2 mb-2 px-2.5 py-1.5 rounded-lg" style={{ background: C.gold, color: C.turfDeep }}>
+          <div className="flex items-center justify-between gap-2 mb-2 px-2.5 py-1.5 rounded-lg mt-2.5" style={{ background: C.gold, color: C.turfDeep }}>
             <span className="text-11 font-bold">📍 {nearestPositionForCell(selectedSlot.col, selectedSlot.row)} vald — välj vem som ska spela där nedan</span>
             <button onClick={() => setSelectedSlotKey(null)} className="text-9 font-bold px-2 py-1 rounded-md shrink-0" style={{ background: "rgba(19,34,29,0.15)" }}>Stäng</button>
           </div>
         ) : null}
-        <div ref={pitchRef} style={{ position: "relative", width: "100%", aspectRatio: "5/8.5", margin: "0 auto", background: "linear-gradient(90deg,#1B5E45,#134C39)", borderRadius: 12, overflow: "hidden", border: "2px solid rgba(255,255,255,0.2)", touchAction: "none" }}>
+        <div ref={pitchRef} style={{ position: "relative", width: "100%", aspectRatio: "5/8.5", margin: "10px auto 0", background: "linear-gradient(90deg,#1B5E45,#134C39)", borderRadius: 12, overflow: "hidden", border: "2px solid rgba(255,255,255,0.2)", touchAction: "none" }}>
           <PitchMarkings vertical />
           {dragTileId && dragTargetCell && (() => {
             const [tCol, tRow] = dragTargetCell.split("-").map(Number);
@@ -8752,17 +9188,7 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
             const { key, col, row, player } = r;
             const leftPct = (row + 0.5) / GRID_ROWS * 100, topPct = (GRID_COLS - 1 - col + 0.5) / GRID_COLS * 100;
             const isSlotSelected = selectedSlotKey === key;
-            if (!player) {
-              return (
-                <div key={key} onClick={() => openPositionPicker(key)}
-                  style={{ position: "absolute", left: `${leftPct}%`, top: `${topPct}%`, zIndex: 2, transform: "translate(-50%, -50%)", display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer" }}>
-                  <div style={{ width: 26, height: 26, borderRadius: "50%", background: "rgba(255,255,255,0.08)", border: `2px dashed ${isSlotSelected ? C.gold : "rgba(255,255,255,0.5)"}`, display: "flex", alignItems: "center", justifyContent: "center", animation: isSlotSelected ? "selectPulse 1.1s ease-in-out infinite" : "none" }}>
-                    <span className="font-display" style={{ fontSize: 8, color: "rgba(255,255,255,0.75)" }}>{nearestPositionForCell(col, row)}</span>
-                  </div>
-                  <div className="font-semibold" style={{ fontSize: 6.5, color: "rgba(255,255,255,0.65)", background: "rgba(0,0,0,0.4)", padding: "0 3px", borderRadius: 3, marginTop: 2, lineHeight: "9px" }}>Ledig</div>
-                </div>
-              );
-            }
+            if (!player) return null;
             const fit = positionFit(player.specificPosition, col, row);
             const unavailable = player.injuryWeeks > 0 || player.suspendedMatches > 0 || player.internationalDuty;
             const fitColor = unavailable ? C.loss : fit >= 0.8 ? C.win : fit >= 0.55 ? C.gold : C.loss;
@@ -9016,7 +9442,7 @@ function TacticsPanel({ squad, startingXI, tactic, onTactic, tacticalSettings, o
     </div>
   );
 }
-function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, formationCode, lineupCells, onSaveFormation, onChat, clubs, round, onSendLoan, outgoingLoans, setPieceTakers, onSetSetPieceTakers, chemistryPairs, onAssessPlayer, tactic, onTactic, tacticalSettings, onSetTactical, spelide, onSetSpelide, captainId, onSetCaptain, dev, budget, akademiParts, youthSquad, onUpgrade, onUpgradePart, onSellYouth, onPromoteYouth, onSubViewChange, pendingSelectedPlayerId, onClearPendingSelection }) {
+function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, formationCode, lineupCells, onSaveFormation, onChat, clubs, round, onSendLoan, outgoingLoans, setPieceTakers, onSetSetPieceTakers, chemistryPairs, onAssessPlayer, tactic, onTactic, tacticalSettings, onSetTactical, spelide, onSetSpelide, captainId, onSetCaptain, dev, budget, akademiParts, youthSquad, onUpgrade, onUpgradePart, onSellYouth, onPromoteYouth, onSubViewChange, pendingSelectedPlayerId, onClearPendingSelection, reputation, squadViewPrefs, onSetSquadViewPrefs }) {
   const [selectedId, setSelectedId] = useState(null);
   const [showContracts, setShowContracts] = useState(false);
   const [showSetPieces, setShowSetPieces] = useState(false);
@@ -9050,28 +9476,21 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
     if (!p) { setSelectedId(null); return null; }
     return <PlayerProfile player={p} isStarter={startingXI.includes(p.id)} onToggleStarter={() => onToggleStarter(p.id)}
       onBack={() => setSelectedId(null)} confirmSell={confirmSell} setConfirmSell={setConfirmSell} onSell={p2 => { onSell(p2); setSelectedId(null); }} onToggleListed={onToggleListed} onToggleLoanListed={onToggleLoanListed} onRenew={onRenew} onChat={onChat}
-      clubs={clubs} round={round} onSendLoan={onSendLoan ? (toId, toName) => { onSendLoan(toId, toName); setSelectedId(null); } : null} squadSize={squad.length} squad={squad} chemistryPairs={chemistryPairs} onAssessPlayer={onAssessPlayer} />;
+      clubs={clubs} round={round} onSendLoan={onSendLoan ? (toId, toName) => { onSendLoan(toId, toName); setSelectedId(null); } : null} squadSize={squad.length} squad={squad} chemistryPairs={chemistryPairs} onAssessPlayer={onAssessPlayer} reputation={reputation} budget={budget} />;
   }
 
   const clubOverall = squadOverallRating(squad);
   return (
     <div className="rise-in space-y-2.5">
-      <PaperCard>
-        <div className="flex items-center justify-between">
-          <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Truppens overall</div>
-          <div className="font-mono text-sm font-semibold" style={{ color: startingXI.length === 11 ? C.win : C.loss }}>{startingXI.length}/11</div>
-        </div>
-        <div className="mt-1"><StarRating rating={overallToStars(clubOverall)} size={11} /></div>
-        <div className="grid grid-cols-4 gap-1 mt-2.5">
-          <button onClick={() => setShowContracts(true)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft, position: "relative" }}>
-            Kontrakt
-            {squad.filter(p => p.contractYears <= 1).length > 0 && <span style={{ position: "absolute", top: -4, right: -4, width: 9, height: 9, borderRadius: "50%", background: "#D9534F", border: `1.5px solid ${C.paper}` }} />}
-          </button>
-          <button onClick={() => setShowTactics(true)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Taktik</button>
-          <button onClick={() => setShowAkademi(true)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Akademi</button>
-          <button onClick={() => setShowSetPieces(true)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Standard</button>
-        </div>
-      </PaperCard>
+      <div className="grid grid-cols-4 gap-1.5">
+        <button onClick={() => setShowContracts(true)} className="py-1 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim, position: "relative" }}>
+          Kontrakt
+          {squad.filter(p => p.contractYears <= 1).length > 0 && <span style={{ position: "absolute", top: -4, right: -4, width: 9, height: 9, borderRadius: "50%", background: "#D9534F", border: `1.5px solid ${C.turfDeep}` }} />}
+        </button>
+        <button onClick={() => setShowTactics(true)} className="py-1 rounded-lg text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Taktik</button>
+        <button onClick={() => setShowAkademi(true)} className="py-1 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim }}>Akademi</button>
+        <button onClick={() => setShowSetPieces(true)} className="py-1 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim }}>Standard</button>
+      </div>
       {outgoingLoans && outgoingLoans.length > 0 && (
         <PaperCard>
           <div className="text-xs uppercase tracking-wide font-semibold mb-2" style={{ color: C.inkSoft }}>Utlånade spelare</div>
@@ -9085,12 +9504,15 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
           </div>
         </PaperCard>
       )}
-      <LineupTableView squad={squad} startingXI={startingXI} formationCode={formationCode} lineupCells={lineupCells} onSaveFormation={onSaveFormation} onSelectPlayer={setSelectedId} />
+      <LineupTableView squad={squad} startingXI={startingXI} formationCode={formationCode} lineupCells={lineupCells} onSaveFormation={onSaveFormation} onSelectPlayer={setSelectedId}
+        rowMode={squadViewPrefs?.rowMode || "detaljerad"} onSetRowMode={m => onSetSquadViewPrefs({ ...squadViewPrefs, rowMode: m })}
+        showAllBench={!!squadViewPrefs?.showAllBench} onSetShowAllBench={v => onSetSquadViewPrefs({ ...squadViewPrefs, showAllBench: v })}
+        clubOverall={clubOverall} squadSize={squad.length} />
     </div>
   );
 }
 
-function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, onChat, clubs, round, onSendLoan, squadSize, squad, chemistryPairs, onAssessPlayer }) {
+function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, onChat, clubs, round, onSendLoan, squadSize, squad, chemistryPairs, onAssessPlayer, reputation, budget }) {
   const attrs = getAttrs(player);
   const labels = attrLabels(player.pos);
   const overall = overallOf(player);
@@ -9117,7 +9539,7 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
   const injured = player.injuryWeeks > 0;
   const suspended = player.suspendedMatches > 0;
   const demand = contractDemand(player);
-  const target = wageDemand(player);
+  const target = wageDemand(player, reputation, budget);
   const best = bestAttribute(player);
   const [wageOutcome, setWageOutcome] = useState(null);
   const [chatResult, setChatResult] = useState(null);
@@ -9507,7 +9929,7 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
   const houseCarCost = houseCar ? 100000 : 0;
   const sweetenerScore = perkSweetenerScore(releaseClauseNum, signOnBonusNum, houseCar, player.value);
   function tryWage(mult) {
-    const target = negotiationDrift(wageDemand(player), wageAttempts);
+    const target = negotiationDrift(wageDemand(player, reputation, budget), wageAttempts);
     const offerWage = Math.round(target * mult);
     if (wageAttempts === 0 && Math.random() < opportunityChance(wageLeverage)) {
       setWageMessages(prev => [...prev, { from: "you", text: `Erbjuder ${formatMoney(offerWage)}/omg` }, { from: "them", text: `Er klubb känns som rätt nästa steg för mig — jag skriver på utan att krångla.` }]);
@@ -10389,7 +10811,14 @@ function ArenaDetail({ club, dev, budget, arenaStands, arenaFacilities, arenaCon
               <span className="font-mono" style={{ color: C.ink }}>{m.round + 1}</span>
               <span className="truncate" style={{ color: C.ink }}>{m.userIsHome ? "" : "b. "}{m.oppName}</span>
               <span className="text-center text-10" style={{ color: C.inkSoft }}>{m.userIsHome ? (TICKET_TIERS[m.ticketPrice]?.label || "–") : "Borta"}</span>
-              <span className="text-center font-mono" style={{ color: C.ink }}>{m.userIsHome ? m.attendance.toLocaleString("sv-SE") : "–"}</span>
+              <span className="text-center font-mono" style={{ color: C.ink }}>
+                {m.userIsHome ? (
+                  <>
+                    {m.attendance.toLocaleString("sv-SE")}
+                    {m.arenaCapacity ? <span className="block text-9" style={{ color: C.inkSoft }}>{Math.round((m.attendance / m.arenaCapacity) * 100)}%</span> : null}
+                  </>
+                ) : "–"}
+              </span>
               <span className="text-right font-mono font-semibold" style={{ color: C.win }}>+{formatMoney(m.income)}</span>
             </div>
           ))}
@@ -10513,7 +10942,7 @@ function ScoutingDetail({ dev, budget, scoutingParts, onUpgrade, onUpgradePart, 
   );
 }
 
-function SponsorDetail({ dev, budget, reputation, sponsors, customArenaName, onUpgrade, onSignSponsor, onNameArena, onBack }) {
+function SponsorDetail({ dev, budget, reputation, sponsors, customArenaName, onUpgrade, onSignSponsor, onTerminateSponsor, onNameArena, onBack }) {
   const [namingArena, setNamingArena] = useState(false);
   const [arenaNameInput, setArenaNameInput] = useState(customArenaName || "");
   const [offersFor, setOffersFor] = useState(null);
@@ -10537,6 +10966,9 @@ function SponsorDetail({ dev, budget, reputation, sponsors, customArenaName, onU
       <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Sponsoravtal</div>
       {Object.entries(SPONSOR_SLOT_LABEL).map(([slot, label]) => {
         const current = sponsors[slot];
+        const locked = current && current.roundsRemaining > 0;
+        const remainingRatio = locked ? current.roundsRemaining / (current.totalLength || current.roundsRemaining || 1) : 0;
+        const terminationCost = locked ? Math.round(current.income * (current.totalLength || 20) * 0.35 * remainingRatio) : 0;
         return (
           <PaperCard key={slot}>
             <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{label}</div>
@@ -10546,9 +10978,14 @@ function SponsorDetail({ dev, budget, reputation, sponsors, customArenaName, onU
               <>
                 <div className="font-semibold text-sm mt-1">{current.name}</div>
                 <div className="font-mono text-11 mt-0.5" style={{ color: C.win }}>+{formatMoney(current.income)} / matchomgång</div>
+                <div className="text-10 mt-0.5" style={{ color: C.inkSoft }}>{current.roundsRemaining > 0 ? `${current.roundsRemaining} av ${current.totalLength} omgångar kvar på avtalet` : "Avtalet löper ut denna omgång"}</div>
               </>
             ) : <div className="text-sm mt-1" style={{ color: C.inkSoft }}>Inget avtal just nu.</div>}
-            <button onClick={() => openOffers(slot)} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={{ background: C.turf, color: C.paper }}>{current ? "Hitta ny sponsor" : "Sök sponsorer"}</button>
+            {locked ? (
+              <button onClick={() => onTerminateSponsor(slot)} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.loss}`, color: C.loss }}>Säg upp avtalet i förtid ({formatMoney(terminationCost)})</button>
+            ) : (
+              <button onClick={() => openOffers(slot)} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={{ background: C.turf, color: C.paper }}>{current ? "Hitta ny sponsor" : "Sök sponsorer"}</button>
+            )}
             {slot === "stadium" && (
               <>
                 <button onClick={() => setNamingArena(!namingArena)} className="mt-1.5 w-full py-2 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.gold}`, color: C.goldSoft }}>{customArenaName ? "Byt namn själva" : "Döp arenan själva (£5,0M engångssumma)"}</button>
@@ -10900,12 +11337,12 @@ function EconomyStatCard({ icon, label, value, valueColor, barPct, barColor, sub
   );
 }
 function EconomyTab({ budget, reputation, division, sponsringLevel, squad, history, season, round, totalRounds, seasonIncomeTotal, seasonWageTotal, ticketPrice, onSetTicketPrice,
-  loans, onTakeLoan, sponsors, dev, onUpgrade, onUpgradePart, onSignSponsor, club, arenaStands, arenaFacilities, arenaConstruction, onStartConstruction, recentMatchFinances, transferInstallments, onSubViewChange, customArenaName, onNameArena }) {
+  loans, onTakeLoan, sponsors, dev, onUpgrade, onUpgradePart, onSignSponsor, onTerminateSponsor, club, arenaStands, arenaFacilities, arenaConstruction, onStartConstruction, recentMatchFinances, transferInstallments, onSubViewChange, customArenaName, onNameArena }) {
   const [selectedCategory, setSelectedCategory] = useState(null);
   useEffect(() => { onSubViewChange?.(!!selectedCategory); }, [selectedCategory]);
   if (selectedCategory === "loner") return <WagesDetail squad={squad} reputation={reputation} division={division} sponsringLevel={sponsringLevel} onBack={() => setSelectedCategory(null)} />;
   if (selectedCategory === "lan") return <LoanDetail budget={budget} loans={loans} reputation={reputation} onTakeLoan={onTakeLoan} onBack={() => setSelectedCategory(null)} />;
-  if (selectedCategory === "sponsring") return <SponsorDetail dev={dev} budget={budget} reputation={reputation} sponsors={sponsors} customArenaName={customArenaName} onNameArena={onNameArena} onUpgrade={onUpgrade} onSignSponsor={onSignSponsor} onBack={() => setSelectedCategory(null)} />;
+  if (selectedCategory === "sponsring") return <SponsorDetail dev={dev} budget={budget} reputation={reputation} sponsors={sponsors} customArenaName={customArenaName} onNameArena={onNameArena} onUpgrade={onUpgrade} onSignSponsor={onSignSponsor} onTerminateSponsor={onTerminateSponsor} onBack={() => setSelectedCategory(null)} />;
   if (selectedCategory === "arena") return <ArenaDetail club={club} dev={dev} budget={budget} arenaStands={arenaStands} arenaFacilities={arenaFacilities} arenaConstruction={arenaConstruction} onUpgrade={onUpgrade} onUpgradePart={onUpgradePart} onStartConstruction={onStartConstruction} ticketPrice={ticketPrice} onSetTicketPrice={onSetTicketPrice} recentMatchFinances={recentMatchFinances} onBack={() => setSelectedCategory(null)} />;
 
   const cap = wageBudgetCap(reputation, division, sponsringLevel);
