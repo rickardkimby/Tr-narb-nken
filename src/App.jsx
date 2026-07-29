@@ -1012,15 +1012,54 @@ function scoutRangeText(value, scoutLevel) {
   if (u <= 0) return `${Math.round(value)}`;
   return `${clamp(Math.round(value - u), 15, 99)}–${clamp(Math.round(value + u), 15, 99)}`;
 }
+const SCOUT_ATTR_LABEL = { shooting: "avslut", passing: "passningsspel", dribbling: "dribbling", pace: "fart", defending: "försvarsspel", physical: "fysik" };
+const SCOUT_STRONG_LINES = {
+  shooting: ["har ett dödligt avslut och hittar nät från lägen andra inte ens ser", "är kylig framför mål — den typen av avslutare som avgör jämna matcher", "läser målchanser exceptionellt väl och placerar bollen med precision"],
+  passing: ["ser passningar innan de öppnar sig och spelar med imponerande precision", "dikterar tempot med sitt passningsspel — sällan ett felval i bollinnehav", "har ett vasst öga för genombrottspassningar som bryter upp försvarslinjer"],
+  dribbling: ["är trixig och svårfångad — tar sig förbi motståndare med lätthet", "har fantastisk bollkontroll under press och skapar utrymme ur ingenting", "dribblar med en självsäkerhet som gör försvarare nervösa"],
+  pace: ["har explosiv fart som gör denne till ett ständigt hot i öppna ytor", "vinner racet mot backar konsekvent — accelerationen är ett verkligt vapen", "är svår att hänga med i på omställning tack vare rå snabbhet"],
+  defending: ["läser spelet defensivt exceptionellt väl och vinner dueller konsekvent", "är obehaglig att möta en mot en — timing i tacklingar är imponerande", "har ett skarpt positioneringssinne som täpper till luckor innan de uppstår"],
+  physical: ["är fysiskt dominant och vinner nästan varje närkamp", "har den kroppsstyrka som krävs för att hantera tuffare motstånd", "är svår att knuffa av bollen tack vare ren fysisk styrka"],
+};
+const SCOUT_WEAK_LINES = {
+  shooting: ["avslutet är fortfarande opolerat — chanser går till spillo som borde resultera i mål", "saknar än så länge den kallblodighet framför mål som krävs på högsta nivå", "träffbilden är inkonsekvent, särskilt från distans"],
+  passing: ["passningsspelet är riskabelt under press och kan kosta bollinnehav", "saknar variation i passningsspelet — blir förutsägbar när motståndaren pressar", "tempoväxlingarna i spelet är fortfarande för enahanda"],
+  dribbling: ["blir lätt av bollen i trängda lägen och tar för många risker", "har begränsad repertoar i en mot en-situationer", "tappar ofta kontrollen vid hög press"],
+  pace: ["saknar den toppfart som krävs för att hota på omställning", "hänger inte med i tempot när matchen öppnar upp sig", "blir sårbar mot snabbare motståndare i öppna ytor"],
+  defending: ["det defensiva spelet har tydliga hål — positioneringen sviker i pressade lägen", "är sårbar en mot en och kan dras med i onödiga dueller", "läser inte alltid spelet tillräckligt snabbt defensivt"],
+  physical: ["kan bli fysiskt starkare för att hävda sig mot tuffare motstånd", "förlorar för många närkamper mot fysiskt överlägsna motståndare", "orken sviker mot slutet av matcher"],
+};
 function scoutComment(candidate) {
   const attrs = getAttrs(candidate);
   const entries = Object.entries(attrs).filter(([k]) => k !== "physical" || candidate.pos !== "MV");
   entries.sort((a, b) => b[1] - a[1]);
-  const strongest = entries[0], weakest = entries[entries.length - 1];
-  const strongLine = { shooting: "farlig framför mål", passing: "skickligt passningsspel", dribbling: "trixig med bollen", pace: "explosiv fart", defending: "stark i det defensiva spelet", physical: "fysiskt dominant" }[strongest[0]] || "solid över lag";
-  const weakLine = { shooting: "kan bli vassare i avslutet", passing: "något osäker i passningsspelet", dribbling: "begränsad i dribblingar", pace: "saknar toppfart", defending: "sårbar defensivt", physical: "kan bli fysiskt starkare" }[weakest[0]] || "";
-  const potentialLine = candidate.potential && candidate.potential - overallOf(candidate) >= 8 ? " Scouten tror det finns mer att hämta med rätt utveckling." : "";
-  return `Är ${strongLine}, men ${weakLine}.${potentialLine}`;
+  const overall = overallOf(candidate);
+  const rng = seededRandom(String(candidate.id) + "scoutreport" + Date.now() + Math.random());
+  const tierLine = overall >= 80 ? "En spelare av verklig toppklass." : overall >= 68 ? "En riktigt solid spelare för den här nivån." : overall >= 55 ? "En användbar spelare med tydlig roll i truppen." : "Fortfarande ett stycke kvar till att vara en nyckelspelare.";
+
+  const strong1 = entries[0], strong2 = entries[1];
+  const weak1 = entries[entries.length - 1], weak2 = entries[entries.length - 2];
+  const strongText = `${SCOUT_ATTR_LABEL[strong1[0]] || strong1[0]}: ${pick(SCOUT_STRONG_LINES[strong1[0]] || ["presterar konsekvent på hög nivå"])}. Även ${SCOUT_ATTR_LABEL[strong2[0]] || strong2[0]} sticker ut positivt.`;
+  const weakText = `${SCOUT_ATTR_LABEL[weak1[0]] || weak1[0]}: ${pick(SCOUT_WEAK_LINES[weak1[0]] || ["har utrymme för förbättring"])}. Även ${SCOUT_ATTR_LABEL[weak2[0]] || weak2[0]} är ett område att jobba på.`;
+
+  const potentialGap = (candidate.potential || overall) - overall;
+  let potentialLine;
+  if (candidate.age <= 21 && potentialGap >= 14) potentialLine = "Potentialen är genuint hög — scouten bedömer att spelaren om några år kan bli avsevärt mycket bättre än sitt nuvarande betyg antyder. Väl värd att investera utvecklingstid i.";
+  else if (candidate.age <= 23 && potentialGap >= 8) potentialLine = "Det finns fortfarande en tydlig utvecklingskurva kvar — rätt speltid och coaching bör lyfta nivån ytterligare.";
+  else if (candidate.age >= 30 && potentialGap <= 2) potentialLine = "Spelaren är nu i sin sportsliga topp — förvänta ingen ytterligare utveckling, snarare en gradvis avtagande kurva de kommande säsongerna.";
+  else if (potentialGap <= 2) potentialLine = "Taket verkar redan nått — det här är sannolikt ungefär den spelare man får långsiktigt.";
+  else potentialLine = "Viss marginal för utveckling kvar, men inget dramatiskt att vänta.";
+
+  const personalityLine = candidate.personality && candidate.personality !== "Balanserad" ? ` Personlighetsmässigt beskrivs spelaren som "${candidate.personality}" — ${PERSONALITY_DESC[candidate.personality]?.toLowerCase() || ""}` : "";
+  const injuryProne = injuryProneness(candidate);
+  const durabilityLine = injuryProne === "Skör" ? " Skadehistoriken är en tydlig varningsflagga — kroppen verkar inte tåla hög belastning särskilt väl." : injuryProne === "Robust" ? " Fysiskt robust och sällan skadedrabbad — pålitlig rent kroppsligt." : "";
+
+  const verdict = overall >= 75 ? "Sammantaget: en värvning som skulle stärka de flesta trupper omedelbart."
+    : overall >= 62 ? "Sammantaget: en gedigen komplettering, om än inte en spelare som förändrar laget i grunden."
+    : candidate.age <= 21 ? "Sammantaget: inte färdig ännu, men värd att bevaka som ett långsiktigt projekt."
+    : "Sammantaget: en rollspelare snarare än en nyckelvärvning — väg priset noga mot vad som faktiskt levereras.";
+
+  return `${tierLine} Starkast i ${strongText} Svagast i ${weakText} ${potentialLine}${personalityLine}${durabilityLine} ${verdict}`;
 }
 const SCOUT_PRESETS = [
   { key: "malfarlig", label: "Målfarlig anfallare", posFilter: "AN", attrs: { shooting: 68 } },
@@ -1185,7 +1224,21 @@ function generatePlayerLoanOffers(clubs, userClubId, division) {
     return { id: uid(), player, fromClubId: fromClub.id, fromClubName: fromClub.name, weeksLeft: rndInt(10, 24) };
   });
 }
-function generateIncomingOffers(squad, clubs, userClubId, reputation) {
+// Purely informational "who's watching this player" signal for the profile overview — deterministic per
+// round (so it doesn't flicker every re-render) but shifts over time as strength gaps change. This is
+// separate from generateIncomingOffers below; showing interest here never by itself creates an offer.
+function computeInterestedClubs(player, clubs, userClubId, round) {
+  const overall = overallOf(player);
+  if (overall < 45) return [];
+  const rng = seededRandom(String(player.id) + "interest" + Math.floor(round / 4));
+  const candidates = Object.values(clubs).filter(c => c.id !== userClubId && Math.abs(c.strength - overall) < 18);
+  if (!candidates.length) return [];
+  const count = rng() < 0.35 ? 0 : rng() < 0.7 ? 1 : rng() < 0.92 ? 2 : 3;
+  if (!count) return [];
+  const shuffled = [...candidates].sort(() => rng() - 0.5);
+  return shuffled.slice(0, Math.min(count, shuffled.length));
+}
+function generateIncomingOffers(squad, clubs, userClubId, reputation, round) {
   const otherClubs = Object.values(clubs).filter(c => c.id !== userClubId);
   const offers = [];
   const listed = squad.filter(p => p.transferListed && overallOf(p) >= 40);
@@ -1198,7 +1251,19 @@ function generateIncomingOffers(squad, clubs, userClubId, reputation) {
       offers.push({ id: uid(), playerId: p.id, playerName: p.name, buyerId: buyer.id, buyerName: buyer.name, offer: Math.round(p.value * mult) });
     }
   });
-  const eligible = squad.filter(p => !p.transferListed && p.contractYears <= 3 && overallOf(p) >= 52);
+  // Hinting that a player might be available doesn't create a deal by itself — it just meaningfully
+  // improves their odds of drawing a real offer for a while afterwards, same as real transfer speculation.
+  const recentlyHinted = squad.filter(p => !p.transferListed && p.hintedSaleRound != null && round != null && (round - p.hintedSaleRound) <= 10 && overallOf(p) >= 45);
+  recentlyHinted.forEach(p => {
+    if (Math.random() < 0.3) {
+      const overall = overallOf(p);
+      const near = otherClubs.filter(c => Math.abs(c.strength - overall) < 20);
+      const buyer = near.length ? pick(near) : pick(otherClubs);
+      const mult = rnd(0.85, 1.35) * (1 + reputation / 450);
+      offers.push({ id: uid(), playerId: p.id, playerName: p.name, buyerId: buyer.id, buyerName: buyer.name, offer: Math.round(p.value * mult) });
+    }
+  });
+  const eligible = squad.filter(p => !p.transferListed && p.contractYears <= 3 && overallOf(p) >= 52 && !recentlyHinted.includes(p));
   if (eligible.length) {
     const count = rndInt(0, Math.min(2, eligible.length));
     if (count > 0) {
@@ -3549,7 +3614,7 @@ function setupCup(type, base) {
     const freshlyListedClubs = windowJustOpened ? refreshWorldListings(updatedClubs, g.userClubId) : updatedClubs;
     const aiTransferResult = windowJustOpened ? simulateAITransfers(freshlyListedClubs, g.userClubId, g.season, newRound) : null;
     const listingClubs = aiTransferResult ? aiTransferResult.clubs : freshlyListedClubs;
-    const newIncomingOffers = windowJustOpened ? generateIncomingOffers(newSquad, listingClubs, g.userClubId, g.reputation) : g.incomingOffers;
+    const newIncomingOffers = windowJustOpened ? generateIncomingOffers(newSquad, listingClubs, g.userClubId, g.reputation, newRound) : g.incomingOffers;
     const newLoanOffers = windowJustOpened ? generatePlayerLoanOffers(listingClubs, g.userClubId, userClub.division) : (g.loanOffers || []);
     const newLoanRequests = windowJustOpened ? generateIncomingLoanRequests(newSquad, listingClubs, g.userClubId) : (g.loanRequests || []);
 
@@ -4246,6 +4311,11 @@ function setupCup(type, base) {
     else if (fanDelta >= 2) pushNews(`Fansen tycker försäljningen av ${player.name} kändes rimlig.`, "Klubben");
     showToast(sellOnCut ? `${player.name} lämnade klubben (+${formatMoney(refund)}, efter att ${formatMoney(sellOnCut)} gått till ${player.sellOnClubName} enligt klausul).` : `${player.name} lämnade klubben (+${formatMoney(refund)}).`);
   }
+  function hintForSale(playerId) {
+    setG(prev => ({ ...prev, squad: prev.squad.map(p => p.id === playerId ? { ...p, hintedSaleRound: prev.round } : p) }));
+    const player = g.squad.find(p => p.id === playerId);
+    showToast(`Ni har diskret antytt att ${player?.name || "spelaren"} kan vara till salu. Det ökar chansen för bud den närmaste tiden — men garanterar ingenting.`);
+  }
   function toggleTransferListed(playerId) {
     const player = g.squad.find(p => p.id === playerId);
     if (!player) return;
@@ -4859,7 +4929,7 @@ function setupCup(type, base) {
         const outOfPosPenalty = p.personality === "Ambitiös" ? outOfPosRatio * 12 : 0;
         const moraleTarget = clamp(45 + playTimeRatio * 45 + (contractYears <= 1 ? -15 : 0) + (s.boardTargetMet ? 5 : -3) - outOfPosPenalty, 5, 95);
         const morale = clamp((p.morale ?? 70) + (moraleTarget - (p.morale ?? 70)) * 0.35, 5, 95);
-        const seasonRecord = { season: prev.season, apps: p.apps, goals: p.goals, assists: p.assists || 0, avgRating: p.apps ? Math.round((p.ratingSum / p.apps) * 10) / 10 : null, attack: Math.round(p.attack), defense: Math.round(p.defense) };
+        const seasonRecord = { season: prev.season, apps: p.apps, goals: p.goals, assists: p.assists || 0, avgRating: p.apps ? Math.round((p.ratingSum / p.apps) * 10) / 10 : null, attack: Math.round(p.attack), defense: Math.round(p.defense), wage: p.wage, value: p.value };
         const seasonLog = [...(p.seasonLog || []), seasonRecord];
         aged.push({ ...p, age, attack, defense, contractYears, morale, yellowCards: 0, apps: 0, goals: 0, assists: 0, seasonYellowCards: 0, seasonRedCards: 0, agentContactedThisSeason: false, outOfPositionApps: 0, ratingSum: 0, seasonLog });
       });
@@ -5246,7 +5316,7 @@ function setupCup(type, base) {
                   setPieceTakers={g.setPieceTakers} onSetSetPieceTakers={setSetPieceTakers} chemistryPairs={g.chemistryPairs} onAssessPlayer={assessPlayer}
                   tactic={g.tactic} onTactic={t => setG(prev => ({ ...prev, tactic: t }))} tacticalSettings={g.tacticalSettings} onSetTactical={setTacticalOption}
                   spelide={g.spelide} onSetSpelide={setSpelide} captainId={g.captainId} onSetCaptain={setCaptain}
-                  dev={g.dev} budget={g.budget} akademiParts={g.akademiParts} youthSquad={g.youthSquad} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSellYouth={sellYouth} onPromoteYouth={promoteYouth} onSubViewChange={setSubViewOpen} pendingSelectedPlayerId={g.pendingSelectedPlayerId} onClearPendingSelection={() => setG(prev => ({ ...prev, pendingSelectedPlayerId: null }))} reputation={g.reputation} squadViewPrefs={g.squadViewPrefs} onSetSquadViewPrefs={setSquadViewPrefs} />
+                  dev={g.dev} budget={g.budget} akademiParts={g.akademiParts} youthSquad={g.youthSquad} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSellYouth={sellYouth} onPromoteYouth={promoteYouth} onSubViewChange={setSubViewOpen} pendingSelectedPlayerId={g.pendingSelectedPlayerId} onClearPendingSelection={() => setG(prev => ({ ...prev, pendingSelectedPlayerId: null }))} reputation={g.reputation} squadViewPrefs={g.squadViewPrefs} onSetSquadViewPrefs={setSquadViewPrefs} transferHistory={g.transferHistory} userClubId={g.userClubId} onHintForSale={hintForSale} />
               ) : g.activeTab === "club" ? (
                 <ClubTab club={userClub} dev={g.dev} budget={g.budget} history={g.history} reputation={g.reputation} fanbase={g.fanbase}
                   sponsors={g.sponsors} staff={g.staff} boardConfidence={g.boardConfidence} boardTarget={boardTargetLabel(userClub.archetype, userClub.division).label}
@@ -9584,7 +9654,7 @@ function TacticsPanel({ squad, startingXI, tactic, onTactic, tacticalSettings, o
     </div>
   );
 }
-function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, formationCode, lineupCells, onSaveFormation, onChat, clubs, round, onSendLoan, outgoingLoans, setPieceTakers, onSetSetPieceTakers, chemistryPairs, onAssessPlayer, tactic, onTactic, tacticalSettings, onSetTactical, spelide, onSetSpelide, captainId, onSetCaptain, dev, budget, akademiParts, youthSquad, onUpgrade, onUpgradePart, onSellYouth, onPromoteYouth, onSubViewChange, pendingSelectedPlayerId, onClearPendingSelection, reputation, squadViewPrefs, onSetSquadViewPrefs }) {
+function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, formationCode, lineupCells, onSaveFormation, onChat, clubs, round, onSendLoan, outgoingLoans, setPieceTakers, onSetSetPieceTakers, chemistryPairs, onAssessPlayer, tactic, onTactic, tacticalSettings, onSetTactical, spelide, onSetSpelide, captainId, onSetCaptain, dev, budget, akademiParts, youthSquad, onUpgrade, onUpgradePart, onSellYouth, onPromoteYouth, onSubViewChange, pendingSelectedPlayerId, onClearPendingSelection, reputation, squadViewPrefs, onSetSquadViewPrefs, transferHistory, userClubId, onHintForSale }) {
   const [selectedId, setSelectedId] = useState(null);
   const [showContracts, setShowContracts] = useState(false);
   const [showSetPieces, setShowSetPieces] = useState(false);
@@ -9618,7 +9688,7 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
     if (!p) { setSelectedId(null); return null; }
     return <PlayerProfile player={p} isStarter={startingXI.includes(p.id)} onToggleStarter={() => onToggleStarter(p.id)}
       onBack={() => setSelectedId(null)} confirmSell={confirmSell} setConfirmSell={setConfirmSell} onSell={p2 => { onSell(p2); setSelectedId(null); }} onToggleListed={onToggleListed} onToggleLoanListed={onToggleLoanListed} onRenew={onRenew} onChat={onChat}
-      clubs={clubs} round={round} onSendLoan={onSendLoan ? (toId, toName) => { onSendLoan(toId, toName); setSelectedId(null); } : null} squadSize={squad.length} squad={squad} chemistryPairs={chemistryPairs} onAssessPlayer={onAssessPlayer} reputation={reputation} budget={budget} />;
+      clubs={clubs} round={round} onSendLoan={onSendLoan ? (toId, toName) => { onSendLoan(toId, toName); setSelectedId(null); } : null} squadSize={squad.length} squad={squad} chemistryPairs={chemistryPairs} onAssessPlayer={onAssessPlayer} reputation={reputation} budget={budget} transferHistory={transferHistory} userClubId={userClubId} onHintForSale={onHintForSale} />;
   }
 
   const clubOverall = squadOverallRating(squad);
@@ -9654,7 +9724,7 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
   );
 }
 
-function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, onChat, clubs, round, onSendLoan, squadSize, squad, chemistryPairs, onAssessPlayer, reputation, budget }) {
+function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, onChat, clubs, round, onSendLoan, squadSize, squad, chemistryPairs, onAssessPlayer, reputation, budget, transferHistory, userClubId, onHintForSale }) {
   const attrs = getAttrs(player);
   const labels = attrLabels(player.pos);
   const overall = overallOf(player);
@@ -9725,6 +9795,7 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
           <div className="flex-1 min-w-0">
             <div className="font-display text-xl truncate">{player.name}</div>
             <div className="text-11" style={{ color: C.inkSoft }}>{POS_LABEL[player.pos]} ({specificPositionLabel(player.specificPosition)}) · {nationalityLabel(player.nationality)} · {player.age} år · <span style={{ color: tier.color === C.gold ? "#B8862E" : tier.color }}>{tier.label}</span></div>
+            <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Lön: <span className="font-semibold" style={{ color: C.ink }}>{formatMoney(player.wage)}/omg</span> · Värde: <span className="font-semibold" style={{ color: C.ink }}>{formatMoney(player.value)}</span></div>
             {otherPositions.length > 0 && (
               <div className="flex flex-wrap items-center gap-1 mt-0.5">
                 <span className="text-9" style={{ color: C.inkSoft }}>Kan även spela:</span>
@@ -9741,7 +9812,35 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
         {injured && <div className="mt-2 text-11 font-semibold px-2.5 py-1.5 rounded-lg text-center" style={{ background: "rgba(180,68,59,0.15)", color: C.loss }}>Skadad — {player.injuryWeeks} omgångar kvar</div>}
         {suspended && <div className="mt-2 text-11 font-semibold px-2.5 py-1.5 rounded-lg text-center" style={{ background: "rgba(180,68,59,0.15)", color: C.loss }}>Avstängd — {player.suspendedMatches} omgångar kvar</div>}
         {player.internationalDuty && <div className="mt-2 text-11 font-semibold px-2.5 py-1.5 rounded-lg text-center" style={{ background: "rgba(180,68,59,0.15)", color: C.loss }}>Landslagsuppdrag — missar nästa match</div>}
-        <div className="grid grid-cols-5 gap-1.5 mt-3 text-center">
+      </PaperCard>
+
+      {profileTab === "oversikt" && (
+        <>
+        {(() => {
+          const interested = computeInterestedClubs(player, clubs, userClubId, round);
+          const recentlyHinted = player.hintedSaleRound != null && (round - player.hintedSaleRound) <= 10;
+          if (!interested.length && !recentlyHinted) return null;
+          return (
+            <PaperCard>
+              <div className="text-xs uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Marknadsintresse</div>
+              {interested.length > 0 ? (
+                <div className="text-11" style={{ color: C.inkSoft }}>
+                  <span className="font-semibold" style={{ color: C.ink }}>{interested.length} {interested.length === 1 ? "klubb bevakar" : "klubbar bevakar"}</span> {player.name.split(" ")[0]} just nu: {interested.map(c => c.name).join(", ")}.
+                </div>
+              ) : (
+                <div className="text-11" style={{ color: C.inkSoft }}>Inget känt marknadsintresse just nu.</div>
+              )}
+              {recentlyHinted && <div className="text-11 mt-1.5 font-semibold" style={{ color: C.gold }}>Ni har antytt intresse av att sälja — ökad chans för bud den närmaste tiden.</div>}
+              {onHintForSale && !player.transferListed && (
+                <button onClick={() => onHintForSale(player.id)} disabled={recentlyHinted} className="w-full mt-2 py-2 rounded-xl text-sm font-semibold" style={recentlyHinted ? { background: "rgba(30,42,34,0.06)", color: C.inkSoft } : { background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>
+                  {recentlyHinted ? "Redan antytt nyligen" : "Antyd diskret att spelaren kan säljas"}
+                </button>
+              )}
+            </PaperCard>
+          );
+        })()}
+        <PaperCard>
+        <div className="grid grid-cols-5 gap-1.5 text-center">
           <div><div className="font-display text-lg">{careerApps}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Matcher</div></div>
           <div><div className="font-display text-lg">{careerGoals}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Mål</div></div>
           <div><div className="font-display text-lg">{careerAssists}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Assist</div></div>
@@ -9791,10 +9890,30 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
             <div className="text-10 font-bold mt-0.5" style={{ color: clutchFactor(player) >= 0.6 ? C.win : clutchFactor(player) <= -0.6 ? C.loss : C.inkSoft }}>{clutchLabel(clutchFactor(player))}</div>
           </div>
         </div>
-      </PaperCard>
+        </PaperCard>
+        </>
+      )}
 
       {profileTab === "historia" && (
         <>
+          {(() => {
+            const moves = (transferHistory || []).filter(t => t.playerId === player.id).sort((a, b) => (b.season - a.season) || (b.round - a.round));
+            if (!moves.length) return null;
+            return (
+              <PaperCard style={{ padding: 0 }}>
+                <div className="px-3 pt-3 pb-2 text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Övergångshistorik</div>
+                {moves.map((t, i) => (
+                  <div key={t.id} className="flex items-center gap-2.5 px-3 py-2" style={{ borderTop: i === 0 ? "none" : "1px solid rgba(30,42,34,0.08)" }}>
+                    <div className="flex-1 min-w-0 text-11" style={{ color: C.inkSoft }}>
+                      <ClubJersey club={{ id: t.fromClubId, color: t.fromColor }} size={16} /> {t.fromClubName} → <ClubJersey club={{ id: t.toClubId, color: t.toColor }} size={16} /> {t.toClubName || "Okänd köpare"}
+                      <div className="text-9 mt-0.5">Säsong {t.season}</div>
+                    </div>
+                    <div className="font-mono text-sm font-bold shrink-0">{formatMoney(t.fee)}</div>
+                  </div>
+                ))}
+              </PaperCard>
+            );
+          })()}
           {player.joinedInfo && (
             <PaperCard>
               <div className="text-xs uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Klubbhistorik</div>
@@ -9810,6 +9929,26 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
               </div>
             </PaperCard>
           )}
+          {(() => {
+            const valueTrend = [...seasonLog.map(r => r.value).filter(v => v !== undefined), player.value];
+            const wageTrend = [...seasonLog.map(r => r.wage).filter(v => v !== undefined), player.wage];
+            if (valueTrend.length < 2) return null;
+            return (
+              <PaperCard>
+                <div className="text-xs uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Utveckling — marknadsvärde / lön</div>
+                <div className="flex gap-4">
+                  <div>
+                    <Sparkline data={valueTrend} width={140} height={32} color={C.gold} />
+                    <div className="text-9 mt-0.5" style={{ color: C.inkSoft }}>Värde: {formatMoney(valueTrend[0])} → {formatMoney(valueTrend[valueTrend.length - 1])}</div>
+                  </div>
+                  <div>
+                    <Sparkline data={wageTrend} width={140} height={32} color={C.turf} />
+                    <div className="text-9 mt-0.5" style={{ color: C.inkSoft }}>Lön: {formatMoney(wageTrend[0])} → {formatMoney(wageTrend[wageTrend.length - 1])}</div>
+                  </div>
+                </div>
+              </PaperCard>
+            );
+          })()}
           {player.seasonLog && player.seasonLog.length > 0 && (
             <PaperCard style={{ padding: 0 }}>
               <div className="px-3 pt-3 pb-2 text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Säsong för säsong</div>
