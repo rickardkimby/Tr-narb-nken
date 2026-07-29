@@ -276,6 +276,24 @@ function cellKey(col, row) { return `${col}-${row}`; }
 
 // ---------- Countries ----------
 const LEAGUE_FLAG = { england: "🇬🇧", italy: "🇮🇹", spain: "🇪🇸", germany: "🇩🇪", france: "🇫🇷" };
+// Windows renders flag emoji as plain two-letter text (a known OS/font limitation — not a bug), while
+// Mac/iOS/Android show real flag icons. Drawing simple SVG flags instead makes them look identical and
+// correct on every platform, with no dependency on the OS's emoji font.
+function CountryFlag({ country, size = 28 }) {
+  const h = size, w = Math.round(size * 1.4);
+  const flags = {
+    england: (
+      <svg width={w} height={h} viewBox="0 0 30 20"><rect width="30" height="20" fill="#00247D" />
+        <path d="M0,0 L30,20 M30,0 L0,20" stroke="#fff" strokeWidth="4" /><path d="M0,0 L30,20 M30,0 L0,20" stroke="#CF142B" strokeWidth="1.5" />
+        <path d="M15,0 V20 M0,10 H30" stroke="#fff" strokeWidth="6" /><path d="M15,0 V20 M0,10 H30" stroke="#CF142B" strokeWidth="3.5" /></svg>
+    ),
+    italy: <svg width={w} height={h} viewBox="0 0 30 20"><rect width="10" height="20" fill="#009246" /><rect x="10" width="10" height="20" fill="#fff" /><rect x="20" width="10" height="20" fill="#CE2B37" /></svg>,
+    spain: <svg width={w} height={h} viewBox="0 0 30 20"><rect width="30" height="20" fill="#AA151B" /><rect y="5" width="30" height="10" fill="#F1BF00" /></svg>,
+    germany: <svg width={w} height={h} viewBox="0 0 30 20"><rect width="30" height="6.66" fill="#000" /><rect y="6.66" width="30" height="6.66" fill="#DD0000" /><rect y="13.33" width="30" height="6.67" fill="#FFCE00" /></svg>,
+    france: <svg width={w} height={h} viewBox="0 0 30 20"><rect width="10" height="20" fill="#0055A4" /><rect x="10" width="10" height="20" fill="#fff" /><rect x="20" width="10" height="20" fill="#EF4135" /></svg>,
+  };
+  return <span style={{ display: "inline-flex", width: w, height: h, borderRadius: 3, overflow: "hidden", boxShadow: "0 0 0 1px rgba(0,0,0,0.15)", flexShrink: 0 }}>{flags[country] || null}</span>;
+}
 const TICKET_TIERS = {
   t1: { price: 8, label: "£8", desc: "Mycket lågt pris — fulla läktare, minimal marginal per biljett.", fillMult: 1.22, incomeMult: 0.5, fanAdj: 0.55 },
   t2: { price: 12, label: "£12", desc: "Lågt pris — fler i publiken, mindre per biljett.", fillMult: 1.12, incomeMult: 0.7, fanAdj: 0.35 },
@@ -5942,7 +5960,7 @@ function Onboarding({ world, onConfirm, onCancel }) {
         <div className="max-w-md mx-auto w-full px-5 space-y-3 pb-10">
           {LEAGUES.map(l => (
             <button key={l.id} onClick={() => setLeagueId(l.id)} className="w-full text-left rounded-2xl p-4 flex items-center gap-3" style={{ background: C.paper, color: C.ink }}>
-              <span style={{ fontSize: 30, lineHeight: 1 }}>{LEAGUE_FLAG[l.id]}</span>
+              <CountryFlag country={l.id} size={26} />
               <div className="min-w-0">
                 <div className="font-display text-xl">{l.name}</div>
                 <div className="text-xs mt-1" style={{ color: C.inkSoft }}>{l.blurb}</div>
@@ -6389,7 +6407,7 @@ function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRo
           </div>
           <span className="font-display text-xl" style={{ color: C.inkSoft }}>VS</span>
           <div className="flex items-center gap-2">
-            {foreignOpp && <span style={{ fontSize: 17 }}>{LEAGUE_FLAG[oppClub.league]}</span>}
+            {foreignOpp && <CountryFlag country={oppClub.league} size={16} />}
             <span className="text-sm font-medium text-right">{oppClub?.name}</span>
             <ClubJersey club={oppClub} size={36} />
           </div>
@@ -6477,7 +6495,7 @@ function MatchPrepView({ g, userClub, oppClub, countryName, isHome, onBack, onSe
           </div>
           <span className="font-display text-xl" style={{ color: C.inkSoft }}>VS</span>
           <div className="flex items-center gap-2">
-            {foreignOpp && <span style={{ fontSize: 17 }}>{LEAGUE_FLAG[oppClub.league]}</span>}
+            {foreignOpp && <CountryFlag country={oppClub.league} size={16} />}
             <span className="text-sm font-medium text-right">{oppClub?.name}</span>
             <ClubJersey club={oppClub} size={36} />
           </div>
