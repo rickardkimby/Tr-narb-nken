@@ -1555,6 +1555,7 @@ function startArenaStands(club, division) {
   };
 }
 function arenaCapacityForClub(club, division) {
+  if (club.baseArenaCapacity) return club.baseArenaCapacity;
   const stands = startArenaStands(club, division);
   const arche = ARCHETYPES[club.archetype];
   const devArena = Math.max(1, arche.startDev.arena - (division - 1));
@@ -5429,11 +5430,114 @@ function downloadJSONFile(data, filename) {
     URL.revokeObjectURL(url);
   } catch (e) {}
 }
+// ---------- Excel import/export for user databases ----------
+// Converts the nested world object (clubs keyed by id, each with a squad array) into two flat row-sets
+// matching a spreadsheet's shape: one row per club, one row per player. Kept as pure functions (no SheetJS
+// calls inside) so the actual data reshaping can be tested independently of the spreadsheet library.
+function worldToExcelRows(world) {
+  const clubRows = [];
+  const playerRows = [];
+  Object.values(world).forEach(c => {
+    clubRows.push({
+      Land: c.league, Division: c.division, KlubbID: c.id, Klubbnamn: c.name,
+      Färg: c.color || "", Sekundärfärg: c.secondaryColor || "", Tröjmönster: c.jerseyPattern || "",
+      Arketyp: c.archetype, Styrka: Math.round(c.strength), Startbudget: c.startBudget ?? "", Arenakapacitet: c.baseArenaCapacity ?? "",
+    });
+    (c.squad || []).forEach(p => {
+      playerRows.push({
+        Land: c.league, Division: c.division, KlubbID: c.id, Klubbnamn: c.name,
+        SpelarID: p.id, Namn: p.name, Nummer: p.number ?? "", Ålder: p.age, Position: p.pos, SpecifikPosition: p.specificPosition,
+        Anfall: Math.round(p.attack), Försvar: Math.round(p.defense), Potential: Math.round(p.potential ?? p.attack),
+        Värde: p.value, "Lön": p.wage, Nationalitet: p.nationality || "",
+      });
+    });
+  });
+  return { clubRows, playerRows };
+}
+// The inverse: rebuild the nested world object from the two flat row-sets (as read back from a spreadsheet).
+// Coerces numeric-looking spreadsheet cells back to numbers, since Excel/CSV round-trips often stringify them.
+function excelRowsToWorld(clubRows, playerRows) {
+  const num = v => (v === "" || v === undefined || v === null) ? undefined : Number(v);
+  const world = {};
+  (clubRows || []).forEach(row => {
+    const id = String(row.KlubbID || "").trim();
+    if (!id) return;
+    world[id] = {
+      id, name: String(row.Klubbnamn || "").trim(), league: String(row.Land || "").trim(), division: num(row.Division),
+      color: row.Färg || undefined, secondaryColor: row.Sekundärfärg || undefined, jerseyPattern: row.Tröjmönster || undefined,
+      archetype: String(row.Arketyp || "").trim(), strength: num(row.Styrka),
+      startBudget: row.Startbudget === "" || row.Startbudget === undefined ? undefined : num(row.Startbudget),
+      baseArenaCapacity: row.Arenakapacitet === "" || row.Arenakapacitet === undefined ? undefined : num(row.Arenakapacitet),
+      squad: [],
+    };
+  });
+  (playerRows || []).forEach(row => {
+    const clubId = String(row.KlubbID || "").trim();
+    if (!world[clubId]) return;
+    world[clubId].squad.push({
+      id: String(row.SpelarID || "").trim(), name: String(row.Namn || "").trim(), number: num(row.Nummer),
+      age: num(row.Ålder), pos: String(row.Position || "").trim(), specificPosition: String(row.SpecifikPosition || "").trim(),
+      attack: num(row.Anfall), defense: num(row.Försvar), potential: num(row.Potential),
+      value: num(row.Värde), wage: num(row["Lön"]), nationality: String(row.Nationalitet || "").trim(),
+    });
+  });
+  return world;
+}
+let xlsxLibPromise = null;
+function loadXLSXLib() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (xlsxLibPromise) return xlsxLibPromise;
+  xlsxLibPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    script.onload = () => resolve(window.XLSX);
+    script.onerror = () => reject(new Error("Kunde inte ladda Excel-biblioteket. Kontrollera internetuppkopplingen."));
+    document.head.appendChild(script);
+  });
+  return xlsxLibPromise;
+}
+// Exports the world as a two-sheet workbook (Klubbar, Spelare) with AutoFilter enabled on both header rows,
+// so Land/Division/Klubbnamn etc. can be filtered natively in Excel — this doubles as the fill-in-yourself
+// template, since it's already in the exact shape excelRowsToWorld expects back.
+async function exportDatabaseToExcel(world, filename) {
+  const XLSX = await loadXLSXLib();
+  const { clubRows, playerRows } = worldToExcelRows(world);
+  const wb = XLSX.utils.book_new();
+  const wsClubs = XLSX.utils.json_to_sheet(clubRows);
+  wsClubs["!autofilter"] = { ref: wsClubs["!ref"] };
+  const wsPlayers = XLSX.utils.json_to_sheet(playerRows);
+  wsPlayers["!autofilter"] = { ref: wsPlayers["!ref"] };
+  XLSX.utils.book_append_sheet(wb, wsClubs, "Klubbar");
+  XLSX.utils.book_append_sheet(wb, wsPlayers, "Spelare");
+  XLSX.writeFile(wb, filename || "databas.xlsx");
+}
+// Reads an uploaded .xlsx file and reconstructs the world object from its Klubbar/Spelare sheets.
+function importExcelFile(file) {
+  return new Promise((resolve, reject) => {
+    loadXLSXLib().then(XLSX => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const wb = XLSX.read(e.target.result, { type: "array" });
+          const clubSheet = wb.Sheets["Klubbar"];
+          const playerSheet = wb.Sheets["Spelare"];
+          if (!clubSheet || !playerSheet) { reject(new Error('Filen saknar ett eller båda av flikarna "Klubbar" och "Spelare".')); return; }
+          const clubRows = XLSX.utils.sheet_to_json(clubSheet, { defval: "" });
+          const playerRows = XLSX.utils.sheet_to_json(playerSheet, { defval: "" });
+          resolve(excelRowsToWorld(clubRows, playerRows));
+        } catch (err) { reject(err); }
+      };
+      reader.onerror = () => reject(new Error("Kunde inte läsa filen."));
+      reader.readAsArrayBuffer(file);
+    }).catch(reject);
+  });
+}
 function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
   const [customDbs, setCustomDbs] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [editingDb, setEditingDb] = useState(null); // { id, name, isCustom, data }
   const [importErrors, setImportErrors] = useState(null);
+  const [importBusy, setImportBusy] = useState(false);
   const [namePromptFor, setNamePromptFor] = useState(null); // "create" | "saveas" | { renameId }
   const [nameInput, setNameInput] = useState("");
   const [toast, setToast] = useState(null);
@@ -5469,20 +5573,16 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
     setEditingDb({ id: entry.id, name: entry.name, isCustom: true, data });
   }
   function handleImportFile(file) {
-    const reader = new FileReader();
-    reader.onload = async e => {
-      let data;
-      try { data = JSON.parse(e.target.result); } catch (err) { setImportErrors(["Kunde inte tolka filen som giltig JSON."]); return; }
+    setImportBusy(true);
+    setImportErrors(null);
+    importExcelFile(file).then(data => {
       const { valid, errors } = validateDatabaseJSON(data);
+      setImportBusy(false);
       if (!valid) { setImportErrors(errors); return; }
-      setImportErrors(null);
       const id = uid();
-      const name = file.name.replace(/\.json$/i, "") || `Importerad databas ${customDbs.length + 1}`;
-      await saveDbData(id, data);
-      await persistList([...customDbs, { id, name, createdAt: new Date().toISOString() }]);
-      flash(`"${name}" importerad och validerad utan fel.`);
-    };
-    reader.readAsText(file);
+      const name = file.name.replace(/\.xlsx$/i, "") || `Importerad databas ${customDbs.length + 1}`;
+      saveDbData(id, data).then(() => persistList([...customDbs, { id, name, createdAt: new Date().toISOString() }])).then(() => flash(`"${name}" importerad och validerad utan fel.`));
+    }).catch(err => { setImportBusy(false); setImportErrors([err.message || "Kunde inte läsa Excel-filen."]); });
   }
 
   if (editingDb) {
@@ -5490,18 +5590,19 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
       onBack={() => setEditingDb(null)}
       onSave={async clubs => { await saveDbData(editingDb.id, clubs); flash(`"${editingDb.name}" sparad.`); }}
       onSaveAs={clubs => { setNamePromptFor({ type: "saveas", data: clubs }); setNameInput(`${editingDb.name} (kopia)`); }}
-      onExport={(clubs, name) => downloadJSONFile(clubs, `${(name || "databas").replace(/\s+/g, "_")}.json`)}
+      onExport={(clubs, name) => exportDatabaseToExcel(clubs, `${(name || "databas").replace(/\s+/g, "_")}.xlsx`)}
       onSaveAndPlay={clubs => onUseDatabase(editingDb.id, editingDb.name, clubs)} />;
   }
 
   return (
     <div style={{ background: C.turfDeep, minHeight: "100vh", color: C.paper }} className="p-5">
-      <input ref={fileInputRef} type="file" accept="application/json,.json" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) handleImportFile(f); e.target.value = ""; }} />
+      <input ref={fileInputRef} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) handleImportFile(f); e.target.value = ""; }} />
       <button onClick={onBack} className="text-sm mb-3" style={{ color: C.goldSoft }}>← Avbryt</button>
       <div className="font-display text-2xl mb-1" style={{ color: C.goldSoft }}>Databashanterare</div>
-      <div className="text-11 mb-4" style={{ color: C.paperDim, maxWidth: 520 }}>Skapa egna databaser baserade på standarddatabasen, importera egna JSON-filer, eller ladda ner en mall att fylla i. Standarddatabasen kan aldrig skrivas över.</div>
+      <div className="text-11 mb-4" style={{ color: C.paperDim, maxWidth: 520 }}>Skapa egna databaser baserade på standarddatabasen, importera egna Excel-filer, eller ladda ner en Excel-mall att fylla i — med länder, divisioner och klubbar uppdelade i filterbara kolumner. Standarddatabasen kan aldrig skrivas över.</div>
 
       {toast && <div className="text-11 mb-3 px-3 py-2 rounded-lg" style={{ background: "rgba(201,154,62,0.18)", border: `1px solid ${C.gold}`, color: C.goldSoft, maxWidth: 520 }}>{toast}</div>}
+      {importBusy && <div className="text-11 mb-3 px-3 py-2 rounded-lg" style={{ background: "rgba(255,255,255,0.08)", color: C.paper, maxWidth: 520 }}>Läser och validerar Excel-filen…</div>}
       {importErrors && (
         <div className="mb-3 p-3 rounded-lg" style={{ background: "rgba(180,68,59,0.15)", border: `1px solid #B4443B`, maxWidth: 520 }}>
           <div className="text-11 font-bold mb-1" style={{ color: "#E08A82" }}>Importen misslyckades ({importErrors.length} fel):</div>
@@ -5526,8 +5627,8 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
 
       <div style={{ maxWidth: 520 }} className="grid grid-cols-3 gap-2 mb-4">
         <button onClick={() => { setNamePromptFor({ type: "create", data: standardWorld }); setNameInput(`Min databas ${customDbs.length + 1}`); }} className="py-2.5 rounded-xl text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>➕ Ny databas</button>
-        <button onClick={() => fileInputRef.current?.click()} className="py-2.5 rounded-xl text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paper }}>⬆️ Importera JSON</button>
-        <button onClick={() => downloadJSONFile(standardWorld, "tranarbanken_databasmall.json")} className="py-2.5 rounded-xl text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paper }}>📄 Ladda ner mall</button>
+        <button onClick={() => fileInputRef.current?.click()} className="py-2.5 rounded-xl text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paper }}>⬆️ Importera Excel</button>
+        <button onClick={() => exportDatabaseToExcel(standardWorld, "tranarbanken_databasmall.xlsx")} className="py-2.5 rounded-xl text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paper }}>📄 Ladda ner mall</button>
       </div>
 
       <div style={{ maxWidth: 520 }}>
@@ -5658,8 +5759,26 @@ function DatabaseView({ world, dbName, isCustom, onSave, onSaveAs, onExport, onS
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <div className="text-9 uppercase font-semibold mb-1" style={{ color: C.paperDim }}>Klubbfärg</div>
+              <div className="text-9 uppercase font-semibold mb-1" style={{ color: C.paperDim }}>Klubbfärg (primär)</div>
               <input type="color" value={selectedClub.color} onChange={e => updateClub(selectedClub.id, { color: e.target.value })} className="w-full h-9 rounded-lg" style={{ background: C.paper }} />
+            </div>
+            <div>
+              <div className="text-9 uppercase font-semibold mb-1" style={{ color: C.paperDim }}>Klubbfärg (sekundär)</div>
+              <input type="color" value={selectedClub.secondaryColor || "#ffffff"} onChange={e => updateClub(selectedClub.id, { secondaryColor: e.target.value })} className="w-full h-9 rounded-lg" style={{ background: C.paper }} />
+            </div>
+            <div>
+              <div className="text-9 uppercase font-semibold mb-1" style={{ color: C.paperDim }}>Tröjmönster</div>
+              <select value={selectedClub.jerseyPattern || ""} onChange={e => updateClub(selectedClub.id, { jerseyPattern: e.target.value || undefined })} className="w-full px-3 py-2 rounded-lg text-sm" style={{ background: C.paper, color: C.ink }}>
+                <option value="">Standard (slumpad från klubb-ID)</option>
+                <option value="solid">Enfärgad</option>
+                <option value="stripes">Ränder</option>
+                <option value="hoops">Ringar</option>
+                <option value="halves">Delad i två</option>
+              </select>
+            </div>
+            <div>
+              <div className="text-9 uppercase font-semibold mb-1" style={{ color: C.paperDim }}>Arenakapacitet (åskådare)</div>
+              <input type="number" value={selectedClub.baseArenaCapacity ?? ""} placeholder="Standard för arketyp/division" onChange={e => updateClub(selectedClub.id, { baseArenaCapacity: e.target.value === "" ? undefined : Math.max(500, Number(e.target.value) || 0) })} className="w-full px-3 py-2 rounded-lg text-sm" style={{ background: C.paper, color: C.ink }} />
             </div>
             <div>
               <div className="text-9 uppercase font-semibold mb-1" style={{ color: C.paperDim }}>Arketyp</div>
@@ -5722,7 +5841,7 @@ function DatabaseView({ world, dbName, isCustom, onSave, onSaveAs, onExport, onS
         ) : (
           <button onClick={() => onSaveAs(clubs)} className="py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: "rgba(255,255,255,0.1)", color: C.paper }}>💾 Spara som ny databas</button>
         )}
-        <button onClick={() => onExport(clubs, dbName)} className="py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: "rgba(255,255,255,0.1)", color: C.paper }}>⬇️ Exportera JSON</button>
+        <button onClick={() => onExport(clubs, dbName)} className="py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: "rgba(255,255,255,0.1)", color: C.paper }}>⬇️ Exportera Excel</button>
       </div>
       <button onClick={() => onSaveAndPlay(clubs)} className="pulse-cta w-full py-2.5 rounded-xl font-display text-sm tracking-wide mt-2.5" style={{ background: C.gold, color: C.turfDeep, maxWidth: 480 }}>✅ ANVÄND DENNA DATABAS & FORTSÄTT TILL KLUBBVAL</button>
     </div>
@@ -8298,6 +8417,11 @@ const PRESTIGE_KIT_OVERRIDES = {
 };
 function kitPatternFor(club) {
   if (!club) return { pattern: "solid", secondary: null, trim: "#ffffff" };
+  if (club.jerseyPattern || club.secondaryColor) {
+    const rng = seededRandom(String(club.id) + "kit")();
+    const defaultPattern = rng < 0.4 ? "solid" : rng < 0.62 ? "stripes" : rng < 0.81 ? "hoops" : "halves";
+    return { pattern: club.jerseyPattern || defaultPattern, secondary: club.secondaryColor || null, trim: club.secondaryColor || "#ffffff" };
+  }
   if (PRESTIGE_KIT_OVERRIDES[club.id]) return PRESTIGE_KIT_OVERRIDES[club.id];
   const rng = seededRandom(String(club.id) + "kit")();
   const pattern = rng < 0.4 ? "solid" : rng < 0.62 ? "stripes" : rng < 0.81 ? "hoops" : "halves";
