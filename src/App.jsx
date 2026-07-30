@@ -245,6 +245,41 @@ function positionFit(specificPos, col, row) {
   const dist = Math.sqrt((col - anchor.col) ** 2 + rowDist ** 2);
   return clamp(1 - dist / 4, 0.3, 1);
 }
+// Layers position-training progress on top of the natural fit — a player actively trained toward a nearby
+// position gradually becomes genuinely better suited there, not just "tolerated" out of position.
+function effectivePositionFit(player, col, row) {
+  const base = positionFit(player.specificPosition, col, row);
+  const targetCode = nearestPositionForCell(col, row);
+  const bonus = player?.trainedPositions?.[targetCode] || 0;
+  return clamp(base + bonus, 0, 1);
+}
+// Position training: a player can be actively trained toward a nearby-but-currently-weak ("red") position,
+// gradually gaining a genuine fit bonus there plus a small attribute nudge — represents deliberate positional
+// coaching, distinct from natural age-based development.
+function tickPositionTraining(p) {
+  if (!p.trainingTarget) return p;
+  const { position } = p.trainingTarget;
+  const anchor = SPECIFIC_POSITION_LOOKUP[position];
+  if (!anchor) return { ...p, trainingTarget: null };
+  const currentBonus = p.trainedPositions?.[position] || 0;
+  const gain = rnd(0.01, 0.025);
+  const newBonus = clamp(currentBonus + gain, 0, 0.35);
+  let attack = p.attack, defense = p.defense;
+  if (Math.random() < 0.35) {
+    // Forward/attacking anchors (higher col) lean the nudge toward attack; defensive anchors toward defense.
+    if (anchor.col >= 3) attack = clamp(attack + rnd(0.08, 0.22), 15, 99);
+    else defense = clamp(defense + rnd(0.08, 0.22), 15, 99);
+  }
+  return { ...p, attack, defense, trainedPositions: { ...(p.trainedPositions || {}), [position]: newBonus } };
+}
+function eligibleTrainingPositions(player) {
+  return Object.keys(SPECIFIC_POSITION_LOOKUP).filter(code => {
+    if (code === player.specificPosition) return false;
+    const anchor = SPECIFIC_POSITION_LOOKUP[code];
+    const fit = effectivePositionFit(player, anchor.col, anchor.row);
+    return fit >= 0.3 && fit < 0.68; // a "red/borderline" nearby position — not already comfortable there
+  });
+}
 function nearestPositionForCell(col, row) {
   const anchors = Object.values(SPECIFIC_POSITION_LOOKUP);
   // First find which tactical "line" (column) this cell belongs to.
@@ -926,7 +961,9 @@ function makeScoutPlayer(pos, region, rating, clubs) {
   const nationality = bias.nationality || pick(EUROPEAN_NATIONALITIES);
   const age = rndInt(19, 31);
   const clubId = clubs ? pickOwningClub(clubs, (attack + defense) / 2) : null;
-  return { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition: randomSpecificPosition(pos), attack, defense, value, wage: computeWage(value, attack, defense), clubId, contractYears: rndInt(2, 5), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, apps: 0, goals: 0, ratingSum: 0 };
+  const overallish = (attack + defense) / 2;
+  const rivalInterest = (age <= 23 && overallish >= 55 && Math.random() < 0.22) ? pick(["En storklubb", "Ett par klubbar från kontinenten", "En ambitiös uppstickarklubb", "Flera klubbar i toppdivisionerna"]) : null;
+  return { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition: randomSpecificPosition(pos), attack, defense, value, wage: computeWage(value, attack, defense), clubId, contractYears: rndInt(2, 5), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, apps: 0, goals: 0, ratingSum: 0, rivalInterest };
 }
 function effectiveScoutRating(dev, reputation, analysBonus = 0) { return clamp(dev.scouting + reputation / 25 + analysBonus * 0.4, 1, 9.5); }
 
@@ -1402,7 +1439,7 @@ function getAttrs(player) {
   const rng = seededRandom(String(player.id) + "attrs");
   const j = () => Math.floor(rng() * 17) - 8;
   const a = clamp(player.attack, 12, 96), d = clamp(player.defense, 12, 96);
-  return {
+  const derived = {
     shooting: clamp(Math.round((player.pos === "FÖ" || player.pos === "MV" ? d * 0.3 + a * 0.3 : a) + j()), 8, 96),
     passing: clamp(Math.round(a * 0.4 + d * 0.4 + j()), 8, 96),
     dribbling: clamp(Math.round(a * 0.9 + j()), 8, 96),
@@ -1410,8 +1447,15 @@ function getAttrs(player) {
     defending: clamp(Math.round(d * 0.95 + j()), 8, 96),
     physical: clamp(Math.round(((a + d) / 2) * 0.85 + j()), 8, 96),
   };
+  // Database-set overrides win over the derived values, so a custom database can hand-tune sub-attributes
+  // instead of always deriving them from attack/defense.
+  return {
+    shooting: player.shooting ?? derived.shooting, passing: player.passing ?? derived.passing, dribbling: player.dribbling ?? derived.dribbling,
+    pace: player.pace ?? derived.pace, defending: player.defending ?? derived.defending, physical: player.physical ?? derived.physical,
+  };
 }
 function weakFoot(player) {
+  if (player.weakFoot != null) return player.weakFoot;
   const roll = seededRandom(String(player.id) + "weakfoot")();
   if (roll < 0.08) return 5;
   if (roll < 0.22) return 4;
@@ -1420,6 +1464,7 @@ function weakFoot(player) {
   return 1;
 }
 function headingAbility(player) {
+  if (player.headingAbility != null) return player.headingAbility;
   const rng = seededRandom(String(player.id) + "heading");
   const j = Math.floor(rng() * 21) - 10;
   const a = clamp(player.attack, 12, 96), d = clamp(player.defense, 12, 96);
@@ -1427,6 +1472,7 @@ function headingAbility(player) {
   return clamp(Math.round(base + j), 10, 96);
 }
 function injuryProneness(player) {
+  if (player.injuryProneness) return player.injuryProneness;
   const roll = seededRandom(String(player.id) + "injuryprone")();
   if (roll < 0.15) return "Skör";
   if (roll < 0.85) return "Normal";
@@ -1437,6 +1483,7 @@ function injuryProneMult(player) {
   return p === "Skör" ? 1.6 : p === "Robust" ? 0.6 : 1;
 }
 function clutchFactor(player) {
+  if (player.clutchFactor != null) return player.clutchFactor;
   const rng = seededRandom(String(player.id) + "clutch")();
   return Math.round((rng - 0.5) * 2 * 10) / 10;
 }
@@ -1846,9 +1893,12 @@ function wageDemand(player, clubReputation = 50, clubBudget = null) {
   const capped = clamp(rawTarget, player.wage * 0.75, player.wage * 1.4);
   return Math.round(Math.max(4, Math.max(player.wage, capped)));
 }
-function negotiateWage(offerWage, targetWage, reputation, sweetenerScore = 0, isDerby = false) {
+function negotiateWage(offerWage, targetWage, reputation, sweetenerScore = 0, isDerby = false, negotiationSkill = 50) {
   const derbyPenalty = isDerby ? 1.3 : 1;
-  const effectiveTarget = targetWage * (1 - sweetenerScore) * derbyPenalty;
+  // A skilled negotiator manager narrows the gap a little before the player's demand is even checked —
+  // represents getting more favourable framing/terms into a deal, not a guaranteed win.
+  const skillMult = 1 - clamp(negotiationSkill - 50, -30, 40) * 0.0015;
+  const effectiveTarget = targetWage * (1 - sweetenerScore) * derbyPenalty * skillMult;
   const ratio = offerWage / effectiveTarget;
   if (ratio >= 1) return { result: "accept" };
   if (ratio >= 0.82) return { result: "counter", counterWage: Math.round(effectiveTarget * rnd(0.98, 1.05)) };
@@ -1901,13 +1951,14 @@ function generateTakeoverBid(reputation) {
 // ---------- Manager career ----------
 const MANAGER_ATTR_LABELS = { taktik: "Taktisk skicklighet", motivation: "Motivation & ledarskap", forhandling: "Förhandlingsvana", utveckling: "Talangutveckling" };
 const MANAGER_ATTR_ICONS = { taktik: "📋", motivation: "🔥", forhandling: "🤝", utveckling: "🌱" };
-function initialManager(name, nationality, division) {
+function initialManager(name, nationality, division, clubId, clubName, season) {
   const base = { 1: 42, 2: 34, 3: 26 }[division] || 30;
   return {
     name: name || "Ny tränare", nationality: nationality || pick(NATIONALITY_KEYS),
     reputation: base, wage: Math.round(base * 2.2), contractYears: 3, yearsAsManager: 0,
     attributes: { taktik: rndInt(base - 8, base + 8), motivation: rndInt(base - 8, base + 8), forhandling: rndInt(base - 8, base + 8), utveckling: rndInt(base - 8, base + 8) },
     interestedClub: null,
+    stints: clubId ? [{ clubId, clubName, startSeason: season ?? 1, endSeason: null, trophies: [] }] : [],
   };
 }
 function managerSeasonGrowth(manager, boardTargetMet, trophyCount) {
@@ -2315,7 +2366,7 @@ function staminaMult(stamina) {
   if (s >= 30) return 0.85;
   return 0.72;
 }
-function userStrength(xi, tactic, spelide, tacticalSettings, fitScore, staff) {
+function userStrength(xi, tactic, spelide, tacticalSettings, fitScore, staff, managerAttrs) {
   let attack = xi.reduce((s, p) => s + p.attack * staminaMult(p.stamina) * (p.pos === "AN" ? 1.3 : p.pos === "MF" ? 1.1 : 0.5), 0) / xi.length;
   let defense = xi.reduce((s, p) => s + p.defense * staminaMult(p.stamina) * (p.pos === "FÖ" || p.pos === "MV" ? 1.3 : p.pos === "MF" ? 0.9 : 0.5), 0) / xi.length;
   if (tactic === "anfall") { attack *= 1.16; defense *= 0.88; }
@@ -2335,6 +2386,11 @@ function userStrength(xi, tactic, spelide, tacticalSettings, fitScore, staff) {
     const analystLevel = staff.analyst?.level || 0;
     defense *= 1 + gkLevel * 0.012;
     attack *= 1 + analystLevel * 0.009;
+  }
+  if (managerAttrs) {
+    // A tactically sharp manager gets a bit more out of the same players — modest, capped effect.
+    const taktikMult = 1 + clamp((managerAttrs.taktik || 50) - 50, -30, 45) * 0.0025;
+    attack *= taktikMult; defense *= taktikMult;
   }
   return { attack: clamp(attack, 20, 99), defense: clamp(defense, 20, 99) };
 }
@@ -2931,9 +2987,12 @@ function nextPostSeasonStage(summary, userClub) {
   return "done";
 }
 function recentForm(schedule, round, userClubId) {
+  if (!Array.isArray(schedule)) return [];
   const results = [];
   for (let r = 0; r < round; r++) {
-    const f = schedule[r].find(x => x.home === userClubId || x.away === userClubId);
+    const roundFixtures = schedule[r];
+    if (!roundFixtures) continue;
+    const f = roundFixtures.find(x => x.home === userClubId || x.away === userClubId);
     if (!f || f.homeGoals === null) continue;
     const userIsHome = f.home === userClubId;
     const ug = userIsHome ? f.homeGoals : f.awayGoals, og = userIsHome ? f.awayGoals : f.homeGoals;
@@ -3276,7 +3335,7 @@ function TranarbankenApp() {
     };
     const userPoolIds = clubsInPool(countryId, division, clubs).map(c => c.id);
     const startSquad = club.squad ? club.squad.map(p => ({ ...p })) : makeSquad(countryId, club.archetype, division, ARCHETYPES[club.archetype].startDev.akademi);
-    const manager = initialManager(managerName, countryId, division);
+    const manager = initialManager(managerName, countryId, division, clubId, club.name, 1);
     const pressOpt = presentationPressOptions(boardTargetLabel(club.archetype, division).label).find(o => o.key === pressChoice);
     const startFanbase = clamp(fanbase + (pressOpt?.fanbaseDelta || 0), 5, 95);
     const startBoardConfidence = clamp(60 + (pressOpt?.boardConfidenceDelta || 0), 10, 90);
@@ -3386,7 +3445,7 @@ function setupCup(type, base) {
     const userIsHome = fixture.home === g.userClubId;
     const oppId = userIsHome ? fixture.away : fixture.home;
     const opp = newClubs[oppId];
-    const { attack, defense } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff);
+    const { attack, defense } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff, g.manager?.attributes);
     const { attack: attackNoStaff, defense: defenseNoStaff } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), null);
     const analystImpactDelta = Math.max(0, attack - attackNoStaff);
     const gkCoachImpactDelta = Math.max(0, defense - defenseNoStaff);
@@ -3680,6 +3739,33 @@ function setupCup(type, base) {
       });
       finalSquad = finalSquad.map(x => x.id === pl.id ? { ...x, agentContactedThisSeason: true } : x);
     }
+    // Playing-time dissatisfaction: a decent player who's been benched round after round (fit, available,
+    // but not selected) can start to sour on the situation — mirrors a real squad-management pressure that
+    // pure attribute numbers don't capture.
+    finalSquad = finalSquad.map(pl => {
+      const played = unionIds.includes(pl.id);
+      const wasAvailable = !(pl.injuryWeeks > 0) && !(pl.suspendedMatches > 0) && !pl.internationalDuty;
+      if (played) return { ...pl, benchStreak: 0 };
+      if (wasAvailable) return { ...pl, benchStreak: (pl.benchStreak || 0) + 1 };
+      return pl;
+    });
+    finalSquad = finalSquad.map(pl => tickPositionTraining(pl));
+    const frustratedCandidates = finalSquad.filter(pl => (pl.benchStreak || 0) >= 6 && overallOf(pl) >= 58 && !pl.recentlyComplained);
+    if (frustratedCandidates.length && Math.random() < 0.3) {
+      const pl = pick(frustratedCandidates);
+      const wantsTransfer = (pl.benchStreak || 0) >= 10 && Math.random() < 0.4;
+      if (wantsTransfer) {
+        pushNews(`${pl.name} har bett om en överflyttning — trött på att sitta på bänken (${pl.benchStreak} omgångar utan speltid).`, "Trupp", {
+          action: { type: "contractRenewal", playerId: pl.id, label: "Prata med spelaren" },
+          note: `${pl.name} tycker sig förtjäna mer speltid och har öppet ifrågasatt sin framtid i klubben.`,
+        });
+      } else {
+        pushNews(`${pl.name} har uttryckt missnöje över bristande speltid (${pl.benchStreak} omgångar på bänken).`, "Trupp");
+      }
+      finalSquad = finalSquad.map(x => x.id === pl.id ? { ...x, recentlyComplained: true, morale: clamp((x.morale ?? 70) - rndInt(6, 14), 0, 100) } : x);
+    } else {
+      finalSquad = finalSquad.map(x => (x.recentlyComplained && (x.benchStreak || 0) === 0) ? { ...x, recentlyComplained: false } : x);
+    }
     if (windowJustOpened && newIncomingOffers.length > (g.incomingOffers || []).length) {
       newIncomingOffers.slice((g.incomingOffers || []).length).forEach(o => pushNews(`${o.buyerName} har lagt ett bud på ${o.playerName}: ${formatMoney(o.offer)}.`, "Övergångar", { action: { type: "incomingOffer", label: "Hantera bud" }, note: `${o.buyerName} vill köpa ${o.playerName} för ${formatMoney(o.offer)}.` }));
     }
@@ -3856,7 +3942,7 @@ function setupCup(type, base) {
     }
     const opp = g.clubs[userOppId];
     const xi = getXI(g.squad, g.startingXI);
-    const { attack, defense } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff);
+    const { attack, defense } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff, g.manager?.attributes);
     const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}domestic${cup.roundIndex || 1}`);
     const pending = { oppId: userOppId, oppName: opp.name, oppStrength: opp.strength, userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "domesticRound", winners } }));
@@ -4324,6 +4410,14 @@ function setupCup(type, base) {
     const player = g.squad.find(p => p.id === playerId);
     showToast(`Ni har diskret antytt att ${player?.name || "spelaren"} kan vara till salu. Det ökar chansen för bud den närmaste tiden — men garanterar ingenting.`);
   }
+  function startPositionTraining(playerId, position) {
+    setG(prev => ({ ...prev, squad: prev.squad.map(p => p.id === playerId ? { ...p, trainingTarget: { position, startedRound: prev.round } } : p) }));
+    const player = g.squad.find(p => p.id === playerId);
+    showToast(`${player?.name || "Spelaren"} tränar nu mot ${position} — passform och egenskaper förbättras gradvis, omgång för omgång.`);
+  }
+  function cancelPositionTraining(playerId) {
+    setG(prev => ({ ...prev, squad: prev.squad.map(p => p.id === playerId ? { ...p, trainingTarget: null } : p) }));
+  }
   function toggleTransferListed(playerId) {
     const player = g.squad.find(p => p.id === playerId);
     if (!player) return;
@@ -4447,13 +4541,17 @@ function setupCup(type, base) {
     if (!opt) return;
     setG(prev => {
       let newSquad = prev.squad;
+      // A more motivational manager gets more out of the same words: bigger morale lifts, smaller hits.
+      const motivation = prev.manager?.attributes?.motivation ?? 50;
+      const motivMult = 1 + clamp(motivation - 50, -30, 40) * 0.006;
+      const effectiveMoraleDelta = opt.moraleDelta * (opt.moraleDelta > 0 ? motivMult : (2 - motivMult));
       if (opt.moraleTarget && report.ratings.length) {
         if (opt.moraleTarget === "all") {
-          newSquad = prev.squad.map(p => p.apps > 0 ? { ...p, morale: clamp(p.morale + opt.moraleDelta, 0, 100) } : p);
+          newSquad = prev.squad.map(p => p.apps > 0 ? { ...p, morale: clamp(p.morale + effectiveMoraleDelta, 0, 100) } : p);
         } else {
           const sorted = [...report.ratings].sort((a, b) => opt.moraleTarget === "best" ? b.rating - a.rating : a.rating - b.rating);
           const targetId = sorted[0]?.id;
-          newSquad = prev.squad.map(p => p.id === targetId ? { ...p, morale: clamp(p.morale + opt.moraleDelta, 0, 100) } : p);
+          newSquad = prev.squad.map(p => p.id === targetId ? { ...p, morale: clamp(p.morale + effectiveMoraleDelta, 0, 100) } : p);
         }
       }
       return {
@@ -4612,7 +4710,9 @@ function setupCup(type, base) {
       const budget = Math.round(CLUB_BUDGET_OVERRIDES[clubId] ?? (arche.startBudget * divMult));
       const userPoolIds = clubsInPool(targetClub.league, division, prev.clubs).map(c => c.id);
       const startSquad = (targetClub.squad || []).map(p => ({ ...p }));
-      const newManager = { ...prev.manager, wage: negotiatedWage, contractYears: rndInt(2, 4), interestedClub: null };
+      const closedStints = (prev.manager.stints || []).map((st, i, arr) => i === arr.length - 1 && st.endSeason == null ? { ...st, endSeason: prev.season } : st);
+      const newStints = [...closedStints, { clubId, clubName: targetClub.name, startSeason: prev.season, endSeason: null, trophies: [] }];
+      const newManager = { ...prev.manager, wage: negotiatedWage, contractYears: rndInt(2, 4), interestedClub: null, stints: newStints };
       const prestigeScore = (arche.tierMin + arche.tierMax) / 2 - (division - 1) * 8;
       const startPartLevel = (max) => clamp(prestigeScore >= 82 ? 3 : prestigeScore >= 70 ? 2 : 1, 1, max);
       // The old club carries on under a freshly appointed AI manager once you leave.
@@ -4810,7 +4910,12 @@ function setupCup(type, base) {
   }
   function saveClubColor(hex) {
     setG(prev => ({ ...prev, clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], color: hex } } }));
-    setEditingColor(false);
+  }
+  function saveClubSecondaryColor(hex) {
+    setG(prev => ({ ...prev, clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], secondaryColor: hex } } }));
+  }
+  function saveClubJerseyPattern(pattern) {
+    setG(prev => ({ ...prev, clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], jerseyPattern: pattern } } }));
   }
 
   function newSeason() {
@@ -4873,9 +4978,18 @@ function setupCup(type, base) {
       }
       else if (newDivision > oldDivision) promoMsg = `${newClubs[prev.userClubId].name} flyttas ned till Division ${newDivision}.`;
 
+      const seasonTrophies = [];
+      if (s.pos === 1) seasonTrophies.push(`${divisionLabel(prev.leagueId, oldDivision)}-mästare — Säsong ${prev.season}`);
+      if (s.domesticCupResult?.startsWith("Mästare")) seasonTrophies.push(`Inhemska cupen — Säsong ${prev.season}`);
+      if (s.cup1Result?.startsWith("Mästare")) seasonTrophies.push(`Kimby Mästerskapet — Säsong ${prev.season}`);
+      if (s.cup2Result?.startsWith("Mästare")) seasonTrophies.push(`Kimby Cupen — Säsong ${prev.season}`);
+      const stintsWithTrophies = seasonTrophies.length
+        ? (prev.manager.stints || []).map((st, i, arr) => i === arr.length - 1 && st.endSeason == null ? { ...st, trophies: [...st.trophies, ...seasonTrophies] } : st)
+        : (prev.manager.stints || []);
+
       const oldDivisionSize = snapshot.worldStandings[prev.leagueId][oldDivision].length;
       const posRatio = 1 - (s.pos - 1) / (oldDivisionSize - 1);
-      const cupBoost = (s.cup1Result?.startsWith("Mästare") ? 25 : s.cup1Result ? 8 : 0) + (s.cup2Result?.startsWith("Mästare") ? 12 : s.cup2Result ? 4 : 0) + (s.domesticCupWon ? 10 : 0);
+      const cupBoost = (s.cup1Result?.startsWith("Mästare") ? 25 : s.cup1Result ? 8 : 0) + (s.cup2Result?.startsWith("Mästare") ? 12 : s.cup2Result ? 4 : 0) + (s.domesticCupResult?.startsWith("Mästare") ? 10 : 0);
       const divisionBase = { 1: 70, 2: 45, 3: 20 }[oldDivision];
       const repTarget = clamp(divisionBase * 0.4 + posRatio * 40 + cupBoost, 0, 100);
       const newReputation = prev.reputation + (repTarget - prev.reputation) * 0.15;
@@ -4926,11 +5040,20 @@ function setupCup(type, base) {
         const age = p.age + 1;
         const seasonRecordForRecords = { season: prev.season, apps: p.apps, goals: p.goals, assists: p.assists || 0, avgRating: p.apps ? Math.round((p.ratingSum / p.apps) * 10) / 10 : null };
         checkClubRecords(p, seasonRecordForRecords);
-        if (age >= 36) { departures.push(`${p.name} har avslutat sin karriär.`); return; }
+        if (age >= 36) {
+          const careerAppsTotal = (p.seasonLog || []).reduce((s, r) => s + (r.apps || 0), 0) + (p.apps || 0);
+          const careerGoalsTotal = (p.seasonLog || []).reduce((s, r) => s + (r.goals || 0), 0) + (p.goals || 0);
+          const isNotable = careerAppsTotal >= 60 || careerGoalsTotal >= 25 || overallOf(p) >= 72;
+          if (isNotable) departures.push(`🏆 ${p.name} lägger av efter en lång karriär — ${careerAppsTotal} matcher och ${careerGoalsTotal} mål för klubben. Fansen hyllar en klubblegend på sin sista dag.`);
+          else departures.push(`${p.name} har avslutat sin karriär.`);
+          return;
+        }
         const contractYears = p.contractYears - 1;
         if (contractYears <= 0) { departures.push(`${p.name} lämnade klubben som free agent.`); return; }
         let attack = p.attack, defense = p.defense;
-        if (age < 24) { attack = clamp(attack + rnd(0.3, 1.2), 15, 99); defense = clamp(defense + rnd(0.3, 1.2), 15, 99); }
+        const utveckling = prev.manager?.attributes?.utveckling ?? 50;
+        const devMult = 1 + clamp(utveckling - 50, -30, 40) * 0.008;
+        if (age < 24) { attack = clamp(attack + rnd(0.3, 1.2) * devMult, 15, 99); defense = clamp(defense + rnd(0.3, 1.2) * devMult, 15, 99); }
         else if (age >= 30) { const decline = (age - 29) * rnd(0.5, 1.1); attack = clamp(attack - decline, 15, 99); defense = clamp(defense - decline, 15, 99); }
         const playTimeRatio = p.apps / totalRoundsLastSeason;
         const outOfPosRatio = p.apps ? (p.outOfPositionApps || 0) / p.apps : 0;
@@ -4970,8 +5093,10 @@ function setupCup(type, base) {
 
       const trophyCount = (s.domesticCupResult?.startsWith("Mästare") ? 1 : 0) + (s.cup1Result?.startsWith("Mästare") ? 1 : 0) + (s.cup2Result?.startsWith("Mästare") ? 1 : 0);
       const mgGrowth = managerSeasonGrowth(prev.manager, s.boardTargetMet, trophyCount);
-      let newManager = { ...prev.manager, reputation: mgGrowth.newReputation, attributes: mgGrowth.newAttributes, yearsAsManager: prev.manager.yearsAsManager + 1, contractYears: Math.max(0, prev.manager.contractYears - 1) };
-      if (gotSacked) newManager = { ...newManager, reputation: clamp(newManager.reputation - rnd(3, 8), 5, 99) };
+      let newManager = { ...prev.manager, reputation: mgGrowth.newReputation, attributes: mgGrowth.newAttributes, yearsAsManager: prev.manager.yearsAsManager + 1, contractYears: Math.max(0, prev.manager.contractYears - 1), stints: stintsWithTrophies };
+      if (gotSacked) {
+        newManager = { ...newManager, reputation: clamp(newManager.reputation - rnd(3, 8), 5, 99), stints: newManager.stints.map((st, i, arr) => i === arr.length - 1 && st.endSeason == null ? { ...st, endSeason: prev.season } : st) };
+      }
       const mgrRepDelta = newManager.reputation - prev.manager.reputation;
       if (Math.abs(mgrRepDelta) >= 2) pushNews(mgrRepDelta > 0 ? `Ert rykte som tränare stärks (${Math.round(prev.manager.reputation)} → ${Math.round(newManager.reputation)}).` : `Ert rykte som tränare dalar (${Math.round(prev.manager.reputation)} → ${Math.round(newManager.reputation)}).`, "Manager");
       let managerMsg = null;
@@ -5229,7 +5354,10 @@ function setupCup(type, base) {
             </div>
             {editingColor && (
               <div style={{ padding: "0 20px 12px" }}>
-                <div className="text-9 uppercase tracking-wide mb-1.5" style={{ color: C.paperDim }}>Välj klubbfärg</div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="text-9 uppercase tracking-wide" style={{ color: C.paperDim }}>Välj klubbfärg (primär)</div>
+                  <button onClick={() => setEditingColor(false)} className="text-9 font-semibold px-2 py-0.5 rounded-lg" style={{ background: "rgba(255,255,255,0.1)", color: C.paper }}>Klar</button>
+                </div>
                 <div className="flex flex-wrap gap-2">
                   {COLOR_POOL.map(hex => (
                     <button key={hex} onClick={() => saveClubColor(hex)} style={{ width: 24, height: 24, borderRadius: "50%", background: hex, border: hex === userClub.color ? `2px solid ${C.gold}` : "2px solid transparent" }} />
@@ -5238,6 +5366,22 @@ function setupCup(type, base) {
                     <Pencil size={10} color={C.paperDim} />
                     <input type="color" value={userClub.color} onChange={e => saveClubColor(e.target.value)} style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }} />
                   </label>
+                </div>
+                <div className="text-9 uppercase tracking-wide mb-1.5 mt-3" style={{ color: C.paperDim }}>Sekundärfärg</div>
+                <div className="flex flex-wrap gap-2">
+                  {COLOR_POOL.map(hex => (
+                    <button key={hex} onClick={() => saveClubSecondaryColor(hex)} style={{ width: 24, height: 24, borderRadius: "50%", background: hex, border: hex === userClub.secondaryColor ? `2px solid ${C.gold}` : "2px solid transparent" }} />
+                  ))}
+                  <label style={{ width: 24, height: 24, borderRadius: "50%", border: `1px dashed ${C.paperDim}`, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", position: "relative", overflow: "hidden" }}>
+                    <Pencil size={10} color={C.paperDim} />
+                    <input type="color" value={userClub.secondaryColor || "#ffffff"} onChange={e => saveClubSecondaryColor(e.target.value)} style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }} />
+                  </label>
+                </div>
+                <div className="text-9 uppercase tracking-wide mb-1.5 mt-3" style={{ color: C.paperDim }}>Tröjmönster</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {[["solid", "Enfärgad"], ["stripes", "Ränder"], ["hoops", "Ringar"], ["halves", "Delad"]].map(([key, label]) => (
+                    <button key={key} onClick={() => saveClubJerseyPattern(key)} className="px-2.5 py-1 rounded-lg text-9 font-semibold" style={key === (userClub.jerseyPattern || "solid") ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.1)", color: C.paper }}>{label}</button>
+                  ))}
                 </div>
               </div>
             )}
@@ -5284,8 +5428,10 @@ function setupCup(type, base) {
               ) : g.view === "manager" ? (
                 <ManagerProfileView manager={g.manager} assistantManager={g.assistantManager} staff={g.staff} g={g} userClub={userClub}
                   onRespondInterest={respondManagerInterest} onHireAssistant={hireAssistantManager} onSetDifficulty={setDifficulty}
-                  onOpenJobMarket={openJobMarket}
+                  onOpenJobMarket={openJobMarket} onOpenCV={() => setG(prev => ({ ...prev, view: "managercv" }))}
                   onBack={() => setG(prev => ({ ...prev, view: prev.activeTab === "home" ? "home" : "tab" }))} />
+              ) : g.view === "managercv" ? (
+                <ManagerCVView manager={g.manager} onBack={() => setG(prev => ({ ...prev, view: "manager" }))} />
               ) : g.view === "matchprep" ? (
                 <MatchPrepView g={g} userClub={userClub} oppClub={oppClub} countryName={countryName} isHome={nextFixture ? nextFixture.home === g.userClubId : true}
                   onBack={() => setG(prev => ({ ...prev, view: "home" }))}
@@ -5324,7 +5470,7 @@ function setupCup(type, base) {
                   setPieceTakers={g.setPieceTakers} onSetSetPieceTakers={setSetPieceTakers} chemistryPairs={g.chemistryPairs} onAssessPlayer={assessPlayer}
                   tactic={g.tactic} onTactic={t => setG(prev => ({ ...prev, tactic: t }))} tacticalSettings={g.tacticalSettings} onSetTactical={setTacticalOption}
                   spelide={g.spelide} onSetSpelide={setSpelide} captainId={g.captainId} onSetCaptain={setCaptain}
-                  dev={g.dev} budget={g.budget} akademiParts={g.akademiParts} youthSquad={g.youthSquad} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSellYouth={sellYouth} onPromoteYouth={promoteYouth} onSubViewChange={setSubViewOpen} pendingSelectedPlayerId={g.pendingSelectedPlayerId} onClearPendingSelection={() => setG(prev => ({ ...prev, pendingSelectedPlayerId: null }))} reputation={g.reputation} squadViewPrefs={g.squadViewPrefs} onSetSquadViewPrefs={setSquadViewPrefs} transferHistory={g.transferHistory} userClubId={g.userClubId} onHintForSale={hintForSale} />
+                  dev={g.dev} budget={g.budget} akademiParts={g.akademiParts} youthSquad={g.youthSquad} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSellYouth={sellYouth} onPromoteYouth={promoteYouth} onSubViewChange={setSubViewOpen} pendingSelectedPlayerId={g.pendingSelectedPlayerId} onClearPendingSelection={() => setG(prev => ({ ...prev, pendingSelectedPlayerId: null }))} reputation={g.reputation} squadViewPrefs={g.squadViewPrefs} onSetSquadViewPrefs={setSquadViewPrefs} transferHistory={g.transferHistory} userClubId={g.userClubId} onHintForSale={hintForSale} onStartTraining={startPositionTraining} onCancelTraining={cancelPositionTraining} />
               ) : g.activeTab === "club" ? (
                 <ClubTab club={userClub} dev={g.dev} budget={g.budget} history={g.history} reputation={g.reputation} fanbase={g.fanbase}
                   sponsors={g.sponsors} staff={g.staff} boardConfidence={g.boardConfidence} boardTarget={boardTargetLabel(userClub.archetype, userClub.division).label}
@@ -5540,11 +5686,14 @@ function worldToExcelRows(world) {
       Arketyp: c.archetype, Styrka: Math.round(c.strength), Startbudget: c.startBudget ?? "", Arenakapacitet: c.baseArenaCapacity ?? "",
     });
     (c.squad || []).forEach(p => {
+      const attrs = getAttrs(p);
       playerRows.push({
         Land: c.league, Division: c.division, KlubbID: c.id, Klubbnamn: c.name,
         SpelarID: p.id, Namn: p.name, Nummer: p.number ?? "", Ålder: p.age, Position: p.pos, SpecifikPosition: p.specificPosition,
         Anfall: Math.round(p.attack), Försvar: Math.round(p.defense), Potential: Math.round(p.potential ?? p.attack),
         Värde: p.value, "Lön": p.wage, Nationalitet: p.nationality || "",
+        Avslut: attrs.shooting, Passning: attrs.passing, Dribbling: attrs.dribbling, Fart: attrs.pace, Försvarsspel: attrs.defending, Fysik: attrs.physical,
+        "Svag fot": weakFoot(p), Huvudspel: headingAbility(p), Skaderisk: injuryProneness(p), Storform: clutchFactor(p),
       });
     });
   });
@@ -5575,6 +5724,10 @@ function excelRowsToWorld(clubRows, playerRows) {
       age: num(row.Ålder), pos: String(row.Position || "").trim(), specificPosition: String(row.SpecifikPosition || "").trim(),
       attack: num(row.Anfall), defense: num(row.Försvar), potential: num(row.Potential),
       value: num(row.Värde), wage: num(row["Lön"]), nationality: String(row.Nationalitet || "").trim(),
+      shooting: num(row.Avslut), passing: num(row.Passning), dribbling: num(row.Dribbling), pace: num(row.Fart), defending: num(row.Försvarsspel), physical: num(row.Fysik),
+      weakFoot: num(row["Svag fot"]), headingAbility: num(row.Huvudspel),
+      injuryProneness: row.Skaderisk && ["Skör", "Normal", "Robust"].includes(row.Skaderisk) ? row.Skaderisk : undefined,
+      clutchFactor: num(row.Storform),
     });
   });
   return world;
@@ -5843,6 +5996,43 @@ function DatabaseView({ world, dbName, isCustom, onSave, onSaveAs, onExport, onS
             }} className="w-full px-3 py-2 rounded-lg text-sm" style={{ background: C.paper, color: C.ink }}>
               {Object.keys(SPECIFIC_POSITION_LOOKUP).map(code => <option key={code} value={code}>{code}</option>)}
             </select>
+          </div>
+          <div>
+            <div className="text-9 uppercase font-semibold mb-2" style={{ color: C.paperDim }}>Egenskaper (tomt = beräknas automatiskt från Anfall/Försvar)</div>
+            <div className="grid grid-cols-3 gap-2">
+              {[["shooting", "Avslut"], ["passing", "Passning"], ["dribbling", "Dribbling"], ["pace", "Fart"], ["defending", "Försvarsspel"], ["physical", "Fysik"]].map(([key, label]) => (
+                <div key={key}>
+                  <div className="text-9 mb-1" style={{ color: C.paperDim }}>{label}</div>
+                  <input type="number" value={editingPlayer[key] ?? ""} placeholder={String(getAttrs(editingPlayer)[key])} onChange={e => updatePlayer(selectedClub.id, editingPlayer.id, { [key]: e.target.value === "" ? undefined : clamp(Number(e.target.value) || 0, 1, 99) })} className="w-full px-2.5 py-1.5 rounded-lg text-sm" style={{ background: C.paper, color: C.ink }} />
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="text-9 uppercase font-semibold mb-2" style={{ color: C.paperDim }}>Ytterligare egenskaper (tomt = beräknas automatiskt)</div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <div className="text-9 mb-1" style={{ color: C.paperDim }}>Svag fot (1–5)</div>
+                <input type="number" min="1" max="5" value={editingPlayer.weakFoot ?? ""} placeholder={String(weakFoot(editingPlayer))} onChange={e => updatePlayer(selectedClub.id, editingPlayer.id, { weakFoot: e.target.value === "" ? undefined : clamp(Number(e.target.value) || 0, 1, 5) })} className="w-full px-2.5 py-1.5 rounded-lg text-sm" style={{ background: C.paper, color: C.ink }} />
+              </div>
+              <div>
+                <div className="text-9 mb-1" style={{ color: C.paperDim }}>Huvudspel</div>
+                <input type="number" value={editingPlayer.headingAbility ?? ""} placeholder={String(headingAbility(editingPlayer))} onChange={e => updatePlayer(selectedClub.id, editingPlayer.id, { headingAbility: e.target.value === "" ? undefined : clamp(Number(e.target.value) || 0, 1, 99) })} className="w-full px-2.5 py-1.5 rounded-lg text-sm" style={{ background: C.paper, color: C.ink }} />
+              </div>
+              <div>
+                <div className="text-9 mb-1" style={{ color: C.paperDim }}>Skaderisk</div>
+                <select value={editingPlayer.injuryProneness || ""} onChange={e => updatePlayer(selectedClub.id, editingPlayer.id, { injuryProneness: e.target.value || undefined })} className="w-full px-2.5 py-1.5 rounded-lg text-sm" style={{ background: C.paper, color: C.ink }}>
+                  <option value="">Standard ({injuryProneness(editingPlayer)})</option>
+                  <option value="Skör">Skör</option>
+                  <option value="Normal">Normal</option>
+                  <option value="Robust">Robust</option>
+                </select>
+              </div>
+              <div>
+                <div className="text-9 mb-1" style={{ color: C.paperDim }}>Storform (−1 till 1)</div>
+                <input type="number" step="0.1" min="-1" max="1" value={editingPlayer.clutchFactor ?? ""} placeholder={String(clutchFactor(editingPlayer))} onChange={e => updatePlayer(selectedClub.id, editingPlayer.id, { clutchFactor: e.target.value === "" ? undefined : clamp(Number(e.target.value) || 0, -1, 1) })} className="w-full px-2.5 py-1.5 rounded-lg text-sm" style={{ background: C.paper, color: C.ink }} />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -6832,7 +7022,7 @@ function PressConferenceView({ report, onRespond }) {
   );
 }
 
-function ManagerProfileView({ manager, assistantManager, staff, g, userClub, onRespondInterest, onHireAssistant, onSetDifficulty, onOpenJobMarket, onBack }) {
+function ManagerProfileView({ manager, assistantManager, staff, g, userClub, onRespondInterest, onHireAssistant, onSetDifficulty, onOpenJobMarket, onOpenCV, onBack }) {
   const [hiringOpen, setHiringOpen] = useState(false);
   const [assistOffers, setAssistOffers] = useState([]);
   const orgReady = assistantManagerUnlockedViaOrg(staff);
@@ -6856,6 +7046,7 @@ function ManagerProfileView({ manager, assistantManager, staff, g, userClub, onR
             <div className="mt-1"><StarRating rating={managerStars} size={11} /></div>
           </div>
         </div>
+        <button onClick={onOpenCV} className="w-full mt-3 py-2 rounded-xl text-11 font-semibold" style={{ background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>📋 Visa fullständigt CV & karriärhistorik</button>
         <div className="grid grid-cols-2 gap-3 mt-3">
           <div><div className="text-10 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Kontraktslön</div><div className="font-mono text-sm font-semibold mt-0.5">{formatMoney(manager.wage)}/omg</div></div>
           <div><div className="text-10 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Kontrakt</div><div className="font-mono text-sm font-semibold mt-0.5">{manager.contractYears} år kvar</div></div>
@@ -7512,6 +7703,16 @@ function cupDueRoundNow(cup) {
   return activeDueRounds?.[cup.dueIndex ?? 0] ?? 0;
 }
 function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onContinueDomestic, onPlayGroup, onContinueGroup, onPlayLeg, onContinueLeg, onPlayFinal, onContinueFinal, onFinish, onBackToHome, currentRound }) {
+  if (!cup) {
+    // Defensive fallback: activeCupType and cups[type] should always be set together, but if they were
+    // ever to fall out of sync, this avoids a hard crash and gives the user a way back to Home instead.
+    return (
+      <div className="rise-in space-y-2.5">
+        <PaperCard><div className="text-sm text-center py-3" style={{ color: C.inkSoft }}>Ingen aktiv cupmatch just nu.</div></PaperCard>
+        <button onClick={onBackToHome} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep }}>TILLBAKA</button>
+      </div>
+    );
+  }
   if (cup.champion) {
     return (
       <div className="rise-in space-y-2.5">
@@ -8069,6 +8270,66 @@ function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputat
           ))}
         </div>
       </PaperCard>
+    </div>
+  );
+}
+function ManagerCVView({ manager, onBack }) {
+  const stints = manager.stints || [];
+  const totalTrophies = stints.reduce((s, st) => s + st.trophies.length, 0);
+  const longestStint = stints.reduce((max, st) => {
+    const len = (st.endSeason ?? (stints[stints.length - 1] === st ? st.startSeason + manager.yearsAsManager : st.startSeason)) - st.startSeason + 1;
+    return len > max.len ? { len, club: st.clubName } : max;
+  }, { len: 0, club: null });
+  return (
+    <div className="rise-in space-y-2.5">
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, right: 14, color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50 }}>← Bakåt</button>
+      <PaperCard>
+        <div className="font-display text-xl">{manager.name}</div>
+        <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>{nationalityLabel(manager.nationality)} · {manager.yearsAsManager} år som tränare · Rykte {Math.round(manager.reputation)}</div>
+      </PaperCard>
+      <div className="grid grid-cols-3 gap-2">
+        <PaperCard style={{ textAlign: "center", padding: 10 }}>
+          <div className="font-display text-lg">{stints.length}</div>
+          <div className="text-9 uppercase font-semibold" style={{ color: C.inkSoft }}>Klubbar</div>
+        </PaperCard>
+        <PaperCard style={{ textAlign: "center", padding: 10 }}>
+          <div className="font-display text-lg" style={{ color: C.gold }}>{totalTrophies}</div>
+          <div className="text-9 uppercase font-semibold" style={{ color: C.inkSoft }}>Troféer</div>
+        </PaperCard>
+        <PaperCard style={{ textAlign: "center", padding: 10 }}>
+          <div className="font-display text-lg">{longestStint.len}</div>
+          <div className="text-9 uppercase font-semibold" style={{ color: C.inkSoft }}>Längsta (säsonger)</div>
+        </PaperCard>
+      </div>
+      <div className="text-9 uppercase tracking-wide font-semibold px-1" style={{ color: C.inkSoft }}>Manager-attribut</div>
+      <PaperCard>
+        <div className="grid grid-cols-2 gap-3">
+          {Object.entries(manager.attributes).map(([key, val]) => (
+            <div key={key}>
+              <div className="flex items-center justify-between text-11 mb-1"><span style={{ textTransform: "capitalize" }}>{key}</span><span className="font-mono font-bold">{Math.round(val)}</span></div>
+              <div style={{ height: 6, borderRadius: 3, background: "rgba(30,42,34,0.08)", overflow: "hidden" }}><div style={{ height: "100%", width: `${clamp(val, 0, 100)}%`, background: C.gold }} /></div>
+            </div>
+          ))}
+        </div>
+      </PaperCard>
+      <div className="text-9 uppercase tracking-wide font-semibold px-1">Karriärhistorik</div>
+      {[...stints].reverse().map((st, i) => (
+        <PaperCard key={i} style={{ padding: 0 }}>
+          <div className="flex items-center justify-between px-3 pt-2.5">
+            <div className="font-semibold text-sm">{st.clubName}</div>
+            <div className="text-10" style={{ color: C.inkSoft }}>Säsong {st.startSeason}{st.endSeason ? `–${st.endSeason}` : " – nu"}</div>
+          </div>
+          <div className="px-3 pb-2.5 pt-1">
+            {st.trophies.length === 0 ? (
+              <div className="text-10" style={{ color: C.inkSoft }}>Inga troféer denna period.</div>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {st.trophies.map((t, j) => <span key={j} className="text-9 font-semibold px-2 py-1 rounded-full" style={{ background: "rgba(201,154,62,0.18)", color: C.gold }}>🏆 {t}</span>)}
+              </div>
+            )}
+          </div>
+        </PaperCard>
+      ))}
     </div>
   );
 }
@@ -9115,7 +9376,7 @@ function SetPieceTakersPanel({ squad, startingXI, setPieceTakers, onSave, onBack
 const LINEUP_TABLE_POS_TINT = { MV: "rgba(217,169,75,0.16)", FÖ: "rgba(63,143,107,0.14)", MF: "rgba(63,116,168,0.12)", AN: "rgba(180,68,59,0.12)" };
 function LineupTablePlayerRow({ player, posCode, cellCol, cellRow, selectedBenchId, onRowTap, onSelectPlayer, compact }) {
   const overall = overallOf(player);
-  const fit = cellCol !== undefined ? positionFit(player.specificPosition, cellCol, cellRow) : null;
+  const fit = cellCol !== undefined ? effectivePositionFit(player, cellCol, cellRow) : null;
   const unavailable = player.injuryWeeks > 0 || player.suspendedMatches > 0 || player.internationalDuty;
   const isTapSelected = selectedBenchId === player.id;
   const outOfPosition = posCode && posCode !== player.specificPosition;
@@ -9345,12 +9606,12 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
   const selectedSlot = selectedSlotKey ? { col: Number(selectedSlotKey.split("-")[0]), row: Number(selectedSlotKey.split("-")[1]) } : null;
   const slotCandidates = selectedSlotKey ? squad
     .filter(p => lineup[selectedSlotKey] !== p.id)
-    .map(p => ({ player: p, fit: positionFit(p.specificPosition, selectedSlot.col, selectedSlot.row) }))
+    .map(p => ({ player: p, fit: effectivePositionFit(p, selectedSlot.col, selectedSlot.row) }))
     .sort((a, b) => (b.fit - a.fit) || (overallOf(b.player) - overallOf(a.player)))
     : [];
   const selectedBenchPlayer = selectedBenchId ? squad.find(p => p.id === selectedBenchId) : null;
   const benchSlotCandidates = selectedBenchPlayer ? starterRows
-    .map(r => ({ ...r, fit: positionFit(selectedBenchPlayer.specificPosition, r.col, r.row) }))
+    .map(r => ({ ...r, fit: effectivePositionFit(selectedBenchPlayer, r.col, r.row) }))
     .sort((a, b) => (b.fit - a.fit) || ((b.player ? overallOf(b.player) : -1) - (a.player ? overallOf(a.player) : -1)))
     : [];
 
@@ -9668,7 +9929,7 @@ function TacticsPanel({ squad, startingXI, tactic, onTactic, tacticalSettings, o
     </div>
   );
 }
-function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, formationCode, lineupCells, onSaveFormation, onChat, clubs, round, onSendLoan, outgoingLoans, setPieceTakers, onSetSetPieceTakers, chemistryPairs, onAssessPlayer, tactic, onTactic, tacticalSettings, onSetTactical, spelide, onSetSpelide, captainId, onSetCaptain, dev, budget, akademiParts, youthSquad, onUpgrade, onUpgradePart, onSellYouth, onPromoteYouth, onSubViewChange, pendingSelectedPlayerId, onClearPendingSelection, reputation, squadViewPrefs, onSetSquadViewPrefs, transferHistory, userClubId, onHintForSale }) {
+function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, formationCode, lineupCells, onSaveFormation, onChat, clubs, round, onSendLoan, outgoingLoans, setPieceTakers, onSetSetPieceTakers, chemistryPairs, onAssessPlayer, tactic, onTactic, tacticalSettings, onSetTactical, spelide, onSetSpelide, captainId, onSetCaptain, dev, budget, akademiParts, youthSquad, onUpgrade, onUpgradePart, onSellYouth, onPromoteYouth, onSubViewChange, pendingSelectedPlayerId, onClearPendingSelection, reputation, squadViewPrefs, onSetSquadViewPrefs, transferHistory, userClubId, onHintForSale, onStartTraining, onCancelTraining }) {
   const [selectedId, setSelectedId] = useState(null);
   const [showContracts, setShowContracts] = useState(false);
   const [showSetPieces, setShowSetPieces] = useState(false);
@@ -9702,7 +9963,7 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
     if (!p) { setSelectedId(null); return null; }
     return <PlayerProfile player={p} isStarter={startingXI.includes(p.id)} onToggleStarter={() => onToggleStarter(p.id)}
       onBack={() => setSelectedId(null)} confirmSell={confirmSell} setConfirmSell={setConfirmSell} onSell={p2 => { onSell(p2); setSelectedId(null); }} onToggleListed={onToggleListed} onToggleLoanListed={onToggleLoanListed} onRenew={onRenew} onChat={onChat}
-      clubs={clubs} round={round} onSendLoan={onSendLoan ? (toId, toName) => { onSendLoan(toId, toName); setSelectedId(null); } : null} squadSize={squad.length} squad={squad} chemistryPairs={chemistryPairs} onAssessPlayer={onAssessPlayer} reputation={reputation} budget={budget} transferHistory={transferHistory} userClubId={userClubId} onHintForSale={onHintForSale} />;
+      clubs={clubs} round={round} onSendLoan={onSendLoan ? (toId, toName) => { onSendLoan(toId, toName); setSelectedId(null); } : null} squadSize={squad.length} squad={squad} chemistryPairs={chemistryPairs} onAssessPlayer={onAssessPlayer} reputation={reputation} budget={budget} transferHistory={transferHistory} userClubId={userClubId} onHintForSale={onHintForSale} onStartTraining={onStartTraining} onCancelTraining={onCancelTraining} />;
   }
 
   const clubOverall = squadOverallRating(squad);
@@ -9738,7 +9999,7 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
   );
 }
 
-function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, onChat, clubs, round, onSendLoan, squadSize, squad, chemistryPairs, onAssessPlayer, reputation, budget, transferHistory, userClubId, onHintForSale }) {
+function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, onChat, clubs, round, onSendLoan, squadSize, squad, chemistryPairs, onAssessPlayer, reputation, budget, transferHistory, userClubId, onHintForSale, onStartTraining, onCancelTraining }) {
   const attrs = getAttrs(player);
   const labels = attrLabels(player.pos);
   const overall = overallOf(player);
@@ -9849,6 +10110,33 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
                 <button onClick={() => onHintForSale(player.id)} disabled={recentlyHinted} className="w-full mt-2 py-2 rounded-xl text-sm font-semibold" style={recentlyHinted ? { background: "rgba(30,42,34,0.06)", color: C.inkSoft } : { background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>
                   {recentlyHinted ? "Redan antytt nyligen" : "Antyd diskret att spelaren kan säljas"}
                 </button>
+              )}
+            </PaperCard>
+          );
+        })()}
+        {(() => {
+          const eligible = eligibleTrainingPositions(player);
+          const active = player.trainingTarget;
+          if (!active && !eligible.length) return null;
+          return (
+            <PaperCard>
+              <div className="text-xs uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Positionsträning</div>
+              {active ? (
+                <>
+                  <div className="text-sm font-semibold">Tränar mot {active.position}</div>
+                  <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Passform-bonus hittills: +{Math.round((player.trainedPositions?.[active.position] || 0) * 100)}% · {round - active.startedRound} omgångar in</div>
+                  <div style={{ height: 6, borderRadius: 3, background: "rgba(30,42,34,0.08)", overflow: "hidden", marginTop: 6 }}>
+                    <div style={{ height: "100%", width: `${clamp(((player.trainedPositions?.[active.position] || 0) / 0.35) * 100, 2, 100)}%`, background: C.gold }} />
+                  </div>
+                  <button onClick={() => onCancelTraining(player.id)} className="w-full mt-2.5 py-2 rounded-xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.inkSoft }}>Avbryt träning</button>
+                </>
+              ) : (
+                <>
+                  <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Träna spelaren mot en näraliggande position för att gradvis öka passform och relevanta egenskaper där.</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {eligible.map(code => <button key={code} onClick={() => onStartTraining(player.id, code)} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg" style={{ background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>{code}</button>)}
+                  </div>
+                </>
               )}
             </PaperCard>
           );
@@ -10865,6 +11153,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
                         <div className="font-mono text-9 mt-0.5 truncate" style={{ color: C.inkSoft }}>{POS_LABEL[p.pos]} ({specificPositionLabel(p.specificPosition)}) · {p.age} år</div>
                         <div className="font-mono text-9 truncate" style={{ color: C.inkSoft }}>{owningClub ? owningClub.name : "Fri agent"}</div>
                         {rel && <div className="text-9 font-semibold truncate" style={{ color: rel.color }}>{isDerby ? "🔥 " : ""}{rel.text}</div>}
+                        {p.rivalInterest && <div className="text-9 font-semibold truncate" style={{ color: C.loss }}>👀 {p.rivalInterest} bevakar också spelaren</div>}
                       </div>
                     </div>
                     <div className="flex items-center justify-between mt-1.5">
