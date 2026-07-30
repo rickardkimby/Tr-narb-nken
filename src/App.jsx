@@ -2944,11 +2944,12 @@ function recentForm(schedule, round, userClubId) {
 
 // ---------- Root component ----------
 class TranarbankenErrorBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  constructor(props) { super(props); this.state = { hasError: false, error: null, componentStack: null }; }
   static getDerivedStateFromError(error) { return { hasError: true, error }; }
-  componentDidCatch(error, info) { console.error("Tränarbänken crash:", error, info); }
+  componentDidCatch(error, info) { console.error("Tränarbänken crash:", error, info); this.setState({ componentStack: info?.componentStack }); }
   render() {
     if (this.state.hasError) {
+      const componentName = (this.state.componentStack || "").trim().split("\n")[0]?.replace(/^in /, "").split(" ")[0];
       return (
         <div style={{ minHeight: "100vh", background: "#13221D", color: "#EEEAE0", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: "sans-serif" }}>
           <div style={{ maxWidth: 480, textAlign: "center" }}>
@@ -2956,9 +2957,16 @@ class TranarbankenErrorBoundary extends React.Component {
             <div style={{ fontSize: 13, color: "#8FA096", marginBottom: 16, lineHeight: 1.5 }}>
               Tränarbänken stötte på ett oväntat fel och kunde inte fortsätta rendera. Ditt senast sparade läge finns kvar — ladda om sidan för att fortsätta därifrån.
             </div>
-            <div style={{ fontSize: 10, fontFamily: "monospace", color: "#8FA096", background: "rgba(0,0,0,0.35)", padding: 10, borderRadius: 8, marginBottom: 16, textAlign: "left", overflow: "auto", maxHeight: 140, whiteSpace: "pre-wrap" }}>
-              {String(this.state.error?.stack || this.state.error?.message || this.state.error)}
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#E08A82", background: "rgba(180,68,59,0.15)", padding: "10px 14px", borderRadius: 8, marginBottom: 10, textAlign: "left" }}>
+              {componentName && <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, color: "#C99A3E", marginBottom: 4 }}>Kraschade i: {componentName}</div>}
+              {String(this.state.error?.message || this.state.error)}
             </div>
+            <details style={{ textAlign: "left", marginBottom: 16 }}>
+              <summary style={{ fontSize: 10, color: "#8FA096", cursor: "pointer" }}>Teknisk detalj</summary>
+              <div style={{ fontSize: 9, fontFamily: "monospace", color: "#8FA096", background: "rgba(0,0,0,0.35)", padding: 10, borderRadius: 8, marginTop: 6, overflow: "auto", maxHeight: 120, whiteSpace: "pre-wrap" }}>
+                {String(this.state.error?.stack || "")}
+              </div>
+            </details>
             <button onClick={() => window.location.reload()} style={{ background: "#D9A94B", color: "#13221D", border: "none", padding: "10px 22px", borderRadius: 10, fontWeight: 700, cursor: "pointer", fontSize: 13 }}>Ladda om spelet</button>
           </div>
         </div>
@@ -5639,7 +5647,7 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
   function flash(msg) { setToast(msg); setTimeout(() => setToast(null), 3500); }
   async function persistList(list) { setCustomDbs(list); try { await window.storage?.set("tranarbanken-db-index", JSON.stringify(list)); } catch (e) {} }
   async function loadDbData(id) { try { const res = await window.storage?.get(`tranarbanken-db-${id}`); return res ? JSON.parse(res.value) : null; } catch (e) { return null; } }
-  async function saveDbData(id, data) { try { await window.storage?.set(`tranarbanken-db-${id}`, JSON.stringify(data)); } catch (e) {} }
+  async function saveDbData(id, data) { try { await window.storage?.set(`tranarbanken-db-${id}`, JSON.stringify(data)); return true; } catch (e) { return false; } }
 
   async function confirmCreateOrSaveAs(sourceData) {
     const name = nameInput.trim() || "Namnlös databas";
@@ -5676,7 +5684,7 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
   if (editingDb) {
     return <DatabaseView world={editingDb.data} dbName={editingDb.name} isCustom={editingDb.isCustom}
       onBack={() => setEditingDb(null)}
-      onSave={async clubs => { await saveDbData(editingDb.id, clubs); flash(`"${editingDb.name}" sparad.`); }}
+      onSave={async clubs => { const ok = await saveDbData(editingDb.id, clubs); flash(ok ? `"${editingDb.name}" sparad.` : `Kunde inte spara "${editingDb.name}" — lagringen på den här enheten verkar blockerad (t.ex. privat surfläge eller full lagring). Prova Exportera Excel som säkerhetskopia istället.`); }}
       onSaveAs={clubs => { setNamePromptFor({ type: "saveas", data: clubs }); setNameInput(`${editingDb.name} (kopia)`); }}
       onExport={(clubs, name) => exportDatabaseToExcel(clubs, `${(name || "databas").replace(/\s+/g, "_")}.xlsx`)}
       onSaveAndPlay={clubs => onUseDatabase(editingDb.id, editingDb.name, clubs)} />;
@@ -5762,6 +5770,12 @@ function DatabaseView({ world, dbName, isCustom, onSave, onSaveAs, onExport, onS
   const [division, setDivision] = useState(1);
   const [selectedClubId, setSelectedClubId] = useState(null);
   const [editingPlayerId, setEditingPlayerId] = useState(null);
+  const [saving, setSaving] = useState(false);
+  async function handleSaveClick() {
+    setSaving(true);
+    await onSave(clubs);
+    setSaving(false);
+  }
 
   function updateClub(clubId, patch) {
     setClubs(prev => ({ ...prev, [clubId]: { ...prev[clubId], ...patch } }));
@@ -5770,7 +5784,7 @@ function DatabaseView({ world, dbName, isCustom, onSave, onSaveAs, onExport, onS
     setClubs(prev => ({ ...prev, [clubId]: { ...prev[clubId], squad: prev[clubId].squad.map(p => p.id === playerId ? { ...p, ...patch } : p) } }));
   }
 
-  const clubList = Object.values(clubs).filter(c => c.league === leagueId && c.division === division).sort((a, b) => a.name.localeCompare(b.name));
+  const clubList = Object.values(clubs).filter(c => c.league === leagueId && c.division === division).sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
   const selectedClub = selectedClubId ? clubs[selectedClubId] : null;
   const editingPlayer = editingPlayerId && selectedClub ? selectedClub.squad.find(p => p.id === editingPlayerId) : null;
 
@@ -5925,7 +5939,7 @@ function DatabaseView({ world, dbName, isCustom, onSave, onSaveAs, onExport, onS
       </div>
       <div className="grid grid-cols-2 gap-2 mt-5" style={{ maxWidth: 480 }}>
         {isCustom ? (
-          <button onClick={() => onSave(clubs)} className="py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: "rgba(255,255,255,0.1)", color: C.paper }}>💾 Spara databas</button>
+          <button onClick={handleSaveClick} disabled={saving} className="py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: "rgba(255,255,255,0.1)", color: C.paper, opacity: saving ? 0.6 : 1 }}>{saving ? "⏳ Sparar..." : "💾 Spara databas"}</button>
         ) : (
           <button onClick={() => onSaveAs(clubs)} className="py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: "rgba(255,255,255,0.1)", color: C.paper }}>💾 Spara som ny databas</button>
         )}
@@ -9332,12 +9346,12 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
   const slotCandidates = selectedSlotKey ? squad
     .filter(p => lineup[selectedSlotKey] !== p.id)
     .map(p => ({ player: p, fit: positionFit(p.specificPosition, selectedSlot.col, selectedSlot.row) }))
-    .sort((a, b) => overallOf(b.player) - overallOf(a.player))
+    .sort((a, b) => (b.fit - a.fit) || (overallOf(b.player) - overallOf(a.player)))
     : [];
   const selectedBenchPlayer = selectedBenchId ? squad.find(p => p.id === selectedBenchId) : null;
   const benchSlotCandidates = selectedBenchPlayer ? starterRows
     .map(r => ({ ...r, fit: positionFit(selectedBenchPlayer.specificPosition, r.col, r.row) }))
-    .sort((a, b) => overallOf(b.player) - overallOf(a.player))
+    .sort((a, b) => (b.fit - a.fit) || ((b.player ? overallOf(b.player) : -1) - (a.player ? overallOf(a.player) : -1)))
     : [];
 
   return (
