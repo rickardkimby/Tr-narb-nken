@@ -818,6 +818,8 @@ const AF_FIRST = ["Kwame","Amadou","Yaya","Sadio","Ibrahim","Emeka","Moussa","Ch
 const AF_LAST = ["Mensah","Diallo","Traoré","Okafor","Camara","Koné","Adeyemi","Bello","Diarra","Touré"];
 const AS_FIRST = ["Haruto","Minjun","Wei","Kenji","Jin","Ryo","Sun","Tetsuo","Hyun","Daichi"];
 const AS_LAST = ["Tanaka","Kim","Park","Sato","Nakamura","Lee","Chen","Watanabe","Suzuki","Yamamoto"];
+const NA_FIRST = ["Jordan","Tyler","Cole","Ricardo","Diego","Marco","Ethan","Caleb","Mason","Jayden"];
+const NA_LAST = ["Johnson","Rivera","Reyna","Morales","Aaronson","Adams","Wright","Turner","Bello","Hernández"];
 
 const NATIONALITY_POOLS = {
   england: { first: ENG_FIRST, last: ENG_LAST, label: "England" },
@@ -828,6 +830,7 @@ const NATIONALITY_POOLS = {
   sydamerika: { first: SA_FIRST, last: SA_LAST, label: "Sydamerika" },
   afrika: { first: AF_FIRST, last: AF_LAST, label: "Afrika" },
   asien: { first: AS_FIRST, last: AS_LAST, label: "Asien" },
+  nordamerika: { first: NA_FIRST, last: NA_LAST, label: "Nordamerika" },
 };
 const NATIONALITY_KEYS = Object.keys(NATIONALITY_POOLS);
 const EUROPEAN_NATIONALITIES = ["england", "italy", "spain", "germany", "france"];
@@ -842,13 +845,14 @@ function nameForNationality(nat) {
   return `${pick(pool.first)} ${pick(pool.last)}`;
 }
 
-const REGION_LABELS = { europa: "Europa", sydamerika: "Sydamerika", afrika: "Afrika", asien: "Asien" };
-const REGION_UNLOCK = { europa: 1, sydamerika: 3, afrika: 3, asien: 5 };
+const REGION_LABELS = { europa: "Europa", sydamerika: "Sydamerika", afrika: "Afrika", asien: "Asien", nordamerika: "Nordamerika" };
+const REGION_UNLOCK = { europa: 1, sydamerika: 3, afrika: 3, asien: 5, nordamerika: 4 };
 const REGION_BIAS = {
   europa: { attack: 0, defense: 0, priceMult: 1.0 },
   sydamerika: { attack: 5, defense: -3, priceMult: 1.15, nationality: "sydamerika" },
   afrika: { attack: 2, defense: 2, priceMult: 1.1, nationality: "afrika" },
   asien: { attack: -2, defense: 4, priceMult: 1.05, nationality: "asien" },
+  nordamerika: { attack: 1, defense: 1, priceMult: 1.08, nationality: "nordamerika" },
 };
 
 function randomPlayerName(nationality) { return nameForNationality(nationality || pick(NATIONALITY_KEYS)); }
@@ -966,6 +970,49 @@ function makeScoutPlayer(pos, region, rating, clubs) {
   return { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition: randomSpecificPosition(pos), attack, defense, value, wage: computeWage(value, attack, defense), clubId, contractYears: rndInt(2, 5), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, apps: 0, goals: 0, ratingSum: 0, rivalInterest };
 }
 function effectiveScoutRating(dev, reputation, analysBonus = 0) { return clamp(dev.scouting + reputation / 25 + analysBonus * 0.4, 1, 9.5); }
+// A standalone player from outside the simulated leagues — "Övriga världen". Not owned by any of the
+// 300 clubs; represents the wider footballing world you can only reach through scouting. Spans a wide
+// quality range on purpose, since a pool this size should have everything from fringe players to gems.
+function generateWorldPoolPlayer(region) {
+  const bias = REGION_BIAS[region] || REGION_BIAS.europa;
+  const pos = pick(POS_ORDER);
+  const qualityRoll = Math.random();
+  const tierBase = qualityRoll < 0.55 ? rnd(28, 48) : qualityRoll < 0.88 ? rnd(45, 65) : rnd(62, 85);
+  let attack, defense;
+  if (pos === "MV") { attack = rndInt(15, 30); defense = clamp(Math.round(tierBase * 1.05), 15, 90); }
+  else if (pos === "FÖ") { attack = clamp(Math.round(tierBase * 0.55), 15, 80); defense = clamp(Math.round(tierBase * 1.05), 15, 90); }
+  else if (pos === "MF") { attack = clamp(Math.round(tierBase * 0.95), 15, 88); defense = clamp(Math.round(tierBase * 0.75), 15, 85); }
+  else { attack = clamp(Math.round(tierBase * 1.1), 15, 92); defense = clamp(Math.round(tierBase * 0.4), 15, 70); }
+  attack = clamp(Math.round(attack + bias.attack), 15, 95);
+  defense = clamp(Math.round(defense + bias.defense), 15, 95);
+  const value = Math.max(50, Math.round((((attack + defense) / 2) * 7.5 * bias.priceMult + rndInt(-20, 30)) * 1.05));
+  const nationality = bias.nationality || pick(EUROPEAN_NATIONALITIES);
+  const age = rndInt(18, 32);
+  return { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition: randomSpecificPosition(pos), attack, defense, potential: clamp(Math.round((attack + defense) / 2 + rndInt(0, 12)), 20, 96), value, wage: computeWage(value, attack, defense), region, contractYears: rndInt(1, 4), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, apps: 0, goals: 0, assists: 0, ratingSum: 0 };
+}
+// The full "Övriga världen" pool — counts per region reflect roughly how much of the real footballing
+// world each region represents outside the leagues actually simulated in the game.
+const WORLD_POOL_COUNTS = { sydamerika: 100, europa: 200, afrika: 50, asien: 25, nordamerika: 25 };
+function generateWorldPool() {
+  const pool = {};
+  Object.entries(WORLD_POOL_COUNTS).forEach(([region, count]) => {
+    pool[region] = withSeededRandom("worldpool" + region, () => Array.from({ length: count }, () => generateWorldPoolPlayer(region)));
+  });
+  return pool;
+}
+// Draws a handful of candidates out of the persistent world pool for the scout market. A weak scouting
+// network surfaces a near-random slice of the pool — you might stumble onto anyone. A strong network
+// reliably filters toward the genuinely best players actually sitting in that region's pool right now.
+function drawFromWorldPool(poolForRegion, scoutingRating, count) {
+  if (!poolForRegion || !poolForRegion.length) return { picks: [], remaining: poolForRegion || [] };
+  const noise = clamp(1 - scoutingRating / 10, 0.1, 0.95);
+  const scored = poolForRegion.map(p => ({ p, score: overallOf(p) + (Math.random() * 2 - 1) * 60 * noise }));
+  scored.sort((a, b) => b.score - a.score);
+  const picks = scored.slice(0, count).map(s => s.p);
+  const pickedIds = new Set(picks.map(p => p.id));
+  const remaining = poolForRegion.filter(p => !pickedIds.has(p.id));
+  return { picks, remaining };
+}
 
 // ---------- Scout missions (targeted search with filters) ----------
 function scoutMissionDuration(scoutLevel) { return clamp(7 - (scoutLevel || 0) * 1.1, 2, 7); }
@@ -3156,6 +3203,7 @@ export default function TranarbankenAppRoot() {
 }
 function TranarbankenApp() {
   const [previewWorld, setPreviewWorld] = useState(() => generateWorld());
+  const [previewWorldPool, setPreviewWorldPool] = useState(null);
   const [activeDbLabel, setActiveDbLabel] = useState("Standarddatabas");
   const season1Qualifiers = useMemo(() => buildSeason1Qualifiers(previewWorld), [previewWorld]);
   const [g, setG] = useState({ setupDone: false });
@@ -3282,6 +3330,8 @@ function TranarbankenApp() {
       manager: parsed.manager || initialManager("Din tränare", parsed.leagueId, parsed.clubs[parsed.userClubId]?.division || 2),
       assistantManager: parsed.assistantManager || null,
       startingXI: parsed.startingXI || pickBestXI(parsed.squad).map(p => p.id),
+      worldPool: parsed.worldPool || generateWorldPool(),
+      market: { europa: [], sydamerika: [], afrika: [], asien: [], nordamerika: [], ...(parsed.market || {}) },
     };
   }
 
@@ -3440,12 +3490,14 @@ function TranarbankenApp() {
     const reputation = clamp({ 1: 55, 2: 35, 3: 18 }[division] + arche.repAdj, 5, 92);
     const fanbase = clamp({ 1: 50, 2: 30, 3: 15 }[division] + arche.fanAdj, 5, 90);
     const rating = effectiveScoutRating(dev, reputation);
-    const market = {
-      europa: Array.from({ length: 8 }, () => makeScoutPlayer(pick(POS_ORDER), "europa", rating, clubs)),
-      sydamerika: Array.from({ length: 6 }, () => makeScoutPlayer(pick(POS_ORDER), "sydamerika", rating, clubs)),
-      afrika: Array.from({ length: 6 }, () => makeScoutPlayer(pick(POS_ORDER), "afrika", rating, clubs)),
-      asien: Array.from({ length: 6 }, () => makeScoutPlayer(pick(POS_ORDER), "asien", rating, clubs)),
-    };
+    const worldPool = previewWorldPool || generateWorldPool();
+    const drawEuropa = drawFromWorldPool(worldPool.europa, rating, 8);
+    const drawSyd = drawFromWorldPool(worldPool.sydamerika, rating, 6);
+    const drawAfrika = drawFromWorldPool(worldPool.afrika, rating, 6);
+    const drawAsien = drawFromWorldPool(worldPool.asien, rating, 6);
+    const drawNordamerika = drawFromWorldPool(worldPool.nordamerika, rating, 6);
+    const market = { europa: drawEuropa.picks, sydamerika: drawSyd.picks, afrika: drawAfrika.picks, asien: drawAsien.picks, nordamerika: drawNordamerika.picks };
+    worldPool.europa = drawEuropa.remaining; worldPool.sydamerika = drawSyd.remaining; worldPool.afrika = drawAfrika.remaining; worldPool.asien = drawAsien.remaining; worldPool.nordamerika = drawNordamerika.remaining;
     const userPoolIds = clubsInPool(countryId, division, clubs).map(c => c.id);
     const startSquad = club.squad ? club.squad.map(p => ({ ...p })) : makeSquad(countryId, club.archetype, division, ARCHETYPES[club.archetype].startDev.akademi);
     const manager = initialManager(managerName, countryId, division, clubId, club.name, 1);
@@ -3458,7 +3510,7 @@ function TranarbankenApp() {
     const initial = {
       setupDone: true, leagueId: countryId, userClubId: clubId, season: 1, round: 0, tactic: "balanserad", spelide: "balanserad",
       budget: Math.round(CLUB_BUDGET_OVERRIDES[clubId] ?? (arche.startBudget * divMult)), lastDelta: 0, dev, reputation, fanbase: startFanbase, lastCup2ChampionId: null,
-      clubs, schedule: generateSchedule(userPoolIds), allSchedules: generateAllSchedules(clubs), squad: startSquad, startingXI: pickBestXI(startSquad).map(p => p.id), market,
+      clubs, schedule: generateSchedule(userPoolIds), allSchedules: generateAllSchedules(clubs), squad: startSquad, startingXI: pickBestXI(startSquad).map(p => p.id), market, worldPool,
       arenaStands: startArenaStands(club, division), arenaFacilities: { restaurant: startPartLevel(3), shop: startPartLevel(3) },
       akademiParts: { tranare: startPartLevel(3), intag: startPartLevel(3) }, scoutingParts: { analys: startPartLevel(3), kontakter: startPartLevel(3) },
       sponsors: { main: null, stadium: null, local: null },
@@ -3488,7 +3540,7 @@ function TranarbankenApp() {
 
   if (screen === "loading") return <div style={{ background: C.turfDeep, minHeight: "100vh" }} />;
   if (screen === "select") return <SaveSelectView saves={saveIndex} onSelect={switchToSave} onNew={goToNewCareer} onDelete={deleteSave} onExport={exportSave} onImport={importSaveFile} onOpenDatabase={() => setScreen("database")} />;
-  if (screen === "database") return <DatabaseManagerView standardWorld={previewWorld} onUseDatabase={(id, name, clubs) => { setPreviewWorld(clubs); setActiveDbLabel(name); setScreen("onboarding"); }} onBack={() => setScreen("select")} />;
+  if (screen === "database") return <DatabaseManagerView standardWorld={previewWorld} onUseDatabase={(id, name, clubs, worldPool) => { setPreviewWorld(clubs); setPreviewWorldPool(worldPool || null); setActiveDbLabel(name); setScreen("onboarding"); }} onBack={() => setScreen("select")} />;
   if (screen === "onboarding") return <Onboarding world={previewWorld} onConfirm={handleConfirmSetup} onCancel={() => setScreen("select")} />;
 
   const userClub = g.clubs[g.userClubId];
@@ -4386,13 +4438,20 @@ function setupCup(type, base) {
     const signedPlayer = { ...player, clubId: null, contractYears: rndInt(3, 5), wage, number: assignSquadNumber(g.squad), sellOnPct, sellOnClubName: sellOnPct > 0 ? fromClubName : null, releaseClause: details.releaseClauseOffer > 0 ? details.releaseClauseOffer : null, joinedInfo: { text: `Värvades från ${fromClubName} för ${formatMoney(price)} i säsong ${g.season}.${installmentNote}` } };
     const recalcPlan = financedAmount > 0 ? installmentPlan(financedAmount, plan.months) : null;
     const newInstallment = recalcPlan ? { id: uid(), playerName: player.name, monthsLeft: recalcPlan.months, monthlyPayment: recalcPlan.monthlyPayment, totalRemaining: recalcPlan.totalWithInterest } : null;
-    setG(prev => ({
-      ...prev, budget: prev.budget - totalCashNow, squad: [...prev.squad, signedPlayer], fanbase: clamp(prev.fanbase + fanDelta, 0, 100),
-      transferInstallments: newInstallment ? [...(prev.transferInstallments || []), newInstallment] : (prev.transferInstallments || []),
-      market: { ...prev.market, [region]: prev.market[region].filter(p => p.id !== player.id).concat([makeScoutPlayer(pick(POS_ORDER), region, effectiveScoutRating(prev.dev, prev.reputation, prev.scoutingParts.analys + (prev.staff.scout?.level || 0) * 0.5), prev.clubs)]) },
-      clubGoodwill: player.clubId ? { ...prev.clubGoodwill, [player.clubId]: clamp((prev.clubGoodwill[player.clubId] ?? 50) + 5, 0, 100) } : prev.clubGoodwill,
-      transferHistory: player.clubId ? [{ id: uid(), season: prev.season, round: prev.round, playerId: player.id, playerName: player.name, playerPos: player.specificPosition, fromClubId: player.clubId, fromClubName, fromColor: prev.clubs[player.clubId]?.color, toClubId: prev.userClubId, toClubName: userClub.name, toColor: userClub.color, fee: price, leagueId: prev.clubs[player.clubId]?.league || prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000) : (prev.transferHistory || []),
-    }));
+    setG(prev => {
+      const rating = effectiveScoutRating(prev.dev, prev.reputation, prev.scoutingParts.analys + (prev.staff.scout?.level || 0) * 0.5);
+      const poolForRegion = prev.worldPool?.[region] || [];
+      const draw = drawFromWorldPool(poolForRegion, rating, 1);
+      const replacement = draw.picks[0] || makeScoutPlayer(pick(POS_ORDER), region, rating, prev.clubs);
+      return {
+        ...prev, budget: prev.budget - totalCashNow, squad: [...prev.squad, signedPlayer], fanbase: clamp(prev.fanbase + fanDelta, 0, 100),
+        transferInstallments: newInstallment ? [...(prev.transferInstallments || []), newInstallment] : (prev.transferInstallments || []),
+        market: { ...prev.market, [region]: prev.market[region].filter(p => p.id !== player.id).concat([replacement]) },
+        worldPool: prev.worldPool ? { ...prev.worldPool, [region]: draw.remaining } : prev.worldPool,
+        clubGoodwill: player.clubId ? { ...prev.clubGoodwill, [player.clubId]: clamp((prev.clubGoodwill[player.clubId] ?? 50) + 5, 0, 100) } : prev.clubGoodwill,
+        transferHistory: player.clubId ? [{ id: uid(), season: prev.season, round: prev.round, playerId: player.id, playerName: player.name, playerPos: player.specificPosition, fromClubId: player.clubId, fromClubName, fromColor: prev.clubs[player.clubId]?.color, toClubId: prev.userClubId, toClubName: userClub.name, toColor: userClub.color, fee: price, leagueId: prev.clubs[player.clubId]?.league || prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000) : (prev.transferHistory || []),
+      };
+    });
     if (isDerby) pushNews(`Historisk värvning — ${player.name} lämnar ärkerivalen ${fromClubName} för er! Fansen ${fanDelta >= 6 ? "jublar vilt" : "är kluvna men nyfikna"}.`, "Klubben");
     else if (fanDelta >= 3) pushNews(`Fansen är mycket nöjda med värvningen av ${player.name}.`, "Klubben");
     else if (fanDelta < 0) pushNews(`Fansen är skeptiska till värvningen av ${player.name} — dyrt för vad som levererades.`, "Klubben");
@@ -4862,15 +4921,17 @@ function setupCup(type, base) {
       // The old club carries on under a freshly appointed AI manager once you leave.
       const newClubs = { ...prev.clubs, [oldClubId]: { ...prev.clubs[oldClubId], manager: generateManager(prev.clubs[oldClubId].league) } };
       const rating = effectiveScoutRating(dev, reputationForClub);
-      const market = {
-        europa: Array.from({ length: 8 }, () => makeScoutPlayer(pick(POS_ORDER), "europa", rating, newClubs)),
-        sydamerika: Array.from({ length: 6 }, () => makeScoutPlayer(pick(POS_ORDER), "sydamerika", rating, newClubs)),
-        afrika: Array.from({ length: 6 }, () => makeScoutPlayer(pick(POS_ORDER), "afrika", rating, newClubs)),
-        asien: Array.from({ length: 6 }, () => makeScoutPlayer(pick(POS_ORDER), "asien", rating, newClubs)),
-      };
+      const existingPool = prev.worldPool || generateWorldPool();
+      const dE = drawFromWorldPool(existingPool.europa, rating, 8);
+      const dS = drawFromWorldPool(existingPool.sydamerika, rating, 6);
+      const dA = drawFromWorldPool(existingPool.afrika, rating, 6);
+      const dAs = drawFromWorldPool(existingPool.asien, rating, 6);
+      const dN = drawFromWorldPool(existingPool.nordamerika, rating, 6);
+      const market = { europa: dE.picks, sydamerika: dS.picks, afrika: dA.picks, asien: dAs.picks, nordamerika: dN.picks };
+      const newWorldPool = { europa: dE.remaining, sydamerika: dS.remaining, afrika: dA.remaining, asien: dAs.remaining, nordamerika: dN.remaining };
       return {
         ...prev, userClubId: clubId, leagueId: targetClub.league, clubs: newClubs,
-        squad: startSquad, startingXI: pickBestXI(startSquad).map(p => p.id), market,
+        squad: startSquad, startingXI: pickBestXI(startSquad).map(p => p.id), market, worldPool: newWorldPool,
         budget, dev, fanbase, reputation: reputationForClub,
         schedule: generateSchedule(userPoolIds), allSchedules: generateAllSchedules(newClubs),
         arenaStands: startArenaStands(targetClub, division), arenaFacilities: { restaurant: startPartLevel(3), shop: startPartLevel(3) },
@@ -5942,6 +6003,39 @@ function excelRowsToWorld(clubRows, playerRows, youthRows) {
   });
   return world;
 }
+// "Övriga världen" — the scoutable pool of players from regions/countries outside the simulated leagues,
+// kept as a separate companion structure (not part of the club-keyed world object) since it's global,
+// not per-club. Same row shape philosophy as the squad sheet, plus a Region column.
+function worldPoolToExcelRows(worldPool) {
+  const rows = [];
+  Object.entries(worldPool || {}).forEach(([region, players]) => {
+    (players || []).forEach(p => {
+      rows.push({
+        Region: region, SpelarID: p.id, Namn: p.name, Ålder: p.age, Position: p.pos, SpecifikPosition: p.specificPosition,
+        Overall: overallOf(p), Anfall: Math.round(p.attack), Försvar: Math.round(p.defense), Potential: Math.round(p.potential ?? p.attack),
+        Värde: p.value, "Lön": p.wage, Nationalitet: p.nationality || "", Kontraktsår: p.contractYears ?? 2,
+      });
+    });
+  });
+  return rows;
+}
+function excelRowsToWorldPool(rows) {
+  const num = v => (v === "" || v === undefined || v === null) ? undefined : Number(v);
+  const pool = { europa: [], sydamerika: [], afrika: [], asien: [], nordamerika: [] };
+  (rows || []).forEach(row => {
+    const region = String(row.Region || "").trim();
+    if (!pool[region]) return;
+    pool[region].push({
+      id: String(row.SpelarID || "").trim() || uid(), name: String(row.Namn || "").trim(),
+      age: num(row.Ålder), pos: String(row.Position || "").trim(), specificPosition: String(row.SpecifikPosition || "").trim(),
+      attack: num(row.Anfall), defense: num(row.Försvar), potential: num(row.Potential),
+      value: num(row.Värde), wage: num(row["Lön"]), nationality: String(row.Nationalitet || "").trim(),
+      contractYears: row.Kontraktsår === "" || row.Kontraktsår === undefined ? 2 : num(row.Kontraktsår),
+      region, injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, apps: 0, goals: 0, assists: 0, ratingSum: 0,
+    });
+  });
+  return pool;
+}
 let xlsxLibPromise = null;
 function loadXLSXLib() {
   if (window.XLSX) return Promise.resolve(window.XLSX);
@@ -5958,7 +6052,7 @@ function loadXLSXLib() {
 // Exports the world as a two-sheet workbook (Klubbar, Spelare) with AutoFilter enabled on both header rows,
 // so Land/Division/Klubbnamn etc. can be filtered natively in Excel — this doubles as the fill-in-yourself
 // template, since it's already in the exact shape excelRowsToWorld expects back.
-async function exportDatabaseToExcel(world, filename) {
+async function exportDatabaseToExcel(world, filename, worldPool) {
   const XLSX = await loadXLSXLib();
   const { clubRows, playerRows, youthRows } = worldToExcelRows(world);
   const wb = XLSX.utils.book_new();
@@ -5968,13 +6062,18 @@ async function exportDatabaseToExcel(world, filename) {
   wsPlayers["!autofilter"] = { ref: wsPlayers["!ref"] };
   const wsYouth = XLSX.utils.json_to_sheet(youthRows);
   if (wsYouth["!ref"]) wsYouth["!autofilter"] = { ref: wsYouth["!ref"] };
+  const worldPoolRows = worldPoolToExcelRows(worldPool || generateWorldPool());
+  const wsWorldPool = XLSX.utils.json_to_sheet(worldPoolRows);
+  if (wsWorldPool["!ref"]) wsWorldPool["!autofilter"] = { ref: wsWorldPool["!ref"] };
   XLSX.utils.book_append_sheet(wb, wsClubs, "Klubbar");
   XLSX.utils.book_append_sheet(wb, wsPlayers, "Spelare");
   XLSX.utils.book_append_sheet(wb, wsYouth, "Akademispelare");
+  XLSX.utils.book_append_sheet(wb, wsWorldPool, "Övriga världen");
   XLSX.writeFile(wb, filename || "databas.xlsx");
 }
-// Reads an uploaded .xlsx file and reconstructs the world object from its Klubbar/Spelare/Akademispelare sheets.
-// The Akademispelare sheet is optional on import, so older exported files (from before it existed) still work.
+// Reads an uploaded .xlsx file and reconstructs {world, worldPool} from its sheets. Both the
+// Akademispelare and Övriga världen sheets are optional on import, so older exported files still work
+// (falling back to a freshly generated world pool when the sheet is missing).
 function importExcelFile(file) {
   return new Promise((resolve, reject) => {
     loadXLSXLib().then(XLSX => {
@@ -5985,11 +6084,15 @@ function importExcelFile(file) {
           const clubSheet = wb.Sheets["Klubbar"];
           const playerSheet = wb.Sheets["Spelare"];
           const youthSheet = wb.Sheets["Akademispelare"];
+          const worldPoolSheet = wb.Sheets["Övriga världen"];
           if (!clubSheet || !playerSheet) { reject(new Error('Filen saknar ett eller båda av flikarna "Klubbar" och "Spelare".')); return; }
           const clubRows = XLSX.utils.sheet_to_json(clubSheet, { defval: "" });
           const playerRows = XLSX.utils.sheet_to_json(playerSheet, { defval: "" });
           const youthRows = youthSheet ? XLSX.utils.sheet_to_json(youthSheet, { defval: "" }) : [];
-          resolve(excelRowsToWorld(clubRows, playerRows, youthRows));
+          const worldPoolRows = worldPoolSheet ? XLSX.utils.sheet_to_json(worldPoolSheet, { defval: "" }) : [];
+          const world = excelRowsToWorld(clubRows, playerRows, youthRows);
+          const worldPool = worldPoolRows.length ? excelRowsToWorldPool(worldPoolRows) : generateWorldPool();
+          resolve({ world, worldPool });
         } catch (err) { reject(err); }
       };
       reader.onerror = () => reject(new Error("Kunde inte läsa filen."));
@@ -6017,36 +6120,44 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
   async function persistList(list) { setCustomDbs(list); try { await window.storage?.set("tranarbanken-db-index", JSON.stringify(list)); } catch (e) {} }
   async function loadDbData(id) { try { const res = await window.storage?.get(`tranarbanken-db-${id}`); return res ? JSON.parse(res.value) : null; } catch (e) { return null; } }
   async function saveDbData(id, data) { try { await window.storage?.set(`tranarbanken-db-${id}`, JSON.stringify(data)); return true; } catch (e) { return false; } }
+  // "Övriga världen" (world pool) is stored as a companion entry alongside the club data, keyed by the
+  // same database id — kept separate so the club-keyed world object itself never has to change shape.
+  async function loadWorldPoolData(id) { try { const res = await window.storage?.get(`tranarbanken-db-${id}-worldpool`); return res ? JSON.parse(res.value) : null; } catch (e) { return null; } }
+  async function saveWorldPoolData(id, pool) { try { await window.storage?.set(`tranarbanken-db-${id}-worldpool`, JSON.stringify(pool)); return true; } catch (e) { return false; } }
 
-  async function confirmCreateOrSaveAs(sourceData) {
+  async function confirmCreateOrSaveAs(sourceData, sourceWorldPool) {
     const name = nameInput.trim() || "Namnlös databas";
     const id = uid();
+    const pool = sourceWorldPool || generateWorldPool();
     await saveDbData(id, sourceData);
+    await saveWorldPoolData(id, pool);
     await persistList([...customDbs, { id, name, createdAt: new Date().toISOString() }]);
     setNamePromptFor(null); setNameInput("");
-    setEditingDb({ id, name, isCustom: true, data: sourceData });
+    setEditingDb({ id, name, isCustom: true, data: sourceData, worldPool: pool });
     flash(`"${name}" skapad.`);
   }
   async function deleteDb(id) {
     await persistList(customDbs.filter(d => d.id !== id));
     try { await window.storage?.delete(`tranarbanken-db-${id}`); } catch (e) {}
+    try { await window.storage?.delete(`tranarbanken-db-${id}-worldpool`); } catch (e) {}
     flash("Databas borttagen.");
   }
   async function openCustomDb(entry) {
     const data = await loadDbData(entry.id);
     if (!data) { flash("Kunde inte läsa databasen."); return; }
-    setEditingDb({ id: entry.id, name: entry.name, isCustom: true, data });
+    const worldPool = (await loadWorldPoolData(entry.id)) || generateWorldPool();
+    setEditingDb({ id: entry.id, name: entry.name, isCustom: true, data, worldPool });
   }
   function handleImportFile(file) {
     setImportBusy(true);
     setImportErrors(null);
-    importExcelFile(file).then(data => {
-      const { valid, errors } = validateDatabaseJSON(data);
+    importExcelFile(file).then(({ world, worldPool }) => {
+      const { valid, errors } = validateDatabaseJSON(world);
       setImportBusy(false);
       if (!valid) { setImportErrors(errors); return; }
       const id = uid();
       const name = file.name.replace(/\.xlsx$/i, "") || `Importerad databas ${customDbs.length + 1}`;
-      saveDbData(id, data).then(() => persistList([...customDbs, { id, name, createdAt: new Date().toISOString() }])).then(() => flash(`"${name}" importerad och validerad utan fel.`));
+      saveDbData(id, world).then(() => saveWorldPoolData(id, worldPool)).then(() => persistList([...customDbs, { id, name, createdAt: new Date().toISOString() }])).then(() => flash(`"${name}" importerad och validerad utan fel.`));
     }).catch(err => { setImportBusy(false); setImportErrors([err.message || "Kunde inte läsa Excel-filen."]); });
   }
 
@@ -6054,9 +6165,9 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
     return <DatabaseView world={editingDb.data} dbName={editingDb.name} isCustom={editingDb.isCustom}
       onBack={() => setEditingDb(null)}
       onSave={async clubs => { const ok = await saveDbData(editingDb.id, clubs); flash(ok ? `"${editingDb.name}" sparad.` : `Kunde inte spara "${editingDb.name}" — lagringen på den här enheten verkar blockerad (t.ex. privat surfläge eller full lagring). Prova Exportera Excel som säkerhetskopia istället.`); }}
-      onSaveAs={clubs => { setNamePromptFor({ type: "saveas", data: clubs }); setNameInput(`${editingDb.name} (kopia)`); }}
-      onExport={(clubs, name) => exportDatabaseToExcel(clubs, `${(name || "databas").replace(/\s+/g, "_")}.xlsx`)}
-      onSaveAndPlay={clubs => onUseDatabase(editingDb.id, editingDb.name, clubs)} />;
+      onSaveAs={clubs => { setNamePromptFor({ type: "saveas", data: clubs, worldPool: editingDb.worldPool }); setNameInput(`${editingDb.name} (kopia)`); }}
+      onExport={(clubs, name) => exportDatabaseToExcel(clubs, `${(name || "databas").replace(/\s+/g, "_")}.xlsx`, editingDb.worldPool)}
+      onSaveAndPlay={clubs => onUseDatabase(editingDb.id, editingDb.name, clubs, editingDb.worldPool)} />;
   }
 
   return (
@@ -6086,7 +6197,7 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
             <div className="text-sm font-semibold">Standarddatabas</div>
             <div className="text-9" style={{ color: C.paperDim }}>Spelets ursprungliga, slumpmässigt genererade värld. Kan aldrig skrivas över.</div>
           </div>
-          <button onClick={() => setEditingDb({ id: null, name: "Standarddatabas", isCustom: false, data: standardWorld })} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg shrink-0" style={{ background: "rgba(255,255,255,0.12)", color: C.paper }}>Visa</button>
+          <button onClick={() => setEditingDb({ id: null, name: "Standarddatabas", isCustom: false, data: standardWorld, worldPool: generateWorldPool() })} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg shrink-0" style={{ background: "rgba(255,255,255,0.12)", color: C.paper }}>Visa</button>
         </div>
       </div>
 
@@ -6125,7 +6236,7 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
             <input autoFocus value={nameInput} onChange={e => setNameInput(e.target.value)} className="w-full px-3 py-2 rounded-lg text-sm mt-2 mb-3" style={{ background: C.paperDim, color: C.ink }} placeholder="Databasnamn" />
             <div className="grid grid-cols-2 gap-2">
               <button onClick={() => setNamePromptFor(null)} className="py-2 rounded-xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.inkSoft }}>Avbryt</button>
-              <button onClick={() => confirmCreateOrSaveAs(namePromptFor.data)} className="py-2 rounded-xl text-sm font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Skapa</button>
+              <button onClick={() => confirmCreateOrSaveAs(namePromptFor.data, namePromptFor.worldPool)} className="py-2 rounded-xl text-sm font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Skapa</button>
             </div>
           </div>
         </>
