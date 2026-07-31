@@ -5635,7 +5635,9 @@ function setupCup(type, base) {
                   onGotoCup={() => setG(prev => ({ ...prev, view: "cup" }))} onSetPlannedSub={setPlannedSub}
                   onSetTeamTalk={setTeamTalk} onRestStars={restStars} onGotoPrep={() => setG(prev => ({ ...prev, view: "matchprep" }))}
                   onAdvanceSillySeason={advanceSillySeasonWeek} onFinishSillySeason={finishSillySeason} onOpenTours={openTourOffers} onStartTour={startTour}
-                  onGotoTourPlanner={() => setG(prev => ({ ...prev, view: "tourplanner" }))} />
+                  onGotoTourPlanner={() => setG(prev => ({ ...prev, view: "tourplanner" }))}
+                  onGotoTable={() => setG(prev => ({ ...prev, activeTab: "table", view: "tab" }))}
+                  onGotoEconomy={() => setG(prev => ({ ...prev, activeTab: "ekonomi", view: "tab" }))} />
               ) : g.activeTab === "table" ? (
                 <TableTab standings={standings} clubs={g.clubs} userClubId={g.userClubId} division={userClub.division} cup={g.activeCupType ? g.cups[g.activeCupType] : null} nextFixture={nextFixture} allSchedules={g.allSchedules} leagueId={g.leagueId} season={g.season} currentRound={g.round} onSubViewChange={setSubViewOpen} season1Qualifiers={g.season1Qualifiers} schedule={g.schedule} cup1Live={g.cups.cup1} domesticLive={g.cups.domestic} cup2Live={g.cups.cup2} />
               ) : g.activeTab === "fixtures" ? (
@@ -5693,7 +5695,7 @@ function setupCup(type, base) {
   );
 }
 
-function PaperCard({ children, style }) { return <div className="rounded-2xl p-3" style={{ background: C.paper, color: C.ink, border: `1px solid rgba(30,42,34,0.1)`, ...style }}>{children}</div>; }
+function PaperCard({ children, style, onClick }) { return <div onClick={onClick} className="rounded-2xl p-3" style={{ background: C.paper, color: C.ink, border: `1px solid rgba(30,42,34,0.1)`, cursor: onClick ? "pointer" : "default", ...style }}>{children}</div>; }
 function ResultChip({ result }) {
   const map = { win: { l: "V", c: C.win }, draw: { l: "O", c: C.draw }, loss: { l: "F", c: C.loss } };
   const m = map[result];
@@ -6748,7 +6750,7 @@ function TourPlannerView({ g, onBack, onOpenTours, onStartTour }) {
     </div>
   );
 }
-function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRow, nextFixture, seasonOver, onPlay, onNewSeason, onGotoCup, onSetPlannedSub, onSetTeamTalk, onRestStars, onGotoPrep, onAdvanceSillySeason, onFinishSillySeason, onOpenTours, onStartTour, onGotoTourPlanner }) {
+function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRow, nextFixture, seasonOver, onPlay, onNewSeason, onGotoCup, onSetPlannedSub, onSetTeamTalk, onRestStars, onGotoPrep, onAdvanceSillySeason, onFinishSillySeason, onOpenTours, onStartTour, onGotoTourPlanner, onGotoTable, onGotoEconomy }) {
   const form = recentForm(g.schedule, g.round, g.userClubId);
   const isHome = nextFixture ? nextFixture.home === g.userClubId : true;
   const n = standings.length;
@@ -6911,14 +6913,14 @@ function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRo
       </PaperCard>
 
       <div className="grid grid-cols-2 gap-2">
-        <PaperCard style={{ minHeight: 92 }}>
+        <PaperCard style={{ minHeight: 92 }} onClick={onGotoTable}>
           <div className="text-xs uppercase tracking-wide font-semibold flex items-center gap-1" style={{ color: C.inkSoft }}>📊 Tabellplacering</div>
           <div className="font-display text-2xl mt-1">{userPos}<span className="text-sm align-top" style={{ color: C.inkSoft }}>/{n}</span></div>
           <div className="font-mono text-xs mt-1" style={{ color: C.inkSoft }}>
             {userPos <= 3 ? <span style={{ color: C.win }}>Uppflyttningszon</span> : userPos > n - 3 && userClub.division < 3 ? <span style={{ color: C.loss }}>Nedflyttningszon</span> : `${userRow?.pts ?? 0} poäng`}
           </div>
         </PaperCard>
-        <PaperCard style={{ minHeight: 92 }}>
+        <PaperCard style={{ minHeight: 92 }} onClick={onGotoEconomy}>
           <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Senaste ekonomi</div>
           <div className="font-display text-xl mt-1 flex items-center gap-1" style={{ color: g.lastDelta >= 0 ? C.win : C.loss }}>
             {g.lastDelta >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}<AnimatedNumber value={g.lastDelta} format={formatMoney} />
