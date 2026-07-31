@@ -5681,7 +5681,7 @@ function worldToExcelRows(world) {
   const playerRows = [];
   Object.values(world).forEach(c => {
     clubRows.push({
-      Land: c.league, Division: c.division, KlubbID: c.id, Klubbnamn: c.name,
+      Land: c.league, Division: c.division, KlubbID: c.id, Klubbnamn: c.name, Kortnamn: c.short || shortCodeFrom(c.name),
       Färg: c.color || "", Sekundärfärg: c.secondaryColor || "", Tröjmönster: c.jerseyPattern || "",
       Arketyp: c.archetype, Styrka: Math.round(c.strength), Startbudget: c.startBudget ?? "", Arenakapacitet: c.baseArenaCapacity ?? "",
     });
@@ -5692,6 +5692,8 @@ function worldToExcelRows(world) {
         SpelarID: p.id, Namn: p.name, Nummer: p.number ?? "", Ålder: p.age, Position: p.pos, SpecifikPosition: p.specificPosition,
         Anfall: Math.round(p.attack), Försvar: Math.round(p.defense), Potential: Math.round(p.potential ?? p.attack),
         Värde: p.value, "Lön": p.wage, Nationalitet: p.nationality || "",
+        Kontraktsår: p.contractYears ?? 3, Moral: p.morale ?? 70, Personlighet: p.personality || "Balanserad",
+        Skadeveckor: p.injuryWeeks || 0, Avstängd: p.suspendedMatches || 0, "Gula kort": p.yellowCards || 0,
         Avslut: attrs.shooting, Passning: attrs.passing, Dribbling: attrs.dribbling, Fart: attrs.pace, Försvarsspel: attrs.defending, Fysik: attrs.physical,
         "Svag fot": weakFoot(p), Huvudspel: headingAbility(p), Skaderisk: injuryProneness(p), Storform: clutchFactor(p),
       });
@@ -5709,6 +5711,7 @@ function excelRowsToWorld(clubRows, playerRows) {
     if (!id) return;
     world[id] = {
       id, name: String(row.Klubbnamn || "").trim(), league: String(row.Land || "").trim(), division: num(row.Division),
+      short: (row.Kortnamn && String(row.Kortnamn).trim()) || shortCodeFrom(String(row.Klubbnamn || "").trim()),
       color: row.Färg || undefined, secondaryColor: row.Sekundärfärg || undefined, jerseyPattern: row.Tröjmönster || undefined,
       archetype: String(row.Arketyp || "").trim(), strength: num(row.Styrka),
       startBudget: row.Startbudget === "" || row.Startbudget === undefined ? undefined : num(row.Startbudget),
@@ -5724,6 +5727,13 @@ function excelRowsToWorld(clubRows, playerRows) {
       age: num(row.Ålder), pos: String(row.Position || "").trim(), specificPosition: String(row.SpecifikPosition || "").trim(),
       attack: num(row.Anfall), defense: num(row.Försvar), potential: num(row.Potential),
       value: num(row.Värde), wage: num(row["Lön"]), nationality: String(row.Nationalitet || "").trim(),
+      contractYears: row.Kontraktsår === "" || row.Kontraktsår === undefined ? 3 : num(row.Kontraktsår),
+      morale: row.Moral === "" || row.Moral === undefined ? 70 : num(row.Moral),
+      personality: row.Personlighet || "Balanserad",
+      injuryWeeks: num(row.Skadeveckor) || 0, suspendedMatches: num(row.Avstängd) || 0, yellowCards: num(row["Gula kort"]) || 0,
+      // Season-progress stats always start fresh regardless of what's in the sheet — these track a season
+      // in progress, not a starting condition to import.
+      apps: 0, goals: 0, assists: 0, seasonLog: [], ratingSum: 0,
       shooting: num(row.Avslut), passing: num(row.Passning), dribbling: num(row.Dribbling), pace: num(row.Fart), defending: num(row.Försvarsspel), physical: num(row.Fysik),
       weakFoot: num(row["Svag fot"]), headingAbility: num(row.Huvudspel),
       injuryProneness: row.Skaderisk && ["Skör", "Normal", "Robust"].includes(row.Skaderisk) ? row.Skaderisk : undefined,
