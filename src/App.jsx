@@ -1153,6 +1153,13 @@ const SCOUT_PRESETS = [
   { key: "lovande", label: "Ung talang med hög potential", posFilter: null, attrs: {}, minPotential: 78, ageMax: 21 },
 ];
 const SELL_THRESHOLD = { storklubb: 1.28, nyrik: 1.32, medelklubb: 1.05, arbetarklubb: 0.92, akademiklubb: 0.88, utmanare: 1.0 };
+// A world-pool ("Övriga världen") player has no real owning club — negotiating for one goes through the
+// same UI as any transfer, but stands in for "the player's representatives" rather than a selling club.
+// A lightweight neutral placeholder lets the whole existing negotiation flow work unchanged instead of
+// needing every club.field read in NegotiationView to be made defensive against a missing club.
+function syntheticFreeAgentClub(player) {
+  return { id: null, name: "Spelarens läger", short: "FRI", archetype: "medelklubb", strength: overallOf(player), league: player.region || player.nationality, goodwill: 50, color: "#5b6b63" };
+}
 function sellerOpeningLine(club, player) {
   const first = player.name.split(" ")[0];
   const lines = {
@@ -1163,6 +1170,7 @@ function sellerOpeningLine(club, player) {
     akademiklubb: [`${first} är en av våra bästa akademialster — det kostar.`],
     utmanare: [`Vi bygger något här, men allt går att diskutera för rätt pris.`],
   };
+  if (!club) return pick([`${first} spelar utan klubb just nu — vi lyssnar på erbjudanden direkt från spelarens läger.`, `${first} är fri att skriva på för vem som helst just nu.`]);
   return pick(lines[club.archetype] || lines.medelklubb);
 }
 function negoAcceptLine() { return pick(["Det där kan vi leva med. Affär!", "Rimligt — vi tackar ja.", "Okej, vi är överens.", "Det duger. Affär klar."]); }
@@ -8538,7 +8546,7 @@ function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputat
 
   if (negotiatingPlayer) {
     const sellClub = clubs[negotiatingPlayer.clubId];
-    return <NegotiationView player={negotiatingPlayer} club={sellClub ? { ...sellClub, goodwill: clubGoodwill?.[sellClub.id] ?? 50 } : sellClub} region="browse" budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs}
+    return <NegotiationView player={negotiatingPlayer} club={sellClub ? { ...sellClub, goodwill: clubGoodwill?.[sellClub.id] ?? 50 } : syntheticFreeAgentClub(negotiatingPlayer)} region="browse" budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs}
       onNegotiationFailed={onNegotiationFailed}
       onBack={() => setNegotiatingPlayer(null)} onFinalize={(r, p, price, wage, details) => { onFinalize(p, price, wage, details); setNegotiatingPlayer(null); }} />;
   }
@@ -11576,7 +11584,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
 
   if (negotiatingScout && scoutMission?.result) {
     const scoutClub = clubs[scoutMission.result.clubId];
-    return <NegotiationView player={scoutMission.result} club={scoutClub ? { ...scoutClub, goodwill: clubGoodwill?.[scoutClub.id] ?? 50 } : scoutClub} region="scout" budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs}
+    return <NegotiationView player={scoutMission.result} club={scoutClub ? { ...scoutClub, goodwill: clubGoodwill?.[scoutClub.id] ?? 50 } : syntheticFreeAgentClub(scoutMission.result)} region="scout" budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs}
       onNegotiationFailed={onNegotiationFailed}
       onBack={() => setNegotiatingScout(false)} onFinalize={(r, p, price, wage, details) => { onFinalizeScoutSignee(price, wage, details); setNegotiatingScout(false); }} />;
   }
@@ -11584,7 +11592,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
   const negotiatingPlayer = negotiatingId ? list.find(p => p.id === negotiatingId) : null;
   if (negotiatingPlayer) {
     const negoClub = clubs[negotiatingPlayer.clubId];
-    return <NegotiationView player={negotiatingPlayer} club={negoClub ? { ...negoClub, goodwill: clubGoodwill?.[negoClub.id] ?? 50 } : negoClub} region={region} budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs}
+    return <NegotiationView player={negotiatingPlayer} club={negoClub ? { ...negoClub, goodwill: clubGoodwill?.[negoClub.id] ?? 50 } : syntheticFreeAgentClub(negotiatingPlayer)} region={region} budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs}
       onNegotiationFailed={onNegotiationFailed}
       onBack={() => setNegotiatingId(null)} onFinalize={(r, p, price, wage, details) => { onFinalizeTransfer(r, p, price, wage, details); setNegotiatingId(null); }} />;
   }
