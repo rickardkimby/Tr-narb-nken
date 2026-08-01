@@ -274,10 +274,12 @@ function tickPositionTraining(p) {
 }
 function eligibleTrainingPositions(player) {
   return Object.keys(SPECIFIC_POSITION_LOOKUP).filter(code => {
-    if (code === player.specificPosition) return false;
     const anchor = SPECIFIC_POSITION_LOOKUP[code];
     const fit = effectivePositionFit(player, anchor.col, anchor.row);
-    return fit >= 0.3 && fit < 0.68; // a "red/borderline" nearby position — not already comfortable there
+    // Any position the player isn't already essentially perfect at is trainable — whether it's their
+    // exact primary spot, a secondary position they already cover reasonably well, or a genuinely new,
+    // unfamiliar ("red") position. Training just narrows the remaining gap at the usual pace either way.
+    return fit >= 0.3 && fit < 0.995;
   });
 }
 function nearestPositionForCell(col, row) {
@@ -1003,6 +1005,15 @@ function generateWorldPool() {
 // Draws a handful of candidates out of the persistent world pool for the scout market. A weak scouting
 // network surfaces a near-random slice of the pool — you might stumble onto anyone. A strong network
 // reliably filters toward the genuinely best players actually sitting in that region's pool right now.
+// Samples a fresh random slice of the pool WITHOUT removing anyone — used to rotate what's visible in
+// the scout market each round. Only signing a player actually removes them from the pool for good.
+function sampleFromWorldPool(poolForRegion, scoutingRating, count) {
+  if (!poolForRegion || !poolForRegion.length) return [];
+  const noise = clamp(1 - scoutingRating / 10, 0.1, 0.95);
+  const scored = poolForRegion.map(p => ({ p, score: overallOf(p) + (Math.random() * 2 - 1) * 60 * noise }));
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, count).map(s => s.p);
+}
 function drawFromWorldPool(poolForRegion, scoutingRating, count) {
   if (!poolForRegion || !poolForRegion.length) return { picks: [], remaining: poolForRegion || [] };
   const noise = clamp(1 - scoutingRating / 10, 0.1, 0.95);
@@ -1016,12 +1027,33 @@ function drawFromWorldPool(poolForRegion, scoutingRating, count) {
 
 // ---------- Scout missions (targeted search with filters) ----------
 function scoutMissionDuration(scoutLevel) { return clamp(7 - (scoutLevel || 0) * 1.1, 2, 7); }
+// Time (in rounds) to scout a SPECIFIC, already-visible player and reveal their true numbers — separate
+// from a full scout mission (which searches for a new candidate). Same club-scouting-level dependency,
+// just a shorter, more targeted job since you already know who you're looking at.
+function playerScoutDuration(scoutLevel) { return clamp(5 - (scoutLevel || 0) * 0.9, 1, 5); }
+// Before a player is scouted, their overall/potential are shown as an honest-but-fuzzy range rather than
+// an exact number — deliberately makes "window shopping" for obvious bargains much harder. The true value
+// always falls inside the shown range, but where within it is randomized so the range's midpoint isn't a
+// reliable shortcut either. World-pool ("Övriga världen") players get a wider span since your network has
+// essentially no first-hand knowledge of leagues outside the simulated ones.
+function fuzzyStatRange(trueValue, playerId, seedSuffix, isWorldPool) {
+  const span = isWorldPool ? 13 : 7;
+  const rng = seededRandom(String(playerId) + seedSuffix);
+  const posInRange = rng();
+  const lo = clamp(Math.round(trueValue - span * posInRange), 1, 99);
+  const hi = clamp(lo + span, 1, 99);
+  return [lo, hi];
+}
+function isPlayerScouted(player, scoutedPlayerIds, userClubId) {
+  if (player.clubId === userClubId || (!player.clubId && player.ownSquad)) return true; // your own players are always known
+  return (scoutedPlayerIds || []).includes(player.id);
+}
 function scoutMissionCeiling(scoutLevel, division) {
   const divAdj = division === 1 ? 0 : division === 2 ? -8 : division === 3 ? -16 : 0;
   const base = scoutLevel ? clamp(58 + scoutLevel * 7, 58, 95) : 62;
   return clamp(base + divAdj, 38, 95);
 }
-function findRealScoutCandidate(mission, clubs, userClubId) {
+function findRealScoutCandidates(mission, clubs, userClubId, count) {
   const attrFilters = mission.attributeFilters || {};
   const activeAttrKeys = Object.keys(attrFilters).filter(k => attrFilters[k]);
   const candidates = [];
@@ -1041,15 +1073,55 @@ function findRealScoutCandidate(mission, clubs, userClubId) {
       candidates.push({ player: p, clubId: club.id });
     });
   });
-  if (!candidates.length) return null;
-  const chosen = candidates[rndInt(0, candidates.length - 1)];
-  return { ...chosen.player, clubId: chosen.clubId };
+  if (!candidates.length) return [];
+  const shuffled = shuffle(candidates);
+  return shuffled.slice(0, count).map(c => ({ ...c.player, clubId: c.clubId }));
 }
-function generateScoutCandidate(mission, scoutLevel, clubs, division, userClubId) {
-  if (Math.random() < 0.65) {
-    const real = findRealScoutCandidate(mission, clubs, userClubId);
-    if (real) return real;
+// How keen a player would genuinely be on joining your club — used both for the "Intresserad av din klubb"
+// scout filter and later to flag a reluctant sign so overpaying to convince them has real consequences.
+// A rough but sensible read on fit: is this a step up or down for them, are they the settling-down type
+// or still chasing something bigger, and does age make them more or less open to a less glamorous move.
+function playerInterestInClub(player, reputation, division) {
+  const overall = overallOf(player);
+  const clubCeiling = 30 + (reputation || 30) * 0.6 - (division - 1) * 6;
+  let score = 55 + (clubCeiling - overall) * 1.1; // a step up for them scores higher than a step down
+  if (player.personality === "Ambitiös") score -= 14;
+  else if (player.personality === "Lojal") score += 6;
+  else if (player.personality === "Ödmjuk") score += 8;
+  else if (player.personality === "Ledare") score -= 4;
+  if (player.age <= 21) score += 10;
+  else if (player.age >= 31) score += 6;
+  const rng = seededRandom(String(player.id) + "clubinterest" + reputation);
+  score += (rng() - 0.5) * 24;
+  return clamp(Math.round(score), 2, 96);
+}
+function interestLabel(score) {
+  if (score >= 65) return { text: "Positiv till klubben", color: "#3F8F6B" };
+  if (score >= 40) return { text: "Avvaktande", color: "#C99A3E" };
+  return { text: "Ovillig", color: "#B4443B" };
+}
+function generateScoutCandidates(mission, scoutLevel, clubs, division, userClubId, reputation, count) {
+  const wanted = count || clamp(1 + Math.floor((scoutLevel || 0) / 1.5), 1, 4);
+  const passesInterest = p => !mission.interestedOnly || playerInterestInClub(p, reputation, division) >= 55;
+  const results = [];
+  const seenIds = new Set();
+  const realPool = findRealScoutCandidates(mission, clubs, userClubId, wanted * 4).filter(passesInterest);
+  for (const r of realPool) {
+    if (results.length >= wanted) break;
+    if (seenIds.has(r.id)) continue;
+    seenIds.add(r.id);
+    results.push(r);
   }
+  let guard = 0;
+  while (results.length < wanted && guard < wanted * 8) {
+    guard++;
+    const synth = generateSyntheticScoutCandidate(mission, scoutLevel, clubs, division);
+    if (!synth || !passesInterest(synth)) continue;
+    results.push(synth);
+  }
+  return results;
+}
+function generateSyntheticScoutCandidate(mission, scoutLevel, clubs, division) {
   const ceiling = scoutMissionCeiling(scoutLevel, division);
   const floor = clamp(ceiling - 18, 26, ceiling - 4);
   const attrFilters = mission.attributeFilters || {};
@@ -3499,11 +3571,11 @@ function TranarbankenApp() {
     const fanbase = clamp({ 1: 50, 2: 30, 3: 15 }[division] + arche.fanAdj, 5, 90);
     const rating = effectiveScoutRating(dev, reputation);
     const worldPool = previewWorldPool || generateWorldPool();
-    const drawEuropa = drawFromWorldPool(worldPool.europa, rating, 8);
-    const drawSyd = drawFromWorldPool(worldPool.sydamerika, rating, 6);
-    const drawAfrika = drawFromWorldPool(worldPool.afrika, rating, 6);
-    const drawAsien = drawFromWorldPool(worldPool.asien, rating, 6);
-    const drawNordamerika = drawFromWorldPool(worldPool.nordamerika, rating, 6);
+    const drawEuropa = drawFromWorldPool(worldPool.europa, rating, 4);
+    const drawSyd = drawFromWorldPool(worldPool.sydamerika, rating, 2);
+    const drawAfrika = drawFromWorldPool(worldPool.afrika, rating, 2);
+    const drawAsien = drawFromWorldPool(worldPool.asien, rating, 2);
+    const drawNordamerika = drawFromWorldPool(worldPool.nordamerika, rating, 2);
     const market = { europa: drawEuropa.picks, sydamerika: drawSyd.picks, afrika: drawAfrika.picks, asien: drawAsien.picks, nordamerika: drawNordamerika.picks };
     worldPool.europa = drawEuropa.remaining; worldPool.sydamerika = drawSyd.remaining; worldPool.afrika = drawAfrika.remaining; worldPool.asien = drawAsien.remaining; worldPool.nordamerika = drawNordamerika.remaining;
     const userPoolIds = clubsInPool(countryId, division, clubs).map(c => c.id);
@@ -3535,6 +3607,7 @@ function TranarbankenApp() {
       youthMarket: Array.from({ length: 6 }, () => generateYouthProspect(clamp(dev.scouting, 1, 5), 1)),
       lastMatchReport: null, view: "home", activeTab: "home", pendingAfterResult: "home",
       cups: { domestic: null, cup1: null, cup2: null }, activeCupType: null, qualifiedCupTypes: initialCupQueue, season1Qualifiers: activeSeason1Qualifiers, lastSeasonSummary: null, seasonEndSnapshot: null, history: [], scoutMission: null, ticketPrice: "t3", merchandisePricing: "standard", arenaConstruction: null, outgoingLoans: [], sillySeasonWeeksLeft: 4,
+      scoutedPlayerIds: [], pendingPlayerScouts: [],
     };
     const id = uid();
     const entry = { id, ...saveSummary(initial) };
@@ -3940,6 +4013,22 @@ function setupCup(type, base) {
     } else {
       finalSquad = finalSquad.map(x => (x.recentlyComplained && (x.benchStreak || 0) === 0) ? { ...x, recentlyComplained: false } : x);
     }
+    // A player who was talked into joining despite real reluctance doesn't automatically resent it forever —
+    // but for their first season or so there's a real, ongoing risk of the relationship souring, separate
+    // from the immediate morale hit taken at signing. It fades out once they've settled in.
+    const reluctantAtRisk = finalSquad.filter(pl => pl.reluctantSign && (pl.reluctantRoundsElapsed || 0) < 20);
+    if (reluctantAtRisk.length) {
+      finalSquad = finalSquad.map(pl => {
+        if (!pl.reluctantSign) return pl;
+        const roundsElapsed = (pl.reluctantRoundsElapsed || 0) + 1;
+        if (roundsElapsed >= 20) return { ...pl, reluctantRoundsElapsed: roundsElapsed, reluctantSign: false };
+        if (Math.random() < 0.06) {
+          pushNews(`${pl.name} verkar fortfarande inte helt hemma i klubben — inget dramatiskt, men stämningen är svalare än önskat.`, "Trupp");
+          return { ...pl, reluctantRoundsElapsed: roundsElapsed, morale: clamp((pl.morale ?? 70) - rndInt(4, 10), 0, 100) };
+        }
+        return { ...pl, reluctantRoundsElapsed: roundsElapsed };
+      });
+    }
     if (windowJustOpened && newIncomingOffers.length > (g.incomingOffers || []).length) {
       newIncomingOffers.slice((g.incomingOffers || []).length).forEach(o => pushNews(`${o.buyerName} har lagt ett bud på ${o.playerName}: ${formatMoney(o.offer)}.`, "Övergångar", { action: { type: "incomingOffer", label: "Hantera bud" }, note: `${o.buyerName} vill köpa ${o.playerName} för ${formatMoney(o.offer)}.` }));
     }
@@ -4038,9 +4127,9 @@ function setupCup(type, base) {
     } else if (scoutMission && !scoutMission.complete) {
       const roundsElapsed = scoutMission.roundsElapsed + 1;
       if (roundsElapsed >= scoutMission.roundsTotal) {
-        const candidate = generateScoutCandidate(scoutMission, g.staff.scout?.level || 0, updatedClubs, userClub.division, g.userClubId);
-        scoutMission = { ...scoutMission, roundsElapsed, complete: true, result: candidate };
-        scoutToast = candidate ? `Scoutuppdraget är klart — ${candidate.name} har hittats.` : "Scoutuppdraget är klart, men ingen spelare matchade kriterierna. Försök med bredare filter.";
+        const candidates = generateScoutCandidates(scoutMission, g.staff.scout?.level || 0, updatedClubs, userClub.division, g.userClubId, g.reputation);
+        scoutMission = { ...scoutMission, roundsElapsed, complete: true, results: candidates };
+        scoutToast = candidates.length ? `Scoutuppdraget är klart — ${candidates.length > 1 ? candidates.length + " spelare hittades" : candidates[0].name + " har hittats"}.` : "Scoutuppdraget är klart, men ingen spelare matchade kriterierna. Försök med bredare filter.";
       } else {
         scoutMission = { ...scoutMission, roundsElapsed };
       }
@@ -4066,10 +4155,25 @@ function setupCup(type, base) {
       const ticketFanAdj = p.userIsHome ? (TICKET_TIERS[prev.ticketPrice] || TICKET_TIERS.t3).fanAdj : 0;
       const newFan = clamp(prev.fanbase + derbyFan + ticketFanAdj + (upset?.fan || 0), 0, 100);
       const newManagerRep = upset ? clamp((prev.manager?.reputation || 0) + upset.mgrRep, 5, 99) : prev.manager?.reputation;
+      // Rotate the "Övriga världen" scout market every round — a fresh random slice of whoever's still
+      // out there, rather than the same fixed list sitting untouched until you happen to buy someone.
+      const scoutRating = effectiveScoutRating(prev.dev, prev.reputation, prev.scoutingParts?.analys + (prev.staff?.scout?.level || 0) * 0.5);
+      const pool = prev.worldPool || generateWorldPool();
+      const dueScouts = (prev.pendingPlayerScouts || []).filter(s => s.dueRound <= newRound);
+      const stillPendingScouts = (prev.pendingPlayerScouts || []).filter(s => s.dueRound > newRound);
+      const newScoutedIds = dueScouts.length ? [...(prev.scoutedPlayerIds || []), ...dueScouts.map(s => s.playerId)] : (prev.scoutedPlayerIds || []);
+      const rotatedMarket = {
+        europa: sampleFromWorldPool(pool.europa, scoutRating, 4),
+        sydamerika: sampleFromWorldPool(pool.sydamerika, scoutRating, 2),
+        afrika: sampleFromWorldPool(pool.afrika, scoutRating, 2),
+        asien: sampleFromWorldPool(pool.asien, scoutRating, 2),
+        nordamerika: sampleFromWorldPool(pool.nordamerika, scoutRating, 2),
+      };
       return {
         ...prev, clubs: listingClubs, schedule: finalSchedule, squad: finalSquad,
         startingXI: prev.startingXI.filter(id => finalSquad.some(p => p.id === id)),
-        youthSquad: finalYouthSquad, sponsors: finalSponsors,
+        youthSquad: finalYouthSquad, sponsors: finalSponsors, market: rotatedMarket,
+        pendingPlayerScouts: stillPendingScouts, scoutedPlayerIds: newScoutedIds,
         budget: prev.budget + delta + eventBudgetDelta + installmentBudgetDelta + leaguePrizeThisRound, lastDelta: delta, round: newRound,
         transferHistory: aiTransferResult?.records?.length ? [...aiTransferResult.records, ...(prev.transferHistory || [])].slice(0, 1000) : prev.transferHistory,
         transferInstallments: installmentsAfter, installmentMonthKey: newMonthKey,
@@ -4439,11 +4543,12 @@ function setupCup(type, base) {
     const wage = agreedWage || player.wage;
     const cap = wageBudgetCap(g.reputation, g.clubs[g.userClubId].division, g.dev.sponsring);
     if (totalWageBill(g.squad) + wage > cap * 1.15) { showToast("Löneutrymmet räcker inte — Financial Fair Play stoppar värvningen."); return; }
-    const fromClubName = g.clubs[player.clubId]?.name || "en annan klubb";
+    const fromClubName = player.clubId ? (g.clubs[player.clubId]?.name || "en annan klubb") : "fri agent";
     const isDerby = player.clubId && g.clubs[player.clubId]?.rivalId === g.userClubId;
     const fanDelta = fanSigningReaction(player, price, isDerby, g.squad, userClub);
     const installmentNote = financedAmount > 0 ? ` Resten (${formatMoney(financedAmount)}) delbetalas över ${plan.months} månader.` : "";
-    const signedPlayer = { ...player, clubId: null, contractYears: rndInt(3, 5), wage, number: assignSquadNumber(g.squad), sellOnPct, sellOnClubName: sellOnPct > 0 ? fromClubName : null, releaseClause: details.releaseClauseOffer > 0 ? details.releaseClauseOffer : null, joinedInfo: { text: `Värvades från ${fromClubName} för ${formatMoney(price)} i säsong ${g.season}.${installmentNote}` } };
+    const reluctant = (details.clubInterest ?? 100) < 55;
+    const signedPlayer = { ...player, clubId: null, contractYears: rndInt(3, 5), wage, number: assignSquadNumber(g.squad), sellOnPct, sellOnClubName: sellOnPct > 0 ? fromClubName : null, releaseClause: details.releaseClauseOffer > 0 ? details.releaseClauseOffer : null, morale: reluctant ? clamp((player.morale ?? 70) - 15, 20, 100) : (player.morale ?? 70), reluctantSign: reluctant, joinedInfo: { text: reluctant ? `Värvades från ${fromClubName} för ${formatMoney(price)} i säsong ${g.season} — övertalades trots tveksamhet inför flytten.${installmentNote}` : `Värvades från ${fromClubName} för ${formatMoney(price)} i säsong ${g.season}.${installmentNote}` } };
     const recalcPlan = financedAmount > 0 ? installmentPlan(financedAmount, plan.months) : null;
     const newInstallment = recalcPlan ? { id: uid(), playerName: player.name, monthsLeft: recalcPlan.months, monthlyPayment: recalcPlan.monthlyPayment, totalRemaining: recalcPlan.totalWithInterest } : null;
     setG(prev => {
@@ -4492,14 +4597,15 @@ function setupCup(type, base) {
     const wage = agreedWage || player.wage;
     const cap = wageBudgetCap(g.reputation, g.clubs[g.userClubId].division, g.dev.sponsring);
     if (totalWageBill(g.squad) + wage > cap * 1.15) { showToast("Löneutrymmet räcker inte — Financial Fair Play stoppar värvningen."); return; }
-    const fromClubName = g.clubs[player.clubId]?.name || "en annan klubb";
+    const fromClubName = player.clubId ? (g.clubs[player.clubId]?.name || "en annan klubb") : "fri agent";
     const isDerby = player.clubId && g.clubs[player.clubId]?.rivalId === g.userClubId;
     const fanDelta = fanSigningReaction(player, agreedPrice, isDerby, g.squad, userClub);
     const installmentNote = financedAmount > 0 ? ` Resten (${formatMoney(financedAmount)}) delbetalas över ${plan.months} månader.` : "";
     const sellOnPct = details.sellOnOffer || 0;
     const recalcPlan = financedAmount > 0 ? installmentPlan(financedAmount, plan.months) : null;
     const newInstallment = recalcPlan ? { id: uid(), playerName: player.name, monthsLeft: recalcPlan.months, monthlyPayment: recalcPlan.monthlyPayment, totalRemaining: recalcPlan.totalWithInterest } : null;
-    const signedPlayer = { ...player, clubId: null, contractYears: rndInt(3, 5), wage, number: assignSquadNumber(g.squad), sellOnPct, sellOnClubName: sellOnPct > 0 ? fromClubName : null, releaseClause: details.releaseClauseOffer > 0 ? details.releaseClauseOffer : null, joinedInfo: { text: `Värvades från ${fromClubName} för ${formatMoney(agreedPrice)} i säsong ${g.season}.${installmentNote}` } };
+    const reluctant = (details.clubInterest ?? 100) < 55;
+    const signedPlayer = { ...player, clubId: null, contractYears: rndInt(3, 5), wage, number: assignSquadNumber(g.squad), sellOnPct, sellOnClubName: sellOnPct > 0 ? fromClubName : null, releaseClause: details.releaseClauseOffer > 0 ? details.releaseClauseOffer : null, morale: reluctant ? clamp((player.morale ?? 70) - 15, 20, 100) : (player.morale ?? 70), reluctantSign: reluctant, joinedInfo: { text: reluctant ? `Värvades från ${fromClubName} för ${formatMoney(agreedPrice)} i säsong ${g.season} — övertalades trots tveksamhet inför flytten.${installmentNote}` : `Värvades från ${fromClubName} för ${formatMoney(agreedPrice)} i säsong ${g.season}.${installmentNote}` } };
     setG(prev => ({
       ...prev, budget: prev.budget - totalCashNow, squad: [...prev.squad, signedPlayer], fanbase: clamp(prev.fanbase + fanDelta, 0, 100),
       transferInstallments: newInstallment ? [...(prev.transferInstallments || []), newInstallment] : (prev.transferInstallments || []),
@@ -4512,8 +4618,7 @@ function setupCup(type, base) {
     else if (fanDelta < 0) pushNews(`Fansen är skeptiska till värvningen av ${player.name} — dyrt för vad som levererades.`, "Klubben");
     showToast(`${player.name} skrev på för ${formatMoney(agreedPrice)} (${formatMoney(wage)}/omg i lön)!${installmentNote}`);
   }
-  function finalizeScoutSignee(agreedPrice, agreedWage, details = {}) {
-    const player = g.scoutMission?.result;
+  function finalizeScoutSignee(player, agreedPrice, agreedWage, details = {}) {
     if (!player) return;
     if (!transferWindowOpen(g.round)) { showToast("Transferfönstret är stängt just nu."); return; }
     const plan = details.paymentPlan || { upfrontAmount: agreedPrice, financedAmount: 0, months: 0 };
@@ -4527,14 +4632,15 @@ function setupCup(type, base) {
     const wage = agreedWage || player.wage;
     const cap = wageBudgetCap(g.reputation, g.clubs[g.userClubId].division, g.dev.sponsring);
     if (totalWageBill(g.squad) + wage > cap * 1.15) { showToast("Löneutrymmet räcker inte — Financial Fair Play stoppar värvningen."); return; }
-    const fromClubName = g.clubs[player.clubId]?.name || "en annan klubb";
+    const fromClubName = player.clubId ? (g.clubs[player.clubId]?.name || "en annan klubb") : "fri agent";
     const isDerby = player.clubId && g.clubs[player.clubId]?.rivalId === g.userClubId;
     const fanDelta = fanSigningReaction(player, agreedPrice, isDerby, g.squad, userClub);
     const installmentNote = financedAmount > 0 ? ` Resten (${formatMoney(financedAmount)}) delbetalas över ${plan.months} månader.` : "";
     const sellOnPct = details.sellOnOffer || 0;
     const recalcPlan = financedAmount > 0 ? installmentPlan(financedAmount, plan.months) : null;
     const newInstallment = recalcPlan ? { id: uid(), playerName: player.name, monthsLeft: recalcPlan.months, monthlyPayment: recalcPlan.monthlyPayment, totalRemaining: recalcPlan.totalWithInterest } : null;
-    const signedPlayer = { ...player, clubId: null, contractYears: rndInt(3, 5), wage, number: assignSquadNumber(g.squad), sellOnPct, sellOnClubName: sellOnPct > 0 ? fromClubName : null, releaseClause: details.releaseClauseOffer > 0 ? details.releaseClauseOffer : null, joinedInfo: { text: `Värvades från ${fromClubName} för ${formatMoney(agreedPrice)} i säsong ${g.season}, efter att ha upptäckts av scouten.${installmentNote}` }, scoutReports: [{ season: g.season, comment: scoutComment(player), source: "scout" }] };
+    const reluctant = (details.clubInterest ?? 100) < 55;
+    const signedPlayer = { ...player, clubId: null, contractYears: rndInt(3, 5), wage, number: assignSquadNumber(g.squad), sellOnPct, sellOnClubName: sellOnPct > 0 ? fromClubName : null, releaseClause: details.releaseClauseOffer > 0 ? details.releaseClauseOffer : null, morale: reluctant ? clamp((player.morale ?? 70) - 15, 20, 100) : (player.morale ?? 70), reluctantSign: reluctant, joinedInfo: { text: reluctant ? `Värvades från ${fromClubName} för ${formatMoney(agreedPrice)} i säsong ${g.season}, efter att ha upptäckts av scouten — övertalades trots tveksamhet inför flytten.${installmentNote}` : `Värvades från ${fromClubName} för ${formatMoney(agreedPrice)} i säsong ${g.season}, efter att ha upptäckts av scouten.${installmentNote}` }, scoutReports: [{ season: g.season, comment: scoutComment(player), source: "scout" }] };
     setG(prev => ({
       ...prev, budget: prev.budget - totalCashNow, squad: [...prev.squad, signedPlayer], scoutMission: null, fanbase: clamp(prev.fanbase + fanDelta, 0, 100),
       transferInstallments: newInstallment ? [...(prev.transferInstallments || []), newInstallment] : (prev.transferInstallments || []),
@@ -4867,6 +4973,16 @@ function setupCup(type, base) {
   function setSetPieceTakers(next) {
     setG(prev => ({ ...prev, setPieceTakers: next }));
   }
+  function scoutSpecificPlayer(playerId, isWorldPool) {
+    setG(prev => {
+      if ((prev.pendingPlayerScouts || []).some(s => s.playerId === playerId)) return prev;
+      const scoutLevel = prev.staff?.scout?.level || 0;
+      const duration = Math.round(playerScoutDuration(scoutLevel));
+      const dueRound = prev.round + duration;
+      return { ...prev, pendingPlayerScouts: [...(prev.pendingPlayerScouts || []), { playerId, dueRound, isWorldPool }] };
+    });
+    showToast(`Scouting av spelaren påbörjad — klart om ${Math.round(playerScoutDuration(g.staff?.scout?.level || 0))} omgångar.`);
+  }
   function assessPlayer(playerId) {
     const player = g.squad.find(p => p.id === playerId);
     if (!player) return;
@@ -4930,11 +5046,11 @@ function setupCup(type, base) {
       const newClubs = { ...prev.clubs, [oldClubId]: { ...prev.clubs[oldClubId], manager: generateManager(prev.clubs[oldClubId].league) } };
       const rating = effectiveScoutRating(dev, reputationForClub);
       const existingPool = prev.worldPool || generateWorldPool();
-      const dE = drawFromWorldPool(existingPool.europa, rating, 8);
-      const dS = drawFromWorldPool(existingPool.sydamerika, rating, 6);
-      const dA = drawFromWorldPool(existingPool.afrika, rating, 6);
-      const dAs = drawFromWorldPool(existingPool.asien, rating, 6);
-      const dN = drawFromWorldPool(existingPool.nordamerika, rating, 6);
+      const dE = drawFromWorldPool(existingPool.europa, rating, 4);
+      const dS = drawFromWorldPool(existingPool.sydamerika, rating, 2);
+      const dA = drawFromWorldPool(existingPool.afrika, rating, 2);
+      const dAs = drawFromWorldPool(existingPool.asien, rating, 2);
+      const dN = drawFromWorldPool(existingPool.nordamerika, rating, 2);
       const market = { europa: dE.picks, sydamerika: dS.picks, afrika: dA.picks, asien: dAs.picks, nordamerika: dN.picks };
       const newWorldPool = { europa: dE.remaining, sydamerika: dS.remaining, afrika: dA.remaining, asien: dAs.remaining, nordamerika: dN.remaining };
       return {
@@ -5427,9 +5543,9 @@ function setupCup(type, base) {
       } else if (scoutMission && !scoutMission.complete) {
         const roundsElapsed = scoutMission.roundsElapsed + 1;
         if (roundsElapsed >= scoutMission.roundsTotal) {
-          const candidate = generateScoutCandidate(scoutMission, prev.staff.scout?.level || 0, prev.clubs, prev.clubs[prev.userClubId].division, prev.userClubId);
-          scoutMission = { ...scoutMission, roundsElapsed, complete: true, result: candidate };
-          scoutToast = candidate ? `Scoutuppdraget är klart — ${candidate.name} har hittats.` : "Scoutuppdraget är klart, men ingen spelare matchade kriterierna.";
+          const candidates = generateScoutCandidates(scoutMission, prev.staff.scout?.level || 0, prev.clubs, prev.clubs[prev.userClubId].division, prev.userClubId, prev.reputation);
+          scoutMission = { ...scoutMission, roundsElapsed, complete: true, results: candidates };
+          scoutToast = candidates.length ? `Scoutuppdraget är klart — ${candidates.length > 1 ? candidates.length + " spelare hittades" : candidates[0].name + " har hittats"}.` : "Scoutuppdraget är klart, men ingen spelare matchade kriterierna.";
         } else {
           scoutMission = { ...scoutMission, roundsElapsed };
         }
@@ -5748,7 +5864,8 @@ function setupCup(type, base) {
                   loanOffers={g.loanOffers} onAcceptLoan={acceptLoanOffer} onDeclineLoan={declineLoanOffer} difficulty={g.difficulty}
                   squad={g.squad} savedScoutProfiles={g.savedScoutProfiles} onSaveScoutProfile={saveScoutProfile} onDeleteScoutProfile={deleteScoutProfile}
                   userClubId={g.userClubId} leagueId={g.leagueId} onFinalizeClubBrowseTransfer={finalizeClubBrowseTransfer} onSubViewChange={setSubViewOpen}
-                  partnerClubId={g.partnerClubId} onInstantLoanFromPartner={instantLoanFromPartner} loanRequests={g.loanRequests} onRespondLoanRequest={respondLoanRequest} transferHistory={g.transferHistory} />
+                  partnerClubId={g.partnerClubId} onInstantLoanFromPartner={instantLoanFromPartner} loanRequests={g.loanRequests} onRespondLoanRequest={respondLoanRequest} transferHistory={g.transferHistory}
+                  scoutedPlayerIds={g.scoutedPlayerIds} pendingPlayerScouts={g.pendingPlayerScouts} onScoutPlayer={scoutSpecificPlayer} />
               )}
             </div>
           </div>
@@ -8534,7 +8651,7 @@ function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId,
     </div>
   );
 }
-function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputation, difficulty, clubGoodwill, partnerClubId, onNegotiationFailed, onFinalize, onInstantLoanFromPartner, onBack }) {
+function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputation, difficulty, clubGoodwill, partnerClubId, onNegotiationFailed, onFinalize, onInstantLoanFromPartner, onBack, scoutedPlayerIds, pendingPlayerScouts, onScoutPlayer, round }) {
   const [leagueId, setLeagueId] = useState(homeLeagueId);
   const [division, setDivision] = useState(1);
   const [clubId, setClubId] = useState(null);
@@ -8579,22 +8696,33 @@ function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputat
         </PaperCard>
         <PaperCard style={{ padding: 0 }}>
           <div className="divide-y" style={{ borderColor: C.paperDim }}>
-            {(selectedClub.squad || []).slice().sort((a, b) => overallOf(b) - overallOf(a)).map(p => (
+            {(selectedClub.squad || []).slice().sort((a, b) => overallOf(b) - overallOf(a)).map(p => {
+              const scouted = isPlayerScouted(p, scoutedPlayerIds, userClubId);
+              const pendingScout = (pendingPlayerScouts || []).find(s => s.playerId === p.id);
+              const pOverall = overallOf(p);
+              const [ovLo, ovHi] = scouted ? [pOverall, pOverall] : fuzzyStatRange(pOverall, p.id, "overall", false);
+              const [potLo, potHi] = scouted ? [p.potential, p.potential] : fuzzyStatRange(p.potential ?? pOverall, p.id, "potential", false);
+              return (
               <div key={p.id} className="px-3 py-2.5">
                 <div className="w-full flex items-center justify-between text-left">
                   <button onClick={() => setNegotiatingPlayer({ ...p, clubId })} className="min-w-0 flex-1 text-left">
                     <div className="text-sm font-semibold truncate">{p.name}</div>
-                    <div className="text-10" style={{ color: C.inkSoft }}>{p.specificPosition} · {p.age} år · Potential {p.potential ?? "–"}</div>
+                    <div className="text-10" style={{ color: C.inkSoft }}>{p.specificPosition} · {p.age} år · Potential {scouted ? (p.potential ?? "–") : `${potLo}–${potHi}`}</div>
                     {(p.transferListed || p.loanListed) && (
                       <div className="flex gap-1 mt-1">
                         {p.transferListed && <span className="text-9 font-bold px-1.5 py-0.5 rounded-full" style={{ background: "rgba(63,143,107,0.18)", color: C.win }}>Till salu</span>}
                         {p.loanListed && <span className="text-9 font-bold px-1.5 py-0.5 rounded-full" style={{ background: "rgba(63,116,168,0.18)", color: "#3F74A8" }}>Går att låna</span>}
                       </div>
                     )}
+                    {!scouted && (pendingScout ? (
+                      <div className="text-9 font-semibold mt-1" style={{ color: C.inkSoft }}>🔍 Scoutas — {Math.max(1, pendingScout.dueRound - round)} omg kvar</div>
+                    ) : (
+                      <button onClick={e => { e.stopPropagation(); onScoutPlayer(p.id, false); }} className="text-9 font-semibold mt-1" style={{ color: "#B8862E" }}>🔍 Scouta spelaren</button>
+                    ))}
                   </button>
                   <div className="text-right shrink-0 ml-2">
                     <button onClick={() => setNegotiatingPlayer({ ...p, clubId })} className="block">
-                      <div className="font-mono text-sm font-bold">{overallOf(p)}</div>
+                      <div className="font-mono text-sm font-bold">{scouted ? pOverall : `${ovLo}–${ovHi}`}</div>
                       <div className="text-10 font-mono" style={{ color: C.inkSoft }}>{formatMoney(p.value)}</div>
                     </button>
                     {isPartner && (
@@ -8613,7 +8741,8 @@ function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputat
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         </PaperCard>
       </div>
@@ -10608,9 +10737,15 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
                 </>
               ) : (
                 <>
-                  <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Träna spelaren mot en näraliggande position för att gradvis öka passform och relevanta egenskaper där.</div>
+                  <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Träna spelaren för att öka passform och relevanta egenskaper — antingen genom att perfektionera en position de redan behärskar väl, eller lära in en helt ny.</div>
                   <div className="flex flex-wrap gap-1.5">
-                    {eligible.map(code => <button key={code} onClick={() => onStartTraining(player.id, code)} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg" style={{ background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>{code}</button>)}
+                    {eligible
+                      .map(code => { const anchor = SPECIFIC_POSITION_LOOKUP[code]; return { code, fit: effectivePositionFit(player, anchor.col, anchor.row) }; })
+                      .sort((a, b) => b.fit - a.fit)
+                      .map(({ code, fit }) => {
+                        const isPolish = fit >= 0.68;
+                        return <button key={code} onClick={() => onStartTraining(player.id, code)} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg" style={isPolish ? { background: "rgba(201,154,62,0.18)", border: `1px solid ${C.gold}`, color: "#B8862E" } : { background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>{code} ({Math.round(fit * 100)}%)</button>;
+                      })}
                   </div>
                 </>
               )}
@@ -11008,8 +11143,12 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
   const signOnBonusNum = signOnBonus;
   const houseCarCost = houseCar ? 350 : 0;
   const sweetenerScore = perkSweetenerScore(releaseClauseNum, signOnBonusNum, houseCar, player.value);
+  const clubInterest = playerInterestInClub(player, reputation, clubs[userClubId]?.division || 1);
+  // A player who isn't keen on joining still CAN be convinced — but it costs real money, not charm. Below
+  // ~55 interest the wage premium scales up sharply the more reluctant they are.
+  const interestWageMult = clubInterest >= 55 ? 1 : 1 + clamp((55 - clubInterest) / 100, 0, 0.6);
   function tryWage(mult) {
-    const target = negotiationDrift(wageDemand(player, reputation, budget), wageAttempts);
+    const target = negotiationDrift(wageDemand(player, reputation, budget) * interestWageMult, wageAttempts);
     const offerWage = Math.round(target * mult);
     if (wageAttempts === 0 && Math.random() < opportunityChance(wageLeverage)) {
       setWageMessages(prev => [...prev, { from: "you", text: `Erbjuder ${formatMoney(offerWage)}/omg` }, { from: "them", text: `Er klubb känns som rätt nästa steg för mig — jag skriver på utan att krångla.` }]);
@@ -11176,27 +11315,28 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
                 {attemptsLeftBadge(wageAttempts)}
               </div>
               <div className="text-11" style={{ color: C.inkSoft }}>Ursprungligt löneanspråk: ca {formatMoney(wageDemand(player))}/omgång</div>
-              {wageAttempts > 0 && <div className="text-11 mt-0.5 font-semibold" style={{ color: C.gold }}>Nuvarande anspråk (efter {wageAttempts} {wageAttempts === 1 ? "försök" : "försök"}): ca {formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget), wageAttempts)))}/omgång</div>}
-              {sweetenerScore > 0 && <div className="text-11 mb-1" style={{ color: C.win }}>Med lockbetena: ca {formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget), wageAttempts) * (1 - sweetenerScore)))}/omgång</div>}
+              {clubInterest < 55 && <div className="text-11 mt-1 font-semibold" style={{ color: clubInterest < 30 ? C.loss : C.gold }}>{clubInterest < 30 ? "Ovillig att gå till er" : "Avvaktande till en flytt"} — kräver en lönepremie för att övertygas. Att ändå driva igenom värvningen kan skapa dålig stämning över tid.</div>}
+              {wageAttempts > 0 && <div className="text-11 mt-0.5 font-semibold" style={{ color: C.gold }}>Nuvarande anspråk (efter {wageAttempts} {wageAttempts === 1 ? "försök" : "försök"}): ca {formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget) * interestWageMult, wageAttempts)))}/omgång</div>}
+              {sweetenerScore > 0 && <div className="text-11 mb-1" style={{ color: C.win }}>Med lockbetena: ca {formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget) * interestWageMult, wageAttempts) * (1 - sweetenerScore)))}/omgång</div>}
               <div className="mb-2"><LeverageBadge score={wageLeverage} /></div>
               <NegotiationThread messages={wageMessages} />
               {!wageOutcome ? (
                 <div className="grid grid-cols-3 gap-1.5 mt-3">
-                  <button onClick={() => tryWage(0.85)} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.paperDim, color: C.ink }}>Lågt<br />{formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget), wageAttempts) * (1 - sweetenerScore) * 0.85))}/omg</button>
-                  <button onClick={() => tryWage(1.0)} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Marknad<br />{formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget), wageAttempts) * (1 - sweetenerScore)))}/omg</button>
-                  <button onClick={() => tryWage(1.2)} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Generöst<br />{formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget), wageAttempts) * (1 - sweetenerScore) * 1.2))}/omg</button>
+                  <button onClick={() => tryWage(0.85)} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.paperDim, color: C.ink }}>Lågt<br />{formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget) * interestWageMult, wageAttempts) * (1 - sweetenerScore) * 0.85))}/omg</button>
+                  <button onClick={() => tryWage(1.0)} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Marknad<br />{formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget) * interestWageMult, wageAttempts) * (1 - sweetenerScore)))}/omg</button>
+                  <button onClick={() => tryWage(1.2)} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Generöst<br />{formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget) * interestWageMult, wageAttempts) * (1 - sweetenerScore) * 1.2))}/omg</button>
                 </div>
               ) : wageOutcome.result === "accept" ? (
                 <>
                   <div className="flex items-center gap-2 mt-3 px-3 py-2 rounded-xl font-semibold text-sm" style={{ background: "rgba(63,143,107,0.15)", color: C.win }}>✅ {player.name.split(" ")[0]} accepterar lönebudet!</div>
                   {!canAfford && <div className="text-11 font-semibold mt-2" style={{ color: C.loss }}>Otillräcklig budget för {formatMoney(totalCashNow)} i direktkostnad (direkt betalning + sign on-bonus + hus/bil).</div>}
-                  <button onClick={() => onFinalize(region, player, agreedPrice, wageOutcome.offerWage, { paymentPlan, releaseClauseOffer: releaseClauseNum, signOnBonus: signOnBonusNum, houseCar, sellOnOffer })} disabled={!canAfford} className="mt-2 w-full py-2.5 rounded-xl text-sm font-semibold" style={canAfford ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>Slutför övergången</button>
+                  <button onClick={() => onFinalize(region, player, agreedPrice, wageOutcome.offerWage, { paymentPlan, releaseClauseOffer: releaseClauseNum, signOnBonus: signOnBonusNum, houseCar, sellOnOffer, clubInterest })} disabled={!canAfford} className="mt-2 w-full py-2.5 rounded-xl text-sm font-semibold" style={canAfford ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>Slutför övergången</button>
                 </>
               ) : wageOutcome.result === "counter" ? (
                 <>
                   <div className="flex items-center gap-2 mt-3 px-3 py-2 rounded-xl font-semibold text-sm" style={{ background: "rgba(201,154,62,0.18)", color: "#8A6A20" }}>🤝 {player.name.split(" ")[0]} vill ha mer — motbud, inte ett nej.</div>
                   <div className="flex gap-2 mt-2">
-                    <button onClick={() => onFinalize(region, player, agreedPrice, wageOutcome.counterWage, { paymentPlan, releaseClauseOffer: releaseClauseNum, signOnBonus: signOnBonusNum, houseCar, sellOnOffer })} disabled={!canAfford} className="flex-1 py-2.5 rounded-xl text-sm font-semibold" style={canAfford ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>Acceptera</button>
+                    <button onClick={() => onFinalize(region, player, agreedPrice, wageOutcome.counterWage, { paymentPlan, releaseClauseOffer: releaseClauseNum, signOnBonus: signOnBonusNum, houseCar, sellOnOffer, clubInterest })} disabled={!canAfford} className="flex-1 py-2.5 rounded-xl text-sm font-semibold" style={canAfford ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>Acceptera</button>
                     <button onClick={() => setWageOutcome(null)} className="flex-1 py-2.5 rounded-xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Nytt bud</button>
                   </div>
                 </>
@@ -11309,7 +11449,8 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
   );
 }
 
-function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfiles, onStart, onDismiss, onCancel, onNegotiate, onSaveProfile, onDeleteProfile, onOpenClubBrowser }) {
+function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfiles, onStart, onDismiss, onCancel, onNegotiate, onSaveProfile, onDeleteProfile, onOpenClubBrowser, reputation, division }) {
+  const [selectedCandidateIdx, setSelectedCandidateIdx] = useState(0);
   const [posFilter, setPosFilter] = useState(null);
   const [sideFilter, setSideFilter] = useState(null);
   const [ageMin, setAgeMin] = useState("");
@@ -11319,6 +11460,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
   const [maxValue, setMaxValue] = useState("");
   const [maxWage, setMaxWage] = useState("");
   const [wantPotential, setWantPotential] = useState(false);
+  const [wantInterested, setWantInterested] = useState(false);
   const [savingProfileName, setSavingProfileName] = useState(null);
   const inputStyle = { background: "transparent", border: `1px solid ${C.paperDim}`, borderRadius: 10, padding: "8px 10px", color: C.ink, fontSize: 13, width: "100%" };
   function applyPreset(preset) {
@@ -11328,6 +11470,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
     setAttrMins(Object.fromEntries(Object.entries(preset.attrs).map(([k, v]) => [k, String(v)])));
     setAgeMax(preset.ageMax ? String(preset.ageMax) : "");
     setWantPotential(!!preset.minPotential);
+    setWantInterested(!!preset.interestedOnly);
   }
   function currentFilters() {
     return {
@@ -11336,6 +11479,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
       attributeFilters: Object.fromEntries(Object.keys(activeAttrs).filter(k => activeAttrs[k] && attrMins[k]).map(k => [k, parseInt(attrMins[k])])),
       maxValue: maxValue ? parseInt(maxValue) : null, maxWage: maxWage ? parseInt(maxWage) : null,
       minPotential: wantPotential ? 76 : null,
+      interestedOnly: wantInterested,
     };
   }
 
@@ -11349,6 +11493,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
     if (scoutMission.maxValue) parts.push(`Max ${formatMoney(scoutMission.maxValue)}`);
     if (scoutMission.maxWage) parts.push(`Max ${formatMoney(scoutMission.maxWage)}/omg`);
     if (scoutMission.minPotential) parts.push(`Hög potential (≥${scoutMission.minPotential})`);
+    if (scoutMission.interestedOnly) parts.push("Intresserad av klubben");
     return (
       <PaperCard>
         <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Scouten är ute på uppdrag</div>
@@ -11361,8 +11506,8 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
   }
 
   if (scoutMission?.complete) {
-    const p = scoutMission.result;
-    if (!p) {
+    const results = scoutMission.results || (scoutMission.result ? [scoutMission.result] : []);
+    if (!results.length) {
       return (
         <PaperCard>
           <div className="text-sm text-center py-2" style={{ color: C.inkSoft }}>Scouten hittade ingen spelare som matchade kriterierna. Försök med bredare filter.</div>
@@ -11370,12 +11515,21 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
         </PaperCard>
       );
     }
+    const p = results[Math.min(selectedCandidateIdx, results.length - 1)];
     const overall = overallOf(p);
     const uncertain = scoutUncertainty(scoutLevel) > 0;
     const comparable = (squad || []).filter(s => s.pos === p.pos).sort((a, b) => overallOf(b) - overallOf(a)).slice(0, 2);
+    const interest = interestLabel(playerInterestInClub(p, reputation, division));
     return (
       <PaperCard>
-        <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Scouten har hittat en spelare</div>
+        <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{results.length > 1 ? `Scouten har hittat ${results.length} spelare` : "Scouten har hittat en spelare"}</div>
+        {results.length > 1 && (
+          <div className="flex gap-1.5 mt-2 overflow-x-auto pb-1">
+            {results.map((c, i) => (
+              <button key={c.id} onClick={() => setSelectedCandidateIdx(i)} className="shrink-0 px-2.5 py-1.5 rounded-lg text-9 font-semibold" style={i === Math.min(selectedCandidateIdx, results.length - 1) ? { background: C.gold, color: C.turfDeep } : { background: C.paperDim, color: C.inkSoft }}>{c.name.split(" ")[0]} · {overallOf(c)}</button>
+            ))}
+          </div>
+        )}
         <div className="flex items-center gap-3 mt-2">
           <div style={{ position: "relative", width: 42, height: 42, flexShrink: 0 }}>
             <PlayerAvatar player={p} size={42} />
@@ -11387,6 +11541,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
             <div className="mt-1"><StarRating rating={overallToStars(overall)} size={9} /></div>
           </div>
         </div>
+        <div className="text-11 font-semibold mt-1.5" style={{ color: interest.color }}>{interest.text}</div>
         <div className="text-11 mt-2" style={{ color: C.inkSoft }}>{scoutComment(p)}</div>
         <div className="flex gap-3 mt-2 text-11 font-mono" style={{ color: C.inkSoft }}>
           <span>Anfall: {scoutRangeText(p.attack, scoutLevel)}</span>
@@ -11412,7 +11567,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
           </div>
         )}
         <div className="flex gap-2 mt-3">
-          <button onClick={onNegotiate} className="flex-1 py-2.5 rounded-xl text-xs font-semibold" style={{ background: C.turf, color: C.paper }}>Förhandla</button>
+          <button onClick={() => onNegotiate(p.id)} className="flex-1 py-2.5 rounded-xl text-xs font-semibold" style={{ background: C.turf, color: C.paper }}>Förhandla</button>
           <button onClick={onDismiss} className="flex-1 py-2.5 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Avfärda</button>
         </div>
       </PaperCard>
@@ -11439,7 +11594,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
             <div className="flex gap-2 flex-wrap">
               {savedProfiles.map(sp => (
                 <div key={sp.id} className="flex items-center gap-1 pl-3 pr-1 py-1 rounded-full" style={{ background: C.paperDim }}>
-                  <button onClick={() => applyPreset({ posFilter: sp.posFilter, attrs: sp.attributeFilters || {}, ageMax: sp.ageMax, minPotential: sp.minPotential })} className="text-11 font-semibold" style={{ color: C.ink }}>{sp.name}</button>
+                  <button onClick={() => applyPreset({ posFilter: sp.posFilter, attrs: sp.attributeFilters || {}, ageMax: sp.ageMax, minPotential: sp.minPotential, interestedOnly: sp.interestedOnly })} className="text-11 font-semibold" style={{ color: C.ink }}>{sp.name}</button>
                   <button onClick={() => onDeleteProfile(sp.id)} className="text-11 px-1" style={{ color: C.loss }}>×</button>
                 </div>
               ))}
@@ -11513,6 +11668,17 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
           </div>
         </button>
       </PaperCard>
+      <PaperCard>
+        <button onClick={() => setWantInterested(w => !w)} className="w-full flex items-center justify-between text-left">
+          <div>
+            <div className="text-xs font-semibold">Intresserad av din klubb</div>
+            <div className="text-10 mt-0.5" style={{ color: C.inkSoft }}>Visar bara spelare som verkar öppna för en flytt till er — enklare (men dyrare) att övertyga de som är ovilliga.</div>
+          </div>
+          <div style={{ width: 40, height: 22, borderRadius: 999, background: wantInterested ? C.gold : "rgba(0,0,0,0.1)", position: "relative", flexShrink: 0 }}>
+            <div style={{ width: 18, height: 18, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: wantInterested ? 20 : 2, transition: "left .15s ease" }} />
+          </div>
+        </button>
+      </PaperCard>
       <div className="flex gap-2">
         <button onClick={() => onStart(currentFilters())} className="flex-1 py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep }}>Skicka ut scouten</button>
         <button onClick={() => setSavingProfileName(savingProfileName === null ? "" : null)} className="py-2.5 px-4 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Spara sökning</button>
@@ -11561,15 +11727,15 @@ function LoanOfferCard({ o, onAccept, onDecline }) {
     </PaperCard>
   );
 }
-function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSquad, youthMarket, round, season, clubs, reputation, incomingOffers, clubGoodwill, blacklistedPlayers, onNegotiationFailed, onFinalizeTransfer, onBuyYouth, onRespondOffer, scoutMission, scoutLevel, onStartScoutMission, onDismissScoutMission, onCancelScoutMission, onFinalizeScoutSignee, loanOffers, onAcceptLoan, onDeclineLoan, difficulty, squad, savedScoutProfiles, onSaveScoutProfile, onDeleteScoutProfile, userClubId, leagueId, onFinalizeClubBrowseTransfer, onSubViewChange, partnerClubId, onInstantLoanFromPartner, loanRequests, onRespondLoanRequest, transferHistory }) {
+function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSquad, youthMarket, round, season, clubs, reputation, incomingOffers, clubGoodwill, blacklistedPlayers, onNegotiationFailed, onFinalizeTransfer, onBuyYouth, onRespondOffer, scoutMission, scoutLevel, onStartScoutMission, onDismissScoutMission, onCancelScoutMission, onFinalizeScoutSignee, loanOffers, onAcceptLoan, onDeclineLoan, difficulty, squad, savedScoutProfiles, onSaveScoutProfile, onDeleteScoutProfile, userClubId, leagueId, onFinalizeClubBrowseTransfer, onSubViewChange, partnerClubId, onInstantLoanFromPartner, loanRequests, onRespondLoanRequest, transferHistory, scoutedPlayerIds, pendingPlayerScouts, onScoutPlayer }) {
   const [showClubBrowser, setShowClubBrowser] = useState(false);
   const [showOwnHistory, setShowOwnHistory] = useState(false);
   const [showGlobalTransfers, setShowGlobalTransfers] = useState(false);
   const [subView, setSubView] = useState("spelare");
   const [region, setRegion] = useState("europa");
   const [negotiatingId, setNegotiatingId] = useState(null);
-  const [negotiatingScout, setNegotiatingScout] = useState(false);
-  useEffect(() => { onSubViewChange?.(showClubBrowser || showOwnHistory || showGlobalTransfers || !!negotiatingId || negotiatingScout); }, [showClubBrowser, showOwnHistory, showGlobalTransfers, negotiatingId, negotiatingScout]);
+  const [negotiatingScout, setNegotiatingScout] = useState(null);
+  useEffect(() => { onSubViewChange?.(showClubBrowser || showOwnHistory || showGlobalTransfers || !!negotiatingId || !!negotiatingScout); }, [showClubBrowser, showOwnHistory, showGlobalTransfers, negotiatingId, negotiatingScout]);
   const currentTurn = season * 38 + round;
   const list = market[region].filter(p => !blacklistedPlayers?.[p.id] || blacklistedPlayers[p.id] <= currentTurn);
   const locked = scoutingLevel < REGION_UNLOCK[region];
@@ -11580,13 +11746,17 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
 
   if (showOwnHistory) return <OwnTransferHistoryView transferHistory={transferHistory} userClubId={userClubId} currentSeason={season} onBack={() => setShowOwnHistory(false)} />;
   if (showGlobalTransfers) return <GlobalTransfersView transferHistory={transferHistory} userClubId={userClubId} onBack={() => setShowGlobalTransfers(false)} />;
-  if (showClubBrowser) return <ClubSquadBrowserView clubs={clubs} userClubId={userClubId} homeLeagueId={leagueId} budget={budget} reputation={reputation} difficulty={difficulty} clubGoodwill={clubGoodwill} partnerClubId={partnerClubId} onNegotiationFailed={onNegotiationFailed} onFinalize={onFinalizeClubBrowseTransfer} onInstantLoanFromPartner={onInstantLoanFromPartner} onBack={() => setShowClubBrowser(false)} />;
+  if (showClubBrowser) return <ClubSquadBrowserView clubs={clubs} userClubId={userClubId} homeLeagueId={leagueId} budget={budget} reputation={reputation} difficulty={difficulty} clubGoodwill={clubGoodwill} partnerClubId={partnerClubId} onNegotiationFailed={onNegotiationFailed} onFinalize={onFinalizeClubBrowseTransfer} onInstantLoanFromPartner={onInstantLoanFromPartner} onBack={() => setShowClubBrowser(false)} scoutedPlayerIds={scoutedPlayerIds} pendingPlayerScouts={pendingPlayerScouts} onScoutPlayer={onScoutPlayer} round={round} />;
 
-  if (negotiatingScout && scoutMission?.result) {
-    const scoutClub = clubs[scoutMission.result.clubId];
-    return <NegotiationView player={scoutMission.result} club={scoutClub ? { ...scoutClub, goodwill: clubGoodwill?.[scoutClub.id] ?? 50 } : syntheticFreeAgentClub(scoutMission.result)} region="scout" budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs}
-      onNegotiationFailed={onNegotiationFailed}
-      onBack={() => setNegotiatingScout(false)} onFinalize={(r, p, price, wage, details) => { onFinalizeScoutSignee(price, wage, details); setNegotiatingScout(false); }} />;
+  if (negotiatingScout && scoutMission?.complete) {
+    const scoutResults = scoutMission.results || (scoutMission.result ? [scoutMission.result] : []);
+    const scoutPlayer = scoutResults.find(c => c.id === negotiatingScout);
+    if (scoutPlayer) {
+      const scoutClub = clubs[scoutPlayer.clubId];
+      return <NegotiationView player={scoutPlayer} club={scoutClub ? { ...scoutClub, goodwill: clubGoodwill?.[scoutClub.id] ?? 50 } : syntheticFreeAgentClub(scoutPlayer)} region="scout" budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs}
+        onNegotiationFailed={onNegotiationFailed}
+        onBack={() => setNegotiatingScout(null)} onFinalize={(r, p, price, wage, details) => { onFinalizeScoutSignee(p, price, wage, details); setNegotiatingScout(null); }} />;
+    }
   }
 
   const negotiatingPlayer = negotiatingId ? list.find(p => p.id === negotiatingId) : null;
@@ -11639,12 +11809,17 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
                 const pOverall = overallOf(p);
                 const isDerby = owningClub && owningClub.rivalId === userClubId;
                 const rel = owningClub ? clubRelationshipLabel(clubGoodwill?.[owningClub.id], isDerby) : null;
+                const isWorldPool = !!p.region;
+                const scouted = isPlayerScouted(p, scoutedPlayerIds, userClubId);
+                const pendingScout = (pendingPlayerScouts || []).find(s => s.playerId === p.id);
+                const [ovLo, ovHi] = scouted ? [pOverall, pOverall] : fuzzyStatRange(pOverall, p.id, "overall", isWorldPool);
+                const [potLo, potHi] = scouted ? [p.potential, p.potential] : fuzzyStatRange(p.potential ?? pOverall, p.id, "potential", isWorldPool);
                 return (
                   <PaperCard key={p.id} style={{ padding: 10 }}>
                     <div className="flex items-center gap-2.5">
                       <div style={{ position: "relative", width: 30, height: 30, flexShrink: 0 }}>
                         <PlayerAvatar player={p} size={30} />
-                        <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={pOverall} size={16} /></div>
+                        {scouted && <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={pOverall} size={16} /></div>}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="font-semibold text-xs truncate">{p.name}</div>
@@ -11655,14 +11830,23 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
                       </div>
                     </div>
                     <div className="flex items-center justify-between mt-1.5">
-                      <StarRating rating={overallToStars(pOverall)} size={7} />
+                      {scouted ? <StarRating rating={overallToStars(pOverall)} size={7} /> : <div className="text-9 font-semibold" style={{ color: C.gold }}>Overall {ovLo}–{ovHi} · Pot. {potLo}–{potHi}</div>}
                       <div className="font-mono text-11 font-semibold shrink-0">{formatMoney(p.value)}</div>
                     </div>
-                    <div className="grid grid-cols-2 gap-1.5 mt-1.5">
-                      <AttributeGridCard attrKey="shooting" label="Anfall" value={p.attack} icon="🎯" />
-                      <AttributeGridCard attrKey="defending" label="Försvar" value={p.defense} icon="🛡️" />
-                    </div>
-                    <button onClick={() => setNegotiatingId(p.id)} disabled={!windowOpen} className="mt-2 w-full py-1.5 rounded-xl text-9 font-semibold" style={windowOpen ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>{windowOpen ? "Förhandla" : "Fönstret är stängt"}</button>
+                    {scouted && (
+                      <div className="grid grid-cols-2 gap-1.5 mt-1.5">
+                        <AttributeGridCard attrKey="shooting" label="Anfall" value={p.attack} icon="🎯" />
+                        <AttributeGridCard attrKey="defending" label="Försvar" value={p.defense} icon="🛡️" />
+                      </div>
+                    )}
+                    {!scouted && (
+                      pendingScout ? (
+                        <div className="mt-2 w-full py-1.5 rounded-xl text-9 font-semibold text-center" style={{ background: C.paperDim, color: C.inkSoft }}>🔍 Scoutas — {Math.max(1, pendingScout.dueRound - round)} omg kvar</div>
+                      ) : (
+                        <button onClick={() => onScoutPlayer(p.id, isWorldPool)} className="mt-2 w-full py-1.5 rounded-xl text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>🔍 Scouta spelaren</button>
+                      )
+                    )}
+                    <button onClick={() => setNegotiatingId(p.id)} disabled={!windowOpen} className="mt-1.5 w-full py-1.5 rounded-xl text-9 font-semibold" style={windowOpen ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>{windowOpen ? "Förhandla" : "Fönstret är stängt"}</button>
                   </PaperCard>
                 );
               })}
@@ -11706,7 +11890,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
         </>
       ) : subView === "scout" ? (
         <ScoutMissionPanel scoutMission={scoutMission} scoutLevel={scoutLevel} budget={budget} squad={squad} savedProfiles={savedScoutProfiles}
-          onStart={onStartScoutMission} onDismiss={onDismissScoutMission} onCancel={onCancelScoutMission} onNegotiate={() => setNegotiatingScout(true)} onSaveProfile={onSaveScoutProfile} onDeleteProfile={onDeleteScoutProfile} onOpenClubBrowser={() => setShowClubBrowser(true)} />
+          onStart={onStartScoutMission} onDismiss={onDismissScoutMission} onCancel={onCancelScoutMission} onNegotiate={id => setNegotiatingScout(id)} onSaveProfile={onSaveScoutProfile} onDeleteProfile={onDeleteScoutProfile} onOpenClubBrowser={() => setShowClubBrowser(true)} reputation={reputation} division={clubs[userClubId]?.division || 1} />
       ) : (
         <>
           {loanOffers && loanOffers.length > 0 && (
