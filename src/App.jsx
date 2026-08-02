@@ -1030,7 +1030,7 @@ function scoutMissionDuration(scoutLevel) { return clamp(7 - (scoutLevel || 0) *
 // Time (in rounds) to scout a SPECIFIC, already-visible player and reveal their true numbers — separate
 // from a full scout mission (which searches for a new candidate). Same club-scouting-level dependency,
 // just a shorter, more targeted job since you already know who you're looking at.
-function playerScoutDuration(scoutLevel) { return clamp(5 - (scoutLevel || 0) * 0.9, 1, 5); }
+function playerScoutDuration(scoutLevel) { return scoutMissionDuration(scoutLevel); }
 // Before a player is scouted, their overall/potential are shown as an honest-but-fuzzy range rather than
 // an exact number — deliberately makes "window shopping" for obvious bargains much harder. The true value
 // always falls inside the shown range, but where within it is randomized so the range's midpoint isn't a
@@ -1053,26 +1053,36 @@ function scoutMissionCeiling(scoutLevel, division) {
   const base = scoutLevel ? clamp(58 + scoutLevel * 7, 58, 95) : 62;
   return clamp(base + divAdj, 38, 95);
 }
-function findRealScoutCandidates(mission, clubs, userClubId, count) {
+function findRealScoutCandidates(mission, clubs, userClubId, count, worldPool) {
   const attrFilters = mission.attributeFilters || {};
   const activeAttrKeys = Object.keys(attrFilters).filter(k => attrFilters[k]);
+  const passesFilters = p => {
+    if (mission.posFilter && p.pos !== mission.posFilter) return false;
+    if (mission.ageMin && p.age < mission.ageMin) return false;
+    if (mission.ageMax && p.age > mission.ageMax) return false;
+    if (mission.maxValue && p.value > mission.maxValue) return false;
+    if (mission.maxWage && p.wage > mission.maxWage) return false;
+    if (mission.minPotential && (p.potential || 0) < mission.minPotential) return false;
+    if (activeAttrKeys.length) {
+      const attrs = getAttrs(p);
+      if (!activeAttrKeys.every(k => attrs[k] >= attrFilters[k])) return false;
+    }
+    return true;
+  };
   const candidates = [];
-  Object.values(clubs).forEach(club => {
-    if (club.id === userClubId || !club.squad) return;
-    club.squad.forEach(p => {
-      if (mission.posFilter && p.pos !== mission.posFilter) return;
-      if (mission.ageMin && p.age < mission.ageMin) return;
-      if (mission.ageMax && p.age > mission.ageMax) return;
-      if (mission.maxValue && p.value > mission.maxValue) return;
-      if (mission.maxWage && p.wage > mission.maxWage) return;
-      if (mission.minPotential && (p.potential || 0) < mission.minPotential) return;
-      if (activeAttrKeys.length) {
-        const attrs = getAttrs(p);
-        if (!activeAttrKeys.every(k => attrs[k] >= attrFilters[k])) return;
-      }
-      candidates.push({ player: p, clubId: club.id });
+  if (mission.worldPoolRegion && worldPool) {
+    // Searching "Övriga världen" specifically pulls from the same persistent, depleting pool that's
+    // browsable directly in the Spelare tab — not a separate made-up set of players.
+    const regions = mission.worldPoolRegion === "any" ? Object.keys(worldPool) : [mission.worldPoolRegion];
+    regions.forEach(region => {
+      (worldPool[region] || []).forEach(p => { if (passesFilters(p)) candidates.push({ player: p, clubId: null }); });
     });
-  });
+  } else {
+    Object.values(clubs).forEach(club => {
+      if (club.id === userClubId || !club.squad) return;
+      club.squad.forEach(p => { if (passesFilters(p)) candidates.push({ player: p, clubId: club.id }); });
+    });
+  }
   if (!candidates.length) return [];
   const shuffled = shuffle(candidates);
   return shuffled.slice(0, count).map(c => ({ ...c.player, clubId: c.clubId }));
@@ -1100,12 +1110,12 @@ function interestLabel(score) {
   if (score >= 40) return { text: "Avvaktande", color: "#C99A3E" };
   return { text: "Ovillig", color: "#B4443B" };
 }
-function generateScoutCandidates(mission, scoutLevel, clubs, division, userClubId, reputation, count) {
+function generateScoutCandidates(mission, scoutLevel, clubs, division, userClubId, reputation, count, worldPool) {
   const wanted = count || clamp(1 + Math.floor((scoutLevel || 0) / 1.5), 1, 4);
   const passesInterest = p => !mission.interestedOnly || playerInterestInClub(p, reputation, division) >= 55;
   const results = [];
   const seenIds = new Set();
-  const realPool = findRealScoutCandidates(mission, clubs, userClubId, wanted * 4).filter(passesInterest);
+  const realPool = findRealScoutCandidates(mission, clubs, userClubId, wanted * 4, worldPool).filter(passesInterest);
   for (const r of realPool) {
     if (results.length >= wanted) break;
     if (seenIds.has(r.id)) continue;
@@ -1113,7 +1123,9 @@ function generateScoutCandidates(mission, scoutLevel, clubs, division, userClubI
     results.push(r);
   }
   let guard = 0;
-  while (results.length < wanted && guard < wanted * 8) {
+  // World-pool searches only draw from the real, finite pool — no synthetic backfill, since "make up a
+  // random extra player" would defeat the point of scouting a specific, persistent region.
+  while (results.length < wanted && guard < wanted * 8 && !mission.worldPoolRegion) {
     guard++;
     const synth = generateSyntheticScoutCandidate(mission, scoutLevel, clubs, division);
     if (!synth || !passesInterest(synth)) continue;
@@ -3357,6 +3369,7 @@ function TranarbankenApp() {
       lastCrisisWasFinancial: parsed.lastCrisisWasFinancial || false,
       customArenaName: parsed.customArenaName || null,
       pendingSelectedPlayerId: null,
+      pendingScoutReveal: parsed.pendingScoutReveal || null,
       pendingShootout: parsed.pendingShootout || null,
       transferHistory: parsed.transferHistory || [],
       squadViewPrefs: parsed.squadViewPrefs || { rowMode: "detaljerad", showAllBench: false },
@@ -3485,6 +3498,8 @@ function TranarbankenApp() {
       setG(prev => ({ ...prev, activeTab: "squad", view: "tab", pendingSelectedPlayerId: action.playerId }));
     } else if (action.type === "incomingOffer") {
       setG(prev => ({ ...prev, activeTab: "transfers", view: "tab" }));
+    } else if (action.type === "scoutedPlayer") {
+      setG(prev => ({ ...prev, activeTab: "transfers", view: "tab", pendingScoutReveal: { playerId: action.playerId, clubId: action.clubId, region: action.region } }));
     }
   }
   function markNewsRead() {
@@ -4127,7 +4142,7 @@ function setupCup(type, base) {
     } else if (scoutMission && !scoutMission.complete) {
       const roundsElapsed = scoutMission.roundsElapsed + 1;
       if (roundsElapsed >= scoutMission.roundsTotal) {
-        const candidates = generateScoutCandidates(scoutMission, g.staff.scout?.level || 0, updatedClubs, userClub.division, g.userClubId, g.reputation);
+        const candidates = generateScoutCandidates(scoutMission, g.staff.scout?.level || 0, updatedClubs, userClub.division, g.userClubId, g.reputation, null, g.worldPool);
         scoutMission = { ...scoutMission, roundsElapsed, complete: true, results: candidates };
         scoutToast = candidates.length ? `Scoutuppdraget är klart — ${candidates.length > 1 ? candidates.length + " spelare hittades" : candidates[0].name + " har hittats"}.` : "Scoutuppdraget är klart, men ingen spelare matchade kriterierna. Försök med bredare filter.";
       } else {
@@ -4199,6 +4214,12 @@ function setupCup(type, base) {
         arenaConstruction, arenaStands, dev: { ...prev.dev, arena: devArena },
         _toast: [breakToast, eventToast, scoutToast, constructionToast, trainingInjuryNames.length ? `Skada på träning: ${trainingInjuryNames.join(", ")}.` : null, loanReturnHomeMsg, installmentMsg].filter(Boolean).join(" ") || null,
       };
+    });
+    (g.pendingPlayerScouts || []).filter(s => s.dueRound <= newRound).forEach(s => {
+      const scoutedPlayer = s.clubId ? g.clubs[s.clubId]?.squad?.find(pl => pl.id === s.playerId)
+        : Object.values(g.worldPool || {}).flat().find(pl => pl.id === s.playerId);
+      const name = scoutedPlayer?.name || "Spelaren";
+      pushNews(`Scoutingen av ${name} är klar — full rapport tillgänglig.`, "Scouting", { action: { type: "scoutedPlayer", playerId: s.playerId, clubId: s.clubId, region: s.region } });
     });
   }
 
@@ -4645,6 +4666,8 @@ function setupCup(type, base) {
       ...prev, budget: prev.budget - totalCashNow, squad: [...prev.squad, signedPlayer], scoutMission: null, fanbase: clamp(prev.fanbase + fanDelta, 0, 100),
       transferInstallments: newInstallment ? [...(prev.transferInstallments || []), newInstallment] : (prev.transferInstallments || []),
       clubs: player.clubId && prev.clubs[player.clubId]?.squad ? { ...prev.clubs, [player.clubId]: { ...prev.clubs[player.clubId], squad: prev.clubs[player.clubId].squad.filter(p => p.id !== player.id) } } : prev.clubs,
+      worldPool: (player.region && prev.worldPool?.[player.region]) ? { ...prev.worldPool, [player.region]: prev.worldPool[player.region].filter(p => p.id !== player.id) } : prev.worldPool,
+      market: (player.region && prev.market?.[player.region]) ? { ...prev.market, [player.region]: prev.market[player.region].filter(p => p.id !== player.id) } : prev.market,
     }));
     if (isDerby) pushNews(`Historisk värvning — ${player.name} lämnar ärkerivalen ${fromClubName} för er! Fansen ${fanDelta >= 6 ? "jublar vilt" : "är kluvna men nyfikna"}.`, "Klubben");
     else if (fanDelta >= 3) pushNews(`Fansen är mycket nöjda med värvningen av ${player.name}.`, "Klubben");
@@ -4973,13 +4996,13 @@ function setupCup(type, base) {
   function setSetPieceTakers(next) {
     setG(prev => ({ ...prev, setPieceTakers: next }));
   }
-  function scoutSpecificPlayer(playerId, isWorldPool) {
+  function scoutSpecificPlayer(playerId, region, clubId) {
     setG(prev => {
       if ((prev.pendingPlayerScouts || []).some(s => s.playerId === playerId)) return prev;
       const scoutLevel = prev.staff?.scout?.level || 0;
       const duration = Math.round(playerScoutDuration(scoutLevel));
       const dueRound = prev.round + duration;
-      return { ...prev, pendingPlayerScouts: [...(prev.pendingPlayerScouts || []), { playerId, dueRound, isWorldPool }] };
+      return { ...prev, pendingPlayerScouts: [...(prev.pendingPlayerScouts || []), { playerId, dueRound, region: region || null, clubId: clubId || null }] };
     });
     showToast(`Scouting av spelaren påbörjad — klart om ${Math.round(playerScoutDuration(g.staff?.scout?.level || 0))} omgångar.`);
   }
@@ -5543,7 +5566,7 @@ function setupCup(type, base) {
       } else if (scoutMission && !scoutMission.complete) {
         const roundsElapsed = scoutMission.roundsElapsed + 1;
         if (roundsElapsed >= scoutMission.roundsTotal) {
-          const candidates = generateScoutCandidates(scoutMission, prev.staff.scout?.level || 0, prev.clubs, prev.clubs[prev.userClubId].division, prev.userClubId, prev.reputation);
+          const candidates = generateScoutCandidates(scoutMission, prev.staff.scout?.level || 0, prev.clubs, prev.clubs[prev.userClubId].division, prev.userClubId, prev.reputation, null, prev.worldPool);
           scoutMission = { ...scoutMission, roundsElapsed, complete: true, results: candidates };
           scoutToast = candidates.length ? `Scoutuppdraget är klart — ${candidates.length > 1 ? candidates.length + " spelare hittades" : candidates[0].name + " har hittats"}.` : "Scoutuppdraget är klart, men ingen spelare matchade kriterierna.";
         } else {
@@ -5865,7 +5888,7 @@ function setupCup(type, base) {
                   squad={g.squad} savedScoutProfiles={g.savedScoutProfiles} onSaveScoutProfile={saveScoutProfile} onDeleteScoutProfile={deleteScoutProfile}
                   userClubId={g.userClubId} leagueId={g.leagueId} onFinalizeClubBrowseTransfer={finalizeClubBrowseTransfer} onSubViewChange={setSubViewOpen}
                   partnerClubId={g.partnerClubId} onInstantLoanFromPartner={instantLoanFromPartner} loanRequests={g.loanRequests} onRespondLoanRequest={respondLoanRequest} transferHistory={g.transferHistory}
-                  scoutedPlayerIds={g.scoutedPlayerIds} pendingPlayerScouts={g.pendingPlayerScouts} onScoutPlayer={scoutSpecificPlayer} />
+                  scoutedPlayerIds={g.scoutedPlayerIds} pendingPlayerScouts={g.pendingPlayerScouts} onScoutPlayer={scoutSpecificPlayer} pendingScoutReveal={g.pendingScoutReveal} onClearScoutReveal={() => setG(prev => ({ ...prev, pendingScoutReveal: null }))} />
               )}
             </div>
           </div>
@@ -8651,10 +8674,10 @@ function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId,
     </div>
   );
 }
-function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputation, difficulty, clubGoodwill, partnerClubId, onNegotiationFailed, onFinalize, onInstantLoanFromPartner, onBack, scoutedPlayerIds, pendingPlayerScouts, onScoutPlayer, round }) {
-  const [leagueId, setLeagueId] = useState(homeLeagueId);
-  const [division, setDivision] = useState(1);
-  const [clubId, setClubId] = useState(null);
+function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputation, difficulty, clubGoodwill, partnerClubId, onNegotiationFailed, onFinalize, onInstantLoanFromPartner, onBack, scoutedPlayerIds, pendingPlayerScouts, onScoutPlayer, round, initialClubId }) {
+  const [leagueId, setLeagueId] = useState(initialClubId ? clubs[initialClubId]?.league || homeLeagueId : homeLeagueId);
+  const [division, setDivision] = useState(initialClubId ? clubs[initialClubId]?.division || 1 : 1);
+  const [clubId, setClubId] = useState(initialClubId || null);
   const [negotiatingPlayer, setNegotiatingPlayer] = useState(null);
   const [loanConfigId, setLoanConfigId] = useState(null);
   const clubOptions = clubsInPool(leagueId, division, clubs);
@@ -8717,7 +8740,7 @@ function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputat
                     {!scouted && (pendingScout ? (
                       <div className="text-9 font-semibold mt-1" style={{ color: C.inkSoft }}>🔍 Scoutas — {Math.max(1, pendingScout.dueRound - round)} omg kvar</div>
                     ) : (
-                      <button onClick={e => { e.stopPropagation(); onScoutPlayer(p.id, false); }} className="text-9 font-semibold mt-1" style={{ color: "#B8862E" }}>🔍 Scouta spelaren</button>
+                      <button onClick={e => { e.stopPropagation(); onScoutPlayer(p.id, null, selectedClub.id); }} className="text-9 font-semibold mt-1" style={{ color: "#B8862E" }}>🔍 Scouta spelaren</button>
                     ))}
                   </button>
                   <div className="text-right shrink-0 ml-2">
@@ -11461,6 +11484,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
   const [maxWage, setMaxWage] = useState("");
   const [wantPotential, setWantPotential] = useState(false);
   const [wantInterested, setWantInterested] = useState(false);
+  const [worldPoolRegion, setWorldPoolRegion] = useState(null);
   const [savingProfileName, setSavingProfileName] = useState(null);
   const inputStyle = { background: "transparent", border: `1px solid ${C.paperDim}`, borderRadius: 10, padding: "8px 10px", color: C.ink, fontSize: 13, width: "100%" };
   function applyPreset(preset) {
@@ -11471,6 +11495,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
     setAgeMax(preset.ageMax ? String(preset.ageMax) : "");
     setWantPotential(!!preset.minPotential);
     setWantInterested(!!preset.interestedOnly);
+    setWorldPoolRegion(preset.worldPoolRegion || null);
   }
   function currentFilters() {
     return {
@@ -11480,6 +11505,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
       maxValue: maxValue ? parseInt(maxValue) : null, maxWage: maxWage ? parseInt(maxWage) : null,
       minPotential: wantPotential ? 76 : null,
       interestedOnly: wantInterested,
+      worldPoolRegion,
     };
   }
 
@@ -11494,6 +11520,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
     if (scoutMission.maxWage) parts.push(`Max ${formatMoney(scoutMission.maxWage)}/omg`);
     if (scoutMission.minPotential) parts.push(`Hög potential (≥${scoutMission.minPotential})`);
     if (scoutMission.interestedOnly) parts.push("Intresserad av klubben");
+    if (scoutMission.worldPoolRegion) parts.push(`Övriga världen — ${REGION_LABELS[scoutMission.worldPoolRegion]}`);
     return (
       <PaperCard>
         <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Scouten är ute på uppdrag</div>
@@ -11669,6 +11696,21 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
         </button>
       </PaperCard>
       <PaperCard>
+        <div className="text-xs font-semibold mb-1.5">Var ska scouten leta?</div>
+        <div className="flex flex-wrap gap-1.5">
+          <button onClick={() => setWorldPoolRegion(null)} className="px-2.5 py-1.5 rounded-lg text-9 font-semibold" style={!worldPoolRegion ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>Ligaspelare</button>
+          {Object.entries(REGION_LABELS).map(([key, label]) => {
+            const locked = scoutLevel < REGION_UNLOCK[key];
+            return (
+              <button key={key} onClick={() => !locked && setWorldPoolRegion(key)} disabled={locked} className="px-2.5 py-1.5 rounded-lg text-9 font-semibold flex items-center gap-1" style={worldPoolRegion === key ? { background: C.gold, color: C.turfDeep } : locked ? { background: "rgba(255,255,255,0.04)", color: C.paperDim, opacity: 0.5 } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>
+                {locked && <Lock size={9} />}{label}
+              </button>
+            );
+          })}
+        </div>
+        {worldPoolRegion && <div className="text-10 mt-1.5" style={{ color: C.inkSoft }}>Söker bland de faktiska spelarna i Övriga världen-poolen för {REGION_LABELS[worldPoolRegion]} — samma spelare som syns under Spelare-fliken.</div>}
+      </PaperCard>
+      <PaperCard>
         <button onClick={() => setWantInterested(w => !w)} className="w-full flex items-center justify-between text-left">
           <div>
             <div className="text-xs font-semibold">Intresserad av din klubb</div>
@@ -11727,7 +11769,7 @@ function LoanOfferCard({ o, onAccept, onDecline }) {
     </PaperCard>
   );
 }
-function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSquad, youthMarket, round, season, clubs, reputation, incomingOffers, clubGoodwill, blacklistedPlayers, onNegotiationFailed, onFinalizeTransfer, onBuyYouth, onRespondOffer, scoutMission, scoutLevel, onStartScoutMission, onDismissScoutMission, onCancelScoutMission, onFinalizeScoutSignee, loanOffers, onAcceptLoan, onDeclineLoan, difficulty, squad, savedScoutProfiles, onSaveScoutProfile, onDeleteScoutProfile, userClubId, leagueId, onFinalizeClubBrowseTransfer, onSubViewChange, partnerClubId, onInstantLoanFromPartner, loanRequests, onRespondLoanRequest, transferHistory, scoutedPlayerIds, pendingPlayerScouts, onScoutPlayer }) {
+function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSquad, youthMarket, round, season, clubs, reputation, incomingOffers, clubGoodwill, blacklistedPlayers, onNegotiationFailed, onFinalizeTransfer, onBuyYouth, onRespondOffer, scoutMission, scoutLevel, onStartScoutMission, onDismissScoutMission, onCancelScoutMission, onFinalizeScoutSignee, loanOffers, onAcceptLoan, onDeclineLoan, difficulty, squad, savedScoutProfiles, onSaveScoutProfile, onDeleteScoutProfile, userClubId, leagueId, onFinalizeClubBrowseTransfer, onSubViewChange, partnerClubId, onInstantLoanFromPartner, loanRequests, onRespondLoanRequest, transferHistory, scoutedPlayerIds, pendingPlayerScouts, onScoutPlayer, pendingScoutReveal, onClearScoutReveal }) {
   const [showClubBrowser, setShowClubBrowser] = useState(false);
   const [showOwnHistory, setShowOwnHistory] = useState(false);
   const [showGlobalTransfers, setShowGlobalTransfers] = useState(false);
@@ -11735,6 +11777,19 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
   const [region, setRegion] = useState("europa");
   const [negotiatingId, setNegotiatingId] = useState(null);
   const [negotiatingScout, setNegotiatingScout] = useState(null);
+  const [browseTargetClubId, setBrowseTargetClubId] = useState(null);
+  useEffect(() => {
+    if (!pendingScoutReveal) return;
+    setSubView("spelare");
+    if (pendingScoutReveal.region) {
+      setRegion(pendingScoutReveal.region);
+      setShowClubBrowser(false);
+    } else if (pendingScoutReveal.clubId) {
+      setShowClubBrowser(true);
+      setBrowseTargetClubId(pendingScoutReveal.clubId);
+    }
+    onClearScoutReveal?.();
+  }, [pendingScoutReveal]);
   useEffect(() => { onSubViewChange?.(showClubBrowser || showOwnHistory || showGlobalTransfers || !!negotiatingId || !!negotiatingScout); }, [showClubBrowser, showOwnHistory, showGlobalTransfers, negotiatingId, negotiatingScout]);
   const currentTurn = season * 38 + round;
   const list = market[region].filter(p => !blacklistedPlayers?.[p.id] || blacklistedPlayers[p.id] <= currentTurn);
@@ -11746,7 +11801,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
 
   if (showOwnHistory) return <OwnTransferHistoryView transferHistory={transferHistory} userClubId={userClubId} currentSeason={season} onBack={() => setShowOwnHistory(false)} />;
   if (showGlobalTransfers) return <GlobalTransfersView transferHistory={transferHistory} userClubId={userClubId} onBack={() => setShowGlobalTransfers(false)} />;
-  if (showClubBrowser) return <ClubSquadBrowserView clubs={clubs} userClubId={userClubId} homeLeagueId={leagueId} budget={budget} reputation={reputation} difficulty={difficulty} clubGoodwill={clubGoodwill} partnerClubId={partnerClubId} onNegotiationFailed={onNegotiationFailed} onFinalize={onFinalizeClubBrowseTransfer} onInstantLoanFromPartner={onInstantLoanFromPartner} onBack={() => setShowClubBrowser(false)} scoutedPlayerIds={scoutedPlayerIds} pendingPlayerScouts={pendingPlayerScouts} onScoutPlayer={onScoutPlayer} round={round} />;
+  if (showClubBrowser) return <ClubSquadBrowserView clubs={clubs} userClubId={userClubId} homeLeagueId={leagueId} budget={budget} reputation={reputation} difficulty={difficulty} clubGoodwill={clubGoodwill} partnerClubId={partnerClubId} onNegotiationFailed={onNegotiationFailed} onFinalize={onFinalizeClubBrowseTransfer} onInstantLoanFromPartner={onInstantLoanFromPartner} onBack={() => setShowClubBrowser(false)} scoutedPlayerIds={scoutedPlayerIds} pendingPlayerScouts={pendingPlayerScouts} onScoutPlayer={onScoutPlayer} round={round} initialClubId={browseTargetClubId} />;
 
   if (negotiatingScout && scoutMission?.complete) {
     const scoutResults = scoutMission.results || (scoutMission.result ? [scoutMission.result] : []);
@@ -11843,7 +11898,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
                       pendingScout ? (
                         <div className="mt-2 w-full py-1.5 rounded-xl text-9 font-semibold text-center" style={{ background: C.paperDim, color: C.inkSoft }}>🔍 Scoutas — {Math.max(1, pendingScout.dueRound - round)} omg kvar</div>
                       ) : (
-                        <button onClick={() => onScoutPlayer(p.id, isWorldPool)} className="mt-2 w-full py-1.5 rounded-xl text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>🔍 Scouta spelaren</button>
+                        <button onClick={() => onScoutPlayer(p.id, isWorldPool ? p.region : null, null)} className="mt-2 w-full py-1.5 rounded-xl text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>🔍 Scouta spelaren</button>
                       )
                     )}
                     <button onClick={() => setNegotiatingId(p.id)} disabled={!windowOpen} className="mt-1.5 w-full py-1.5 rounded-xl text-9 font-semibold" style={windowOpen ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>{windowOpen ? "Förhandla" : "Fönstret är stängt"}</button>
