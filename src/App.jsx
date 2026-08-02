@@ -2478,11 +2478,12 @@ function generateYouthProspect(akademiLevel, intakeBonus = 0, homeCountry) {
   const startFactor = 0.35 + Math.random() * 0.15;
   const attack = clamp(Math.round(potential * startFactor * (pos === "AN" ? 1.15 : pos === "MF" ? 1.0 : pos === "FÖ" ? 0.7 : 0.4)), 15, 60);
   const defense = clamp(Math.round(potential * startFactor * (pos === "FÖ" || pos === "MV" ? 1.15 : pos === "MF" ? 0.9 : 0.5)), 15, 60);
-  const value = Math.max(40, Math.round((potential * 4 + rndInt(-20, 20)) * 1.1));
+  const age = rndInt(15, 17);
+  const id = uid();
+  const value = youthProspectValue(attack, defense, potential, id);
   const foreignChance = clamp(0.05 + intakeBonus * 0.08, 0.05, 0.3);
   const nationality = homeCountry ? (Math.random() < foreignChance ? pick(NATIONALITY_KEYS.filter(n => n !== homeCountry)) : homeCountry) : pick(NATIONALITY_KEYS);
-  const age = rndInt(15, 17);
-  return { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition: randomSpecificPosition(pos), attack, defense, potential, yearsInAcademy: 0, value, apps: 0, goals: 0, ratingSum: 0 };
+  return { id, name: randomPlayerName(nationality), nationality, age, pos, specificPosition: randomSpecificPosition(pos), attack, defense, potential, yearsInAcademy: 0, value, apps: 0, goals: 0, ratingSum: 0 };
 }
 function developmentDeltas(pl, rating) {
   const overall = (pl.attack + pl.defense) / 2;
@@ -2496,6 +2497,31 @@ function developmentDeltas(pl, rating) {
   const attackShare = pl.pos === "AN" ? 0.65 : pl.pos === "MF" ? 0.5 : pl.pos === "FÖ" ? 0.3 : 0.2;
   return { attackDelta: total * (0.6 + attackShare * 0.8), defenseDelta: total * (0.6 + (1 - attackShare) * 0.8) };
 }
+// Academy prospect valuation — pure potential, nothing else. Deliberately NOT scaled by age or current
+// ability: if a 16-year-old with 95 potential cost less than the same player at 20, it would create an
+// obvious exploit — scout for high-potential teenagers, buy them dirt cheap while young, and let them
+// develop for free. The price you pay reflects the ceiling you're buying into, full stop, regardless of
+// how far along that journey the player currently is.
+function youthProspectValue(attack, defense, potential, id) {
+  const breakpoints = [[40, 30], [50, 60], [60, 150], [70, 280], [80, 450], [88, 650], [93, 900], [99, 1300]];
+  let value = breakpoints[breakpoints.length - 1][1];
+  for (let i = 0; i < breakpoints.length - 1; i++) {
+    const [p1, v1] = breakpoints[i], [p2, v2] = breakpoints[i + 1];
+    if (potential <= p2) {
+      const t = clamp((potential - p1) / (p2 - p1), 0, 1);
+      value = v1 + (v2 - v1) * t;
+      break;
+    }
+  }
+  // A touch of natural market variance so it doesn't feel like a fixed price list — seeded per player,
+  // not re-rolled on every render, so the same prospect always shows the same value. Two players sharing
+  // an identical potential can still land a bit apart, same as real scouting valuations would.
+  if (id) {
+    const noise = seededRandom(String(id) + "youthvalue")();
+    value *= 0.93 + noise * 0.15; // roughly ±7%
+  }
+  return Math.max(30, Math.round(value));
+}
 function growYouth(y, akademiLevel, spelide, coachBonus = 0) {
   const reliability = akademiLevel / 5;
   const gap = y.potential - (y.attack + y.defense) / 2;
@@ -2506,7 +2532,7 @@ function growYouth(y, akademiLevel, spelide, coachBonus = 0) {
   const attackShare = y.pos === "AN" ? 0.6 : y.pos === "MF" ? 0.5 : y.pos === "FÖ" ? 0.35 : 0.25;
   const attack = clamp(y.attack + growth * attackShare * 2, 15, 99);
   const defense = clamp(y.defense + growth * (1 - attackShare) * 2, 15, 99);
-  return { ...y, attack, defense, yearsInAcademy: y.yearsInAcademy + 1, value: Math.max(40, Math.round((((attack + defense) / 2) * 4 + y.potential * 3) * 1.1)) };
+  return { ...y, attack, defense, yearsInAcademy: y.yearsInAcademy + 1, value: youthProspectValue(attack, defense, y.potential, y.id) };
 }
 function potentialStars(potential) { return clamp(Math.round(potential / 20), 1, 5); }
 
@@ -4749,7 +4775,7 @@ function setupCup(type, base) {
         market: { ...prev.market, [region]: prev.market[region].filter(p => p.id !== player.id).concat([replacement]) },
         worldPool: prev.worldPool ? { ...prev.worldPool, [region]: draw.remaining } : prev.worldPool,
         clubGoodwill: player.clubId ? { ...prev.clubGoodwill, [player.clubId]: clamp((prev.clubGoodwill[player.clubId] ?? 50) + 5, 0, 100) } : prev.clubGoodwill,
-        transferHistory: player.clubId ? [{ id: uid(), season: prev.season, round: prev.round, playerId: player.id, playerName: player.name, playerPos: player.specificPosition, fromClubId: player.clubId, fromClubName, fromColor: prev.clubs[player.clubId]?.color, toClubId: prev.userClubId, toClubName: userClub.name, toColor: userClub.color, fee: price, leagueId: prev.clubs[player.clubId]?.league || prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000) : (prev.transferHistory || []),
+        transferHistory: [{ id: uid(), season: prev.season, round: prev.round, playerId: player.id, playerName: player.name, playerPos: player.specificPosition, fromClubId: player.clubId || null, fromClubName, fromColor: player.clubId ? prev.clubs[player.clubId]?.color : null, toClubId: prev.userClubId, toClubName: userClub.name, toColor: userClub.color, fee: price, leagueId: (player.clubId ? prev.clubs[player.clubId]?.league : null) || prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000),
       };
     });
     if (isDerby) pushNews(`Historisk värvning — ${player.name} lämnar ärkerivalen ${fromClubName} för er! Fansen ${fanDelta >= 6 ? "jublar vilt" : "är kluvna men nyfikna"}.`, "Klubben");
@@ -4781,24 +4807,39 @@ function setupCup(type, base) {
     const totalCashNow = upfrontAmount + signOnBonus + houseCarCost;
     if (g.budget < totalCashNow) { showToast("Inte tillräcklig budget för direktkostnaden."); return; }
     if (g.boardConfidence < 40 && totalCashNow > g.budget * 0.4) { showToast("Styrelsen blockerar värvningen — för dyr given det svaga förtroendet just nu."); return; }
+    const fromClubName = player.clubId ? (g.clubs[player.clubId]?.name || "en annan klubb") : "fri agent";
+    const isDerby = player.clubId && g.clubs[player.clubId]?.rivalId === g.userClubId;
+    const installmentNote = financedAmount > 0 ? ` Resten (${formatMoney(financedAmount)}) delbetalas över ${plan.months} månader.` : "";
+    const recalcPlan = financedAmount > 0 ? installmentPlan(financedAmount, plan.months) : null;
+    const newInstallment = recalcPlan ? { id: uid(), playerName: player.name, monthsLeft: recalcPlan.months, monthlyPayment: recalcPlan.monthlyPayment, totalRemaining: recalcPlan.totalWithInterest } : null;
+    if (player.isAcademy) {
+      // A bought academy prospect joins YOUR academy, not your first team — they go through the exact
+      // same development clock as a homegrown talent (minimum 2 years, overall 58+) before they're
+      // eligible for promotion. Buying potential doesn't buy a shortcut past actually developing it.
+      const acquiredProspect = { ...player, clubId: undefined, isAcademy: undefined, yearsInAcademy: 0, joinedInfo: { text: `Köptes från ${fromClubName}s akademi för ${formatMoney(agreedPrice)} i säsong ${g.season}.${installmentNote}` } };
+      setG(prev => ({
+        ...prev, budget: prev.budget - totalCashNow, youthSquad: [...(prev.youthSquad || []), acquiredProspect],
+        transferInstallments: newInstallment ? [...(prev.transferInstallments || []), newInstallment] : (prev.transferInstallments || []),
+        clubs: player.clubId && prev.clubs[player.clubId] ? { ...prev.clubs, [player.clubId]: { ...prev.clubs[player.clubId], youthSquad: (prev.clubs[player.clubId].youthSquad || []).filter(p => p.id !== player.id) } } : prev.clubs,
+        clubGoodwill: player.clubId ? { ...prev.clubGoodwill, [player.clubId]: clamp((prev.clubGoodwill[player.clubId] ?? 50) + 5, 0, 100) } : prev.clubGoodwill,
+        transferHistory: [{ id: uid(), season: prev.season, round: prev.round, playerId: player.id, playerName: player.name, playerPos: player.specificPosition, fromClubId: player.clubId || null, fromClubName, fromColor: player.clubId ? prev.clubs[player.clubId]?.color : null, toClubId: prev.userClubId, toClubName: userClub.name, toColor: userClub.color, fee: agreedPrice, leagueId: (player.clubId ? prev.clubs[player.clubId]?.league : null) || prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000),
+      }));
+      showToast(`${player.name} ansluter till er akademi för ${formatMoney(agreedPrice)}. Minst 2 år i akademin krävs innan uppflyttning.${installmentNote}`);
+      return;
+    }
     const wage = agreedWage || player.wage;
     const cap = wageBudgetCap(g.reputation, g.clubs[g.userClubId].division, g.dev.sponsring);
     if (totalWageBill(g.squad) + wage > cap * 1.15) { showToast("Löneutrymmet räcker inte — Financial Fair Play stoppar värvningen."); return; }
-    const fromClubName = player.clubId ? (g.clubs[player.clubId]?.name || "en annan klubb") : "fri agent";
-    const isDerby = player.clubId && g.clubs[player.clubId]?.rivalId === g.userClubId;
     const fanDelta = fanSigningReaction(player, agreedPrice, isDerby, g.squad, userClub);
-    const installmentNote = financedAmount > 0 ? ` Resten (${formatMoney(financedAmount)}) delbetalas över ${plan.months} månader.` : "";
     const sellOnPct = details.sellOnOffer || 0;
-    const recalcPlan = financedAmount > 0 ? installmentPlan(financedAmount, plan.months) : null;
-    const newInstallment = recalcPlan ? { id: uid(), playerName: player.name, monthsLeft: recalcPlan.months, monthlyPayment: recalcPlan.monthlyPayment, totalRemaining: recalcPlan.totalWithInterest } : null;
     const reluctant = (details.clubInterest ?? 100) < 55;
     const signedPlayer = { ...player, clubId: null, contractYears: rndInt(3, 5), wage, number: assignSquadNumber(g.squad), sellOnPct, sellOnClubName: sellOnPct > 0 ? fromClubName : null, releaseClause: details.releaseClauseOffer > 0 ? details.releaseClauseOffer : null, morale: reluctant ? clamp((player.morale ?? 70) - 15, 20, 100) : (player.morale ?? 70), reluctantSign: reluctant, joinedInfo: { text: reluctant ? `Värvades från ${fromClubName} för ${formatMoney(agreedPrice)} i säsong ${g.season} — övertalades trots tveksamhet inför flytten.${installmentNote}` : `Värvades från ${fromClubName} för ${formatMoney(agreedPrice)} i säsong ${g.season}.${installmentNote}` } };
     setG(prev => ({
       ...prev, budget: prev.budget - totalCashNow, squad: [...prev.squad, signedPlayer], fanbase: clamp(prev.fanbase + fanDelta, 0, 100),
       transferInstallments: newInstallment ? [...(prev.transferInstallments || []), newInstallment] : (prev.transferInstallments || []),
-      clubs: player.clubId && prev.clubs[player.clubId]?.squad ? { ...prev.clubs, [player.clubId]: { ...prev.clubs[player.clubId], squad: prev.clubs[player.clubId].squad.filter(p => p.id !== player.id) } } : prev.clubs,
+      clubs: player.clubId && prev.clubs[player.clubId] ? { ...prev.clubs, [player.clubId]: { ...prev.clubs[player.clubId], squad: (prev.clubs[player.clubId].squad || []).filter(p => p.id !== player.id), youthSquad: (prev.clubs[player.clubId].youthSquad || []).filter(p => p.id !== player.id) } } : prev.clubs,
       clubGoodwill: player.clubId ? { ...prev.clubGoodwill, [player.clubId]: clamp((prev.clubGoodwill[player.clubId] ?? 50) + 5, 0, 100) } : prev.clubGoodwill,
-      transferHistory: player.clubId ? [{ id: uid(), season: prev.season, round: prev.round, playerId: player.id, playerName: player.name, playerPos: player.specificPosition, fromClubId: player.clubId, fromClubName, fromColor: prev.clubs[player.clubId]?.color, toClubId: prev.userClubId, toClubName: userClub.name, toColor: userClub.color, fee: agreedPrice, leagueId: prev.clubs[player.clubId]?.league || prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000) : (prev.transferHistory || []),
+      transferHistory: [{ id: uid(), season: prev.season, round: prev.round, playerId: player.id, playerName: player.name, playerPos: player.specificPosition, fromClubId: player.clubId || null, fromClubName, fromColor: player.clubId ? prev.clubs[player.clubId]?.color : null, toClubId: prev.userClubId, toClubName: userClub.name, toColor: userClub.color, fee: agreedPrice, leagueId: (player.clubId ? prev.clubs[player.clubId]?.league : null) || prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000),
     }));
     if (isDerby) pushNews(`Historisk värvning — ${player.name} lämnar ärkerivalen ${fromClubName} för er! Fansen ${fanDelta >= 6 ? "jublar vilt" : "är kluvna men nyfikna"}.`, "Klubben");
     else if (fanDelta >= 3) pushNews(`Fansen är mycket nöjda med värvningen av ${player.name}.`, "Klubben");
@@ -4831,9 +4872,10 @@ function setupCup(type, base) {
     setG(prev => ({
       ...prev, budget: prev.budget - totalCashNow, squad: [...prev.squad, signedPlayer], scoutMission: null, fanbase: clamp(prev.fanbase + fanDelta, 0, 100),
       transferInstallments: newInstallment ? [...(prev.transferInstallments || []), newInstallment] : (prev.transferInstallments || []),
-      clubs: player.clubId && prev.clubs[player.clubId]?.squad ? { ...prev.clubs, [player.clubId]: { ...prev.clubs[player.clubId], squad: prev.clubs[player.clubId].squad.filter(p => p.id !== player.id) } } : prev.clubs,
+      clubs: player.clubId && prev.clubs[player.clubId] ? { ...prev.clubs, [player.clubId]: { ...prev.clubs[player.clubId], squad: (prev.clubs[player.clubId].squad || []).filter(p => p.id !== player.id), youthSquad: (prev.clubs[player.clubId].youthSquad || []).filter(p => p.id !== player.id) } } : prev.clubs,
       worldPool: (player.region && prev.worldPool?.[player.region]) ? { ...prev.worldPool, [player.region]: prev.worldPool[player.region].filter(p => p.id !== player.id) } : prev.worldPool,
       market: (player.region && prev.market?.[player.region]) ? { ...prev.market, [player.region]: prev.market[player.region].filter(p => p.id !== player.id) } : prev.market,
+      transferHistory: [{ id: uid(), season: prev.season, round: prev.round, playerId: player.id, playerName: player.name, playerPos: player.specificPosition, fromClubId: player.clubId || null, fromClubName, fromColor: player.clubId ? prev.clubs[player.clubId]?.color : null, toClubId: prev.userClubId, toClubName: userClub.name, toColor: userClub.color, fee: agreedPrice, leagueId: (player.clubId ? prev.clubs[player.clubId]?.league : null) || prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000),
     }));
     if (isDerby) pushNews(`Historisk värvning — ${player.name} lämnar ärkerivalen ${fromClubName} för er! Fansen ${fanDelta >= 6 ? "jublar vilt" : "är kluvna men nyfikna"}.`, "Klubben");
     else if (fanDelta >= 3) pushNews(`Fansen är mycket nöjda med värvningen av ${player.name}.`, "Klubben");
@@ -6083,10 +6125,10 @@ function ResultChip({ result }) {
   const m = map[result];
   return <span className="w-6 h-6 rounded-full inline-flex items-center justify-center text-11 font-bold text-white" style={{ background: m.c }}>{m.l}</span>;
 }
-function StatBar({ label, value, color }) {
+function StatBar({ label, value, color, displayText }) {
   return (
     <div className="flex-1">
-      <div className="flex justify-between text-10 mb-0.5" style={{ color: C.inkSoft }}><span>{label}</span><span className="font-mono"><AnimatedNumber value={value} /></span></div>
+      <div className="flex justify-between text-10 mb-0.5" style={{ color: C.inkSoft }}><span>{label}</span><span className="font-mono">{displayText ?? <AnimatedNumber value={value} />}</span></div>
       <div className="h-1.5 rounded-full" style={{ background: "rgba(0,0,0,0.08)" }}><div className="h-full rounded-full" style={{ width: `${clamp(value, 0, 100)}%`, background: color, transition: "width .5s ease" }} /></div>
     </div>
   );
@@ -8920,7 +8962,7 @@ function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputat
 
   if (negotiatingPlayer) {
     const sellClub = clubs[negotiatingPlayer.clubId];
-    return <NegotiationView player={negotiatingPlayer} club={sellClub ? { ...sellClub, goodwill: clubGoodwill?.[sellClub.id] ?? 50 } : syntheticFreeAgentClub(negotiatingPlayer)} region="browse" budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs}
+    return <NegotiationView player={negotiatingPlayer} club={sellClub ? { ...sellClub, goodwill: clubGoodwill?.[sellClub.id] ?? 50 } : syntheticFreeAgentClub(negotiatingPlayer)} region="browse" budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs} scoutedPlayerIds={scoutedPlayerIds}
       onNegotiationFailed={onNegotiationFailed}
       onBack={() => setNegotiatingPlayer(null)} onFinalize={(r, p, price, wage, details) => { onFinalize(p, price, wage, details); setNegotiatingPlayer(null); }} />;
   }
@@ -8976,8 +9018,9 @@ function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputat
           );
         })()}
         <PaperCard style={{ padding: 0 }}>
+          <div className="px-3 pt-2.5 pb-1 text-9 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Trupp & akademi</div>
           <div className="divide-y" style={{ borderColor: C.paperDim }}>
-            {(selectedClub.squad || []).slice().sort((a, b) => overallOf(b) - overallOf(a)).map(p => {
+            {[...(selectedClub.squad || []).map(p => ({ p, isAcademy: false })), ...(selectedClub.youthSquad || []).map(p => ({ p, isAcademy: true }))].sort((a, b) => overallOf(b.p) - overallOf(a.p)).map(({ p, isAcademy }) => {
               const scouted = isPlayerScouted(p, scoutedPlayerIds, userClubId);
               const pendingScout = (pendingPlayerScouts || []).find(s => s.playerId === p.id);
               const pOverall = overallOf(p);
@@ -8986,11 +9029,12 @@ function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputat
               return (
               <div key={p.id} className="px-3 py-2.5">
                 <div className="w-full flex items-center justify-between text-left">
-                  <button onClick={() => setNegotiatingPlayer({ ...p, clubId })} className="min-w-0 flex-1 text-left">
+                  <button onClick={() => setNegotiatingPlayer({ ...p, clubId, isAcademy })} className="min-w-0 flex-1 text-left">
                     <div className="text-sm font-semibold truncate">{p.name}</div>
                     <div className="text-10" style={{ color: C.inkSoft }}>{p.specificPosition} · {p.age} år · Potential {scouted ? (p.potential ?? "–") : `${potLo}–${potHi}`}</div>
-                    {(p.transferListed || p.loanListed) && (
+                    {(isAcademy || p.transferListed || p.loanListed) && (
                       <div className="flex gap-1 mt-1">
+                        {isAcademy && <span className="text-9 font-bold px-1.5 py-0.5 rounded-full" style={{ background: "rgba(201,154,62,0.18)", color: "#B8862E" }}>Akademi</span>}
                         {p.transferListed && <span className="text-9 font-bold px-1.5 py-0.5 rounded-full" style={{ background: "rgba(63,143,107,0.18)", color: C.win }}>Till salu</span>}
                         {p.loanListed && <span className="text-9 font-bold px-1.5 py-0.5 rounded-full" style={{ background: "rgba(63,116,168,0.18)", color: "#3F74A8" }}>Går att låna</span>}
                       </div>
@@ -9002,7 +9046,7 @@ function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputat
                     ))}
                   </button>
                   <div className="text-right shrink-0 ml-2">
-                    <button onClick={() => setNegotiatingPlayer({ ...p, clubId })} className="block">
+                    <button onClick={() => setNegotiatingPlayer({ ...p, clubId, isAcademy })} className="block">
                       <div className="font-mono text-sm font-bold">{scouted ? pOverall : `${ovLo}–${ovHi}`}</div>
                       <div className="text-10 font-mono" style={{ color: C.inkSoft }}>{formatMoney(p.value)}</div>
                     </button>
@@ -11454,7 +11498,7 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
   );
 }
 
-function NegotiationView({ player, club, region, budget, reputation, onBack, onFinalize, difficulty, onNegotiationFailed, userClubId, clubs }) {
+function NegotiationView({ player, club, region, budget, reputation, onBack, onFinalize, difficulty, onNegotiationFailed, userClubId, clubs, scoutedPlayerIds }) {
   const [agreedPrice, setAgreedPrice] = useState(null);
   const [priceMessages, setPriceMessages] = useState(() => [{ from: "them", text: sellerOpeningLine(club, player) }]);
   const [priceOutcome, setPriceOutcome] = useState(null);
@@ -11559,6 +11603,11 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
     setWageOutcome({ ...result, offerWage });
   }
   const overall = overallOf(player);
+  const scouted = isPlayerScouted(player, scoutedPlayerIds, userClubId);
+  const isWorldPoolOrigin = !!player.region;
+  const [ovLo, ovHi] = scouted ? [overall, overall] : fuzzyStatRange(overall, player.id, "overall", isWorldPoolOrigin);
+  const [atkLo, atkHi] = scouted ? [player.attack, player.attack] : fuzzyStatRange(player.attack, player.id, "attack", isWorldPoolOrigin);
+  const [defLo, defHi] = scouted ? [player.defense, player.defense] : fuzzyStatRange(player.defense, player.id, "defense", isWorldPoolOrigin);
   const attemptsLeftBadge = (used) => <span className="text-9 font-mono" style={{ color: C.inkSoft }}>{NEGOTIATION_MAX_ATTEMPTS - used} försök kvar</span>;
   const backBtn = <button onClick={onBack} style={{ position: "fixed", bottom: 14, right: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Bakåt</button>;
 
@@ -11605,7 +11654,7 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
           <div className="flex items-center gap-3">
             <div style={{ position: "relative", width: 44, height: 44, flexShrink: 0 }}>
               <PlayerAvatar player={player} size={44} />
-              <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={overall} size={20} /></div>
+              <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={scouted ? overall : Math.round((ovLo + ovHi) / 2)} size={20} /></div>
             </div>
             <div className="flex-1 min-w-0">
               <div className="font-display text-lg truncate">{player.name}</div>
@@ -11657,7 +11706,7 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
           <div className="flex items-center gap-3">
             <div style={{ position: "relative", width: 44, height: 44, flexShrink: 0 }}>
               <PlayerAvatar player={player} size={44} />
-              <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={overall} size={20} /></div>
+              <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={scouted ? overall : Math.round((ovLo + ovHi) / 2)} size={20} /></div>
             </div>
             <div className="flex-1 min-w-0">
               <div className="font-display text-lg truncate">{player.name}</div>
@@ -11746,7 +11795,7 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
         <div className="flex items-center gap-3">
           <div style={{ position: "relative", width: 48, height: 48, flexShrink: 0 }}>
             <PlayerAvatar player={player} size={48} />
-            <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={overall} size={20} /></div>
+            <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={scouted ? overall : Math.round((ovLo + ovHi) / 2)} size={20} /></div>
           </div>
           <div className="flex-1 min-w-0">
             <div className="font-display text-lg truncate">{player.name}</div>
@@ -11762,7 +11811,8 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
             <span className="text-11 font-bold" style={{ color: relation.color }}>{relation.text}</span>
           </div>
         </div>
-        <div className="flex gap-3 mt-3"><StatBar label="Anfall" value={player.attack} color={C.gold} /><StatBar label="Försvar" value={player.defense} color={C.turf} /></div>
+        <div className="flex gap-3 mt-3"><StatBar label="Anfall" value={scouted ? player.attack : (atkLo + atkHi) / 2} displayText={scouted ? undefined : `${atkLo}–${atkHi}`} color={C.gold} /><StatBar label="Försvar" value={scouted ? player.defense : (defLo + defHi) / 2} displayText={scouted ? undefined : `${defLo}–${defHi}`} color={C.turf} /></div>
+        {!scouted && <div className="text-9 mt-1" style={{ color: C.inkSoft }}>Ej scoutad — siffrorna ovan är ett uppskattat spann, inte exakta värden.</div>}
       </PaperCard>
 
       {isDerbyClub && (
@@ -12229,7 +12279,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
     const scoutPlayer = scoutResults.find(c => c.id === negotiatingScout);
     if (scoutPlayer) {
       const scoutClub = clubs[scoutPlayer.clubId];
-      return <NegotiationView player={scoutPlayer} club={scoutClub ? { ...scoutClub, goodwill: clubGoodwill?.[scoutClub.id] ?? 50 } : syntheticFreeAgentClub(scoutPlayer)} region="scout" budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs}
+      return <NegotiationView player={scoutPlayer} club={scoutClub ? { ...scoutClub, goodwill: clubGoodwill?.[scoutClub.id] ?? 50 } : syntheticFreeAgentClub(scoutPlayer)} region="scout" budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs} scoutedPlayerIds={[scoutPlayer.id]}
         onNegotiationFailed={onNegotiationFailed}
         onBack={() => setNegotiatingScout(null)} onFinalize={(r, p, price, wage, details) => { onFinalizeScoutSignee(p, price, wage, details); setNegotiatingScout(null); }} />;
     }
@@ -12238,7 +12288,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
   const negotiatingPlayer = negotiatingId ? list.find(p => p.id === negotiatingId) : null;
   if (negotiatingPlayer) {
     const negoClub = clubs[negotiatingPlayer.clubId];
-    return <NegotiationView player={negotiatingPlayer} club={negoClub ? { ...negoClub, goodwill: clubGoodwill?.[negoClub.id] ?? 50 } : syntheticFreeAgentClub(negotiatingPlayer)} region={region} budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs}
+    return <NegotiationView player={negotiatingPlayer} club={negoClub ? { ...negoClub, goodwill: clubGoodwill?.[negoClub.id] ?? 50 } : syntheticFreeAgentClub(negotiatingPlayer)} region={region} budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs} scoutedPlayerIds={scoutedPlayerIds}
       onNegotiationFailed={onNegotiationFailed}
       onBack={() => setNegotiatingId(null)} onFinalize={(r, p, price, wage, details) => { onFinalizeTransfer(r, p, price, wage, details); setNegotiatingId(null); }} />;
   }
@@ -12633,7 +12683,7 @@ function AkademiDetail({ dev, budget, akademiParts, youthSquad, onUpgrade, onUpg
         {youthSquad.map(y => {
           const overall = overallOf(y);
           const ready = overall >= 58 && y.yearsInAcademy >= 2;
-          const refund = Math.round(((y.attack + y.defense) / 2) * 4 + y.potential * 3);
+          const refund = youthProspectValue(y.attack, y.defense, y.potential, y.id);
           return (
             <PaperCard key={y.id}>
               <div className="flex items-center gap-3">
@@ -12643,7 +12693,15 @@ function AkademiDetail({ dev, budget, akademiParts, youthSquad, onUpgrade, onUpg
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
-                    <div><div className="font-semibold text-sm">{y.name}</div><div className="font-mono text-11 mt-0.5" style={{ color: C.inkSoft }}>{POS_LABEL[y.pos]} ({specificPositionLabel(y.specificPosition)}) · {y.age} år · {y.yearsInAcademy} år i akademin</div></div>
+                    <div><div className="font-semibold text-sm">{y.name}</div><div className="font-mono text-11 mt-0.5" style={{ color: C.inkSoft }}>{POS_LABEL[y.pos]} ({specificPositionLabel(y.specificPosition)}) · {y.age} år · {y.yearsInAcademy} år i akademin</div>
+                      {ready ? (
+                        <div className="text-9 font-semibold mt-0.5" style={{ color: C.win }}>✅ Redo att flyttas upp till A-laget</div>
+                      ) : y.yearsInAcademy < 2 ? (
+                        <div className="text-9 font-semibold mt-0.5" style={{ color: C.gold }}>⏳ {2 - y.yearsInAcademy} {2 - y.yearsInAcademy === 1 ? "år" : "år"} kvar innan uppflyttning (minst 2 år krävs)</div>
+                      ) : (
+                        <div className="text-9 font-semibold mt-0.5" style={{ color: C.gold }}>📈 Behöver utvecklas mer — overall {overall}, kräver minst 58</div>
+                      )}
+                    </div>
                     <div className="flex gap-0.5">{[1,2,3,4,5].map(n=><Star key={n} size={11} fill={n<=potentialStars(y.potential)?C.gold:"none"} color={n<=potentialStars(y.potential)?C.gold:C.paperDim}/>)}</div>
                   </div>
                   <div className="mt-1"><StarRating rating={overallToStars(overall)} size={7} /></div>
