@@ -5075,7 +5075,7 @@ function setupCup(type, base) {
     if (overall < 58 || prospect.yearsInAcademy < 2) { showToast("Spelaren är inte redo för A-laget än."); return; }
     setG(prev => ({
       ...prev, youthSquad: prev.youthSquad.filter(p => p.id !== prospect.id),
-      squad: [...prev.squad, { id: prospect.id, name: prospect.name, nationality: prospect.nationality, age: prospect.age, pos: prospect.pos, specificPosition: prospect.specificPosition || randomSpecificPosition(prospect.pos), attack: prospect.attack, defense: prospect.defense, value: Math.round(prospect.value * 1.3), wage: computeWage(Math.round(prospect.value * 1.3), prospect.attack, prospect.defense) * 0.6, contractYears: 3, injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 75, personality: pick(PERSONALITIES), apps: 0, goals: 0, assists: 0, seasonLog: [], ratingSum: 0, number: assignSquadNumber(prev.squad), academyProduct: true, promotedSeason: prev.season, joinedInfo: { text: `Fostrad i klubbens akademi, flyttades upp till A-laget säsong ${prev.season}.` } }],
+      squad: [...prev.squad, { id: prospect.id, name: prospect.name, nationality: prospect.nationality, age: prospect.age, pos: prospect.pos, specificPosition: prospect.specificPosition || randomSpecificPosition(prospect.pos), attack: prospect.attack, defense: prospect.defense, endurance: prospect.endurance, determination: prospect.determination, value: Math.round(prospect.value * 1.3), wage: computeWage(Math.round(prospect.value * 1.3), prospect.attack, prospect.defense) * 0.6, contractYears: 3, injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 75, personality: pick(PERSONALITIES), apps: 0, goals: 0, assists: 0, seasonLog: [], ratingSum: 0, number: assignSquadNumber(prev.squad), academyProduct: true, promotedSeason: prev.season, joinedInfo: { text: `Fostrad i klubbens akademi, flyttades upp till A-laget säsong ${prev.season}.` } }],
     }));
     showToast(`${prospect.name} flyttas upp till A-laget!`);
   }
@@ -6232,6 +6232,7 @@ function worldToExcelRows(world) {
         SpelarID: y.id, Namn: y.name, Ålder: y.age, Position: y.pos, SpecifikPosition: y.specificPosition,
         Overall: overallOf(y), Anfall: Math.round(y.attack), Försvar: Math.round(y.defense), Potential: Math.round(y.potential ?? y.attack),
         Värde: y.value, "Lön": y.wage ?? 0, Nationalitet: y.nationality || "",
+        Uthållighet: endurance(y), Beslutsamhet: determination(y),
       });
     });
   });
@@ -6284,6 +6285,7 @@ function excelRowsToWorld(clubRows, playerRows, youthRows) {
       age: num(row.Ålder) || 16, pos: String(row.Position || "").trim(), specificPosition: String(row.SpecifikPosition || "").trim(),
       attack: num(row.Anfall), defense: num(row.Försvar), potential: num(row.Potential),
       value: num(row.Värde), wage: num(row["Lön"]), nationality: String(row.Nationalitet || "").trim(),
+      endurance: num(row.Uthållighet), determination: num(row.Beslutsamhet),
     });
   });
   return world;
@@ -6299,6 +6301,7 @@ function worldPoolToExcelRows(worldPool) {
         Region: region, SpelarID: p.id, Namn: p.name, Ålder: p.age, Position: p.pos, SpecifikPosition: p.specificPosition,
         Overall: overallOf(p), Anfall: Math.round(p.attack), Försvar: Math.round(p.defense), Potential: Math.round(p.potential ?? p.attack),
         Värde: p.value, "Lön": p.wage, Nationalitet: p.nationality || "", Kontraktsår: p.contractYears ?? 2,
+        Uthållighet: endurance(p), Beslutsamhet: determination(p),
       });
     });
   });
@@ -6316,6 +6319,7 @@ function excelRowsToWorldPool(rows) {
       attack: num(row.Anfall), defense: num(row.Försvar), potential: num(row.Potential),
       value: num(row.Värde), wage: num(row["Lön"]), nationality: String(row.Nationalitet || "").trim(),
       contractYears: row.Kontraktsår === "" || row.Kontraktsår === undefined ? 2 : num(row.Kontraktsår),
+      endurance: num(row.Uthållighet), determination: num(row.Beslutsamhet),
       region, injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, apps: 0, goals: 0, assists: 0, ratingSum: 0,
     });
   });
