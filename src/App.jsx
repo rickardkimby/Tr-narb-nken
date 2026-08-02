@@ -161,6 +161,27 @@ function expectedGoals(attack, defense, atHome) {
   const diff = (attack - defense) / 12;
   return clamp(1.25 + diff * 0.6 + (atHome ? 0.2 : -0.05), 0.25, 4.5);
 }
+// How well a squad's actual sub-attributes back up its raw attack/defense numbers — usable for ANY
+// club's squad, not just the user's. A squad genuinely playing to its numbers (or better) gets a small
+// boost; one padded by less relevant attributes gets a small penalty. Deliberately modest and capped.
+function squadQualityIndex(squad) {
+  if (!squad || !squad.length) return 1;
+  const sample = squad.slice(0, 16); // cap cost for large squads, a representative slice is enough
+  const deltas = sample.map(p => {
+    const rawEstimate = p.pos === "MV" ? p.defense : (p.attack + p.defense) / 2;
+    return overallOf(p) - rawEstimate;
+  });
+  const avgDelta = deltas.reduce((s, d) => s + d, 0) / sample.length;
+  return 1 + clamp(avgDelta * 0.006, -0.1, 0.1);
+}
+// A team's recent results give a modest, bounded momentum signal — same idea as individual player form,
+// scaled up to the team level so a club on a genuine hot or cold streak plays a little above or below
+// its nominal strength, whether that's the user's club or any AI-controlled one.
+function teamFormMult(recentResults) {
+  if (!recentResults || recentResults.length < 3) return 1;
+  const score = recentResults.reduce((s, r) => s + (r === "win" ? 1 : r === "loss" ? -1 : 0), 0) / recentResults.length;
+  return 1 + clamp(score * 0.06, -0.08, 0.08);
+}
 const SEASON_BASE_YEAR = 2026; // Season 1 = 2026/2027, matching a real European club season
 function seasonLabel(season) { const y = SEASON_BASE_YEAR + (season - 1); return `${y}/${y + 1}`; }
 function preSeasonStartDate(season) { return new Date(Date.UTC(SEASON_BASE_YEAR + (season - 1), 6, 1)); } // 1 July
@@ -2645,8 +2666,13 @@ function simulateOtherDivisionsRound(allSchedules, clubs, round, skipKey) {
       return r.map(f => {
         const home = clubs[f.home], away = clubs[f.away];
         if (!home || !away || f.homeGoals !== null) return f;
-        const hg = poisson(expectedGoals(home.strength, away.strength, true));
-        const ag = poisson(expectedGoals(away.strength, home.strength, false));
+        // Same idea as the user's own matches, scaled down and simplified for performance across an
+        // entire world's worth of fixtures — actual squad quality and recent form nudge the nominal
+        // strength number a little, so two same-archetype clubs don't play as pure statistical twins.
+        const homeEff = home.strength * squadQualityIndex(home.squad) * teamFormMult(recentForm(schedule, round, f.home));
+        const awayEff = away.strength * squadQualityIndex(away.squad) * teamFormMult(recentForm(schedule, round, f.away));
+        const hg = poisson(expectedGoals(homeEff, awayEff, true));
+        const ag = poisson(expectedGoals(awayEff, homeEff, false));
         return { ...f, homeGoals: hg, awayGoals: ag };
       });
     });
@@ -2752,29 +2778,31 @@ function userStrength(xi, tactic, spelide, tacticalSettings, fitScore, staff, ma
     const fitMult = 0.75 + 0.25 * clamp(fitScore, 0.3, 1);
     attack *= fitMult; defense *= fitMult;
   }
-  // Two players can share the same raw attack/defense numbers yet differ in how well their specific
-  // sub-attributes (shooting, passing, dribbling, pace, defending, physical) actually suit their position
-  // — a striker who's genuinely sharp in front of goal outperforms one whose "attack" rating is padded by
-  // something less relevant there. Deliberately modest and capped so it nudges match strength rather than
-  // overriding the tuned attack/defense balance.
+  // Quality (sub-attribute alignment), staff bonuses, and manager tactical skill are all "background"
+  // advantages a well-run club builds up over time — summed as deltas and capped TOGETHER, rather than
+  // each multiplying independently, so a club that's strong on every front doesn't snowball into an
+  // unrealistic combined edge no AI-controlled club could ever match.
   const qualityDeltas = xi.map(p => {
     const rawEstimate = p.pos === "MV" ? p.defense : (p.attack + p.defense) / 2;
     return overallOf(p) - rawEstimate;
   });
   const avgQualityDelta = qualityDeltas.reduce((s, d) => s + d, 0) / xi.length;
-  const qualityMult = 1 + clamp(avgQualityDelta * 0.006, -0.12, 0.12);
-  attack *= qualityMult; defense *= qualityMult;
+  let backgroundDeltaAtk = clamp(avgQualityDelta * 0.006, -0.12, 0.12);
+  let backgroundDeltaDef = backgroundDeltaAtk;
   if (staff) {
     const gkLevel = staff.gkCoach?.level || 0;
     const analystLevel = staff.analyst?.level || 0;
-    defense *= 1 + gkLevel * 0.012;
-    attack *= 1 + analystLevel * 0.009;
+    backgroundDeltaDef += gkLevel * 0.012;
+    backgroundDeltaAtk += analystLevel * 0.009;
   }
   if (managerAttrs) {
-    // A tactically sharp manager gets a bit more out of the same players — modest, capped effect.
-    const taktikMult = 1 + clamp((managerAttrs.taktik || 50) - 50, -30, 45) * 0.0025;
-    attack *= taktikMult; defense *= taktikMult;
+    const taktikDelta = clamp((managerAttrs.taktik || 50) - 50, -30, 45) * 0.0025;
+    backgroundDeltaAtk += taktikDelta;
+    backgroundDeltaDef += taktikDelta;
   }
+  backgroundDeltaAtk = clamp(backgroundDeltaAtk, -0.06, 0.06);
+  backgroundDeltaDef = clamp(backgroundDeltaDef, -0.06, 0.06);
+  attack *= 1 + backgroundDeltaAtk; defense *= 1 + backgroundDeltaDef;
   return { attack: clamp(attack, 20, 99), defense: clamp(defense, 20, 99) };
 }
 function pickScorerDetailed(squad, count, setPieceTakers) {
@@ -2942,6 +2970,10 @@ function distributeMatchStats(squad, goalCount) {
       assists: (p.assists || 0) + (assistInc[p.id] || 0),
       seasonYellowCards: (p.seasonYellowCards || 0) + (yellowInc.has(p.id) ? 1 : 0),
       seasonRedCards: (p.seasonRedCards || 0) + (gotRed ? 1 : 0),
+      goals_league: (p.goals_league || 0) + (goalInc[p.id] || 0),
+      assists_league: (p.assists_league || 0) + (assistInc[p.id] || 0),
+      seasonYellowCards_league: (p.seasonYellowCards_league || 0) + (yellowInc.has(p.id) ? 1 : 0),
+      seasonRedCards_league: (p.seasonRedCards_league || 0) + (gotRed ? 1 : 0),
       apps: (p.apps || 0) + (played ? 1 : 0),
       ratingSum: (p.ratingSum || 0) + rating,
       injuryWeeks: newInjuryWeeks[p.id] ?? p.injuryWeeks,
@@ -4376,7 +4408,7 @@ function setupCup(type, base) {
           return { id: uid(), season: g.season, round: newRound, playerId: sale.playerId, playerName: soldPlayer?.name, playerPos: soldPlayer?.specificPosition, fromClubId: g.userClubId, fromClubName: userClub.name, fromColor: userClub.color, toClubId: sale.buyerId, toClubName: buyerClub?.name, toColor: buyerClub?.color, fee: sale.fee, leagueId: g.leagueId };
         });
       return {
-        ...prev, clubs: listingClubs, schedule: finalSchedule, squad: finalSquad,
+        ...prev, clubs: { ...listingClubs, [g.userClubId]: { ...listingClubs[g.userClubId], squad: finalSquad, youthSquad: finalYouthSquad } }, schedule: finalSchedule, squad: finalSquad,
         startingXI: prev.startingXI.filter(id => finalSquad.some(p => p.id === id)),
         youthSquad: finalYouthSquad, sponsors: finalSponsors, market: rotatedMarket,
         pendingPlayerScouts: stillPendingScouts, scoutedPlayerIds: newScoutedIds,
@@ -4473,7 +4505,7 @@ function setupCup(type, base) {
     const finances = simulateCupMatchFinances(g, p.userIsHome, p.oppStrength, false);
     const cupFinanceRecord = { round: g.round, oppName: p.oppName, userIsHome: p.userIsHome, ticketPrice: g.ticketPrice, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity, income: finances.income, competition: COMPETITION_LABEL_SHORT.domestic };
     const userReport = { oppName: p.oppName, oppColor: g.clubs[p.oppId]?.color, userColor: g.clubs[g.userClubId]?.color, userIsHome: p.userIsHome, userGoals, oppGoals, penalties, result: userWon ? "win" : "loss", ratings, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity };
-    setG(prev => ({ ...prev, budget: prev.budget + finances.income, view: shootout ? "penaltyshootout" : "cup", activeCupType: "domestic", squad: newSquad, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, domestic: { ...prev.cups.domestic, pendingWinners: winners, userReport, resultLog: [...(prev.cups.domestic.resultLog || []), { round: prev.cups.domestic.teams.length, oppId: p.oppId, oppName: p.oppName, won: userWon }] } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) }));
+    setG(prev => ({ ...prev, budget: prev.budget + finances.income, view: shootout ? "penaltyshootout" : "cup", activeCupType: "domestic", squad: newSquad, clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], squad: newSquad } }, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, domestic: { ...prev.cups.domestic, pendingWinners: winners, userReport, resultLog: [...(prev.cups.domestic.resultLog || []), { round: prev.cups.domestic.teams.length, oppId: p.oppId, oppName: p.oppName, won: userWon }] } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) }));
   }
   function continueDomesticCupRound() {
     const cup = g.cups.domestic;
@@ -4543,7 +4575,7 @@ function setupCup(type, base) {
           return { ...f, homeGoals: p.userIsHome ? userGoals : oppGoals, awayGoals: p.userIsHome ? oppGoals : userGoals };
         });
       });
-      return { ...prev, budget: prev.budget + finances.income, view: "cup", activeCupType: "cup1", squad: newSquad, pendingRound: null, pendingCupContext: null, cups: { ...prev.cups, cup1: { ...cup, groupSchedule: newGroupSchedule, pendingReport: capturedReport } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) };
+      return { ...prev, budget: prev.budget + finances.income, view: "cup", activeCupType: "cup1", squad: newSquad, clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], squad: newSquad } }, pendingRound: null, pendingCupContext: null, cups: { ...prev.cups, cup1: { ...cup, groupSchedule: newGroupSchedule, pendingReport: capturedReport } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) };
     });
   }
   function continueGroupRound() {
@@ -4589,7 +4621,7 @@ function setupCup(type, base) {
     const cupFinanceRecord = { round: g.round, oppName: p.oppName, userIsHome: p.userIsHome, ticketPrice: g.ticketPrice, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity, income: finances.income, competition: COMPETITION_LABEL_SHORT[ctx.cupType] || "Cupen" };
     const report = { oppName: p.oppName, oppColor: g.clubs[p.oppId]?.color, userColor: g.clubs[g.userClubId]?.color, userIsHome: p.userIsHome, userGoals, oppGoals, penalties: null, result, ratings, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity };
     const legKey = ctx.legNum === 1 ? "leg1" : "leg2";
-    setG(prev => ({ ...prev, budget: prev.budget + finances.income, view: "cup", activeCupType: ctx.cupType, squad: newSquad, pendingRound: null, pendingCupContext: null, cups: { ...prev.cups, [ctx.cupType]: { ...prev.cups[ctx.cupType], tie: { ...prev.cups[ctx.cupType].tie, [legKey]: legResult }, pendingReport: report } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) }));
+    setG(prev => ({ ...prev, budget: prev.budget + finances.income, view: "cup", activeCupType: ctx.cupType, squad: newSquad, clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], squad: newSquad } }, pendingRound: null, pendingCupContext: null, cups: { ...prev.cups, [ctx.cupType]: { ...prev.cups[ctx.cupType], tie: { ...prev.cups[ctx.cupType].tie, [legKey]: legResult }, pendingReport: report } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) }));
   }
   function continueCupLeg(precomputedShootout = null) {
     const cupType = g.activeCupType;
@@ -4706,7 +4738,7 @@ function setupCup(type, base) {
     const finances = simulateCupMatchFinances(g, p.userIsHome, p.oppStrength, false);
     const cupFinanceRecord = { round: g.round, oppName: p.oppName, userIsHome: p.userIsHome, ticketPrice: g.ticketPrice, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity, income: finances.income, competition: `${COMPETITION_LABEL_SHORT[ctx.cupType] || "Cupen"} (final)` };
     const report = { oppName: p.oppName, oppColor: g.clubs[p.oppId]?.color, userColor: g.clubs[g.userClubId]?.color, userIsHome: p.userIsHome, userGoals, oppGoals, penalties, result, ratings, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity };
-    setG(prev => ({ ...prev, budget: prev.budget + finances.income, view: shootout ? "penaltyshootout" : "cup", activeCupType: ctx.cupType, squad: newSquad, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, [ctx.cupType]: { ...prev.cups[ctx.cupType], pendingReport: report, finalWon: userWon, resultLog: [...(prev.cups[ctx.cupType].resultLog || []), { round: 2, oppId: p.oppId, oppName: p.oppName, won: userWon }] } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) }));
+    setG(prev => ({ ...prev, budget: prev.budget + finances.income, view: shootout ? "penaltyshootout" : "cup", activeCupType: ctx.cupType, squad: newSquad, clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], squad: newSquad } }, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, [ctx.cupType]: { ...prev.cups[ctx.cupType], pendingReport: report, finalWon: userWon, resultLog: [...(prev.cups[ctx.cupType].resultLog || []), { round: 2, oppId: p.oppId, oppName: p.oppName, won: userWon }] } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) }));
   }
   function continueCupFinal() {
     const cupType = g.activeCupType;
