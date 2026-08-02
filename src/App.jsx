@@ -304,7 +304,7 @@ function teamPositionFit(cells, squad) {
     const player = squad.find(p => p.id === playerId);
     if (!player) return;
     const [col, row] = key.split("-").map(Number);
-    sum += positionFit(player.specificPosition, col, row);
+    sum += effectivePositionFit(player, col, row);
     count++;
   });
   return count ? sum / count : 1;
@@ -1626,6 +1626,37 @@ function clutchFactor(player) {
   const rng = seededRandom(String(player.id) + "clutch")();
   return Math.round((rng - 0.5) * 2 * 10) / 10;
 }
+// Uthållighet — independent of raw physical strength (a physically imposing player isn't necessarily
+// the one who's still sharp in minute 88). Lightly correlated with physical, mostly its own thing.
+function endurance(player) {
+  if (player.endurance != null) return player.endurance;
+  const rng = seededRandom(String(player.id) + "endurance");
+  const physicalLean = clamp(player.attack, 12, 96) * 0.15 + clamp(player.defense, 12, 96) * 0.15;
+  return clamp(Math.round(physicalLean + rng() * 70 + 8), 10, 96);
+}
+// How much slower (>1) or faster (<1) a player's stamina drains relative to the flat baseline — high
+// endurance genuinely changes the shape of a season, not just a single match.
+function enduranceMult(player) {
+  const e = endurance(player);
+  return clamp(1.55 - e / 72, 0.55, 1.5);
+}
+// Beslutsamhet — how reliably a talented young player actually closes the gap to their potential,
+// versus one who plateaus early despite similar raw ability. Personality nudges it, since an "Ambitiös"
+// or "Ledare" type tends to push themselves, while a "Problemspelare" is more prone to drifting.
+function determination(player) {
+  if (player.determination != null) return player.determination;
+  const rng = seededRandom(String(player.id) + "determination")();
+  let base = Math.round(15 + rng * 80);
+  if (player.personality === "Ambitiös" || player.personality === "Ledare") base += 10;
+  else if (player.personality === "Problemspelare") base -= 12;
+  return clamp(base, 5, 99);
+}
+// Scales the random per-season growth-toward-potential roll — a determined prospect reliably closes in
+// on their ceiling, a low-determination one is a genuine gamble even with excellent numbers on paper.
+function determinationMult(player) {
+  const d = determination(player);
+  return clamp(0.55 + d / 110, 0.55, 1.45);
+}
 function clutchLabel(cf) {
   if (cf >= 0.6) return "Stormatchsspelare";
   if (cf <= -0.6) return "Kan tyngas i stora matcher";
@@ -1725,12 +1756,13 @@ function simulateCupMatchPlayerUpdates(xi, fullSquad, staff, tacticalSettings, d
   const cardEvents = {};
   xi.forEach(pl => {
     const attrs = getAttrs(pl);
-    const staminaRisk = clamp((70 - (pl.stamina ?? 100)) / 3000, 0, 0.015);
+    const staminaRisk = clamp((70 - (pl.stamina ?? 100)) / 700, 0, 0.07);
     const chance = clamp((0.045 - attrs.physical / 2200 - physioLevel * 0.003 + staminaRisk) * difficultySettings.injuryMult * injuryProneMult(pl), 0.005, 0.12);
     if (!injuredPlayer && Math.random() < chance) injuredPlayer = pl;
     const personalityCardMult = pl.personality === "Problemspelare" ? 1.6 : 1;
-    const yellowChance = clamp((0.09 - assistantLevel * 0.008) * tacticCardMult * personalityCardMult, 0.02, 0.2);
-    const redChance = clamp((0.012 - assistantLevel * 0.001) * tacticCardMult * personalityCardMult, 0.002, 0.03);
+    const positionCardMult = pl.pos === "MV" ? 0.15 : pl.pos === "FÖ" ? 1.4 : pl.pos === "MF" ? 1.1 : 0.7;
+    const yellowChance = clamp((0.09 - assistantLevel * 0.008) * tacticCardMult * personalityCardMult * positionCardMult, 0.005, 0.24);
+    const redChance = clamp((0.012 - assistantLevel * 0.001) * tacticCardMult * personalityCardMult * positionCardMult, 0.0005, 0.035);
     if (Math.random() < redChance) cardEvents[pl.id] = "red";
     else if (Math.random() < yellowChance) cardEvents[pl.id] = "yellow";
   });
@@ -1751,8 +1783,12 @@ function simulateCupMatchPlayerUpdates(xi, fullSquad, staff, tacticalSettings, d
     let yellowCards = pl[yellowField] || 0, suspended = pl[suspField] || 0;
     if (card === "red") suspended += rndInt(1, 2);
     else if (card === "yellow") { yellowCards += 1; if (yellowCards >= 5) { suspended += 1; yellowCards -= 5; } }
-    const newStamina = clamp((pl.stamina ?? 100) - Math.max(1, rndInt(4, 8) - fitnessCoachLevel * 0.4), 0, 100);
-    return { ...pl, apps: (pl.apps || 0) + 1, goals: (pl.goals || 0) + goals, assists: (pl.assists || 0) + assists, ratingSum: (pl.ratingSum || 0) + rating, recentRatings: [...(pl.recentRatings || []), rating].slice(-5), injuryWeeks, stamina: newStamina, [yellowField]: yellowCards, [suspField]: suspended };
+    const newStamina = clamp((pl.stamina ?? 100) - Math.max(1, (rndInt(4, 8) - fitnessCoachLevel * 0.4) * enduranceMult(pl)), 0, 100);
+    // Competition-specific goal/assist/card counters, tracked alongside the season-wide combined totals,
+    // so cup performance can be viewed on its own instead of only as part of one blended number.
+    const compGoalsField = `goals_${competition}`, compAssistsField = `assists_${competition}`;
+    const compYellowField = `seasonYellowCards_${competition}`, compRedField = `seasonRedCards_${competition}`;
+    return { ...pl, apps: (pl.apps || 0) + 1, goals: (pl.goals || 0) + goals, assists: (pl.assists || 0) + assists, ratingSum: (pl.ratingSum || 0) + rating, recentRatings: [...(pl.recentRatings || []), rating].slice(-5), injuryWeeks, stamina: newStamina, [yellowField]: yellowCards, [suspField]: suspended, seasonYellowCards: (pl.seasonYellowCards || 0) + (card === "yellow" ? 1 : 0), seasonRedCards: (pl.seasonRedCards || 0) + (card === "red" ? 1 : 0), [compGoalsField]: (pl[compGoalsField] || 0) + goals, [compAssistsField]: (pl[compAssistsField] || 0) + assists, [compYellowField]: (pl[compYellowField] || 0) + (card === "yellow" ? 1 : 0), [compRedField]: (pl[compRedField] || 0) + (card === "red" ? 1 : 0) };
   });
   return { newSquad, injuredPlayer, cardEvents };
 }
@@ -2434,8 +2470,9 @@ function developmentDeltas(pl, rating) {
 function growYouth(y, akademiLevel, spelide, coachBonus = 0) {
   const reliability = akademiLevel / 5;
   const gap = y.potential - (y.attack + y.defense) / 2;
-  const bustChance = clamp(0.35 - akademiLevel * 0.06 - coachBonus * 0.04, 0.04, 0.35);
-  let growth = Math.random() < bustChance ? rnd(-1.5, 0.5) : rnd(1, 4) * (0.4 + reliability * 0.8) * (gap > 0 ? 1 : 0.3);
+  const detMult = determinationMult(y);
+  const bustChance = clamp((0.35 - akademiLevel * 0.06 - coachBonus * 0.04) / detMult, 0.02, 0.4);
+  let growth = Math.random() < bustChance ? rnd(-1.5, 0.5) : rnd(1, 4) * (0.4 + reliability * 0.8) * detMult * (gap > 0 ? 1 : 0.3);
   growth *= SPELIDE_MODS[spelide].akademiGrowth;
   const attackShare = y.pos === "AN" ? 0.6 : y.pos === "MF" ? 0.5 : y.pos === "FÖ" ? 0.35 : 0.25;
   const attack = clamp(y.attack + growth * attackShare * 2, 15, 99);
@@ -2493,16 +2530,34 @@ function cupDueSchedule(type, fieldSize) {
   }
   return [];
 }
-function seededResolveBracket(teamIds, clubs, seed) {
+function seededResolveBracket(teamIds, clubs, seed, userClubId, resultLog) {
   return withSeededRandom(seed, () => {
     const rounds = [];
     let current = [...teamIds];
+    // Once the user's club has been forced out of "current" (either eliminated for real, or the field
+    // is past the point resultLog covers), the rest of the bracket goes back to pure strength-based
+    // simulation — there's no more real data to reconcile against.
     while (current.length > 1) {
+      const roundSizeBefore = current.length;
+      const logEntry = userClubId && resultLog ? resultLog.find(r => r.round === roundSizeBefore) : null;
       const roundMatches = [];
       const next = [];
       for (let i = 0; i < current.length; i += 2) {
         const a = current[i], b = current[i + 1];
         if (!b) { next.push(a); roundMatches.push({ home: a, away: null, winner: a }); continue; }
+        const involvesUser = logEntry && (a === userClubId || b === userClubId);
+        if (involvesUser) {
+          // Trust the real result over the random roll — and if the simulated opponent doesn't match
+          // who the user actually faced, swap in the real opponent so the bracket stays honest about it.
+          const realOppId = logEntry.oppId;
+          const userIsA = a === userClubId;
+          const homeId = userIsA ? userClubId : realOppId;
+          const awayId = userIsA ? realOppId : userClubId;
+          const winner = logEntry.won ? userClubId : realOppId;
+          next.push(winner);
+          roundMatches.push({ home: homeId, away: awayId, winner });
+          continue;
+        }
         const ca = clubs[a], cb = clubs[b];
         if (!ca || !cb) { next.push(a); roundMatches.push({ home: a, away: b, winner: a }); continue; }
         const scoreA = ca.strength + rnd(-13, 13), scoreB = cb.strength + rnd(-13, 13);
@@ -2618,9 +2673,18 @@ function staminaMult(stamina) {
   if (s >= 30) return 0.85;
   return 0.72;
 }
+// A player's last few performances give a genuine, bounded read on current form — someone on a hot
+// streak plays a little sharper than their base numbers suggest, someone out of form a little worse.
+// Needs at least 3 recent ratings before it kicks in, so a single fluke game doesn't swing things.
+function formMult(player) {
+  const recent = player.recentRatings || [];
+  if (recent.length < 3) return 1;
+  const avg = recent.reduce((s, r) => s + r, 0) / recent.length;
+  return 1 + clamp((avg - 6.3) * 0.05, -0.12, 0.12);
+}
 function userStrength(xi, tactic, spelide, tacticalSettings, fitScore, staff, managerAttrs) {
-  let attack = xi.reduce((s, p) => s + p.attack * staminaMult(p.stamina) * (p.pos === "AN" ? 1.3 : p.pos === "MF" ? 1.1 : 0.5), 0) / xi.length;
-  let defense = xi.reduce((s, p) => s + p.defense * staminaMult(p.stamina) * (p.pos === "FÖ" || p.pos === "MV" ? 1.3 : p.pos === "MF" ? 0.9 : 0.5), 0) / xi.length;
+  let attack = xi.reduce((s, p) => s + p.attack * staminaMult(p.stamina) * formMult(p) * (p.pos === "AN" ? 1.3 : p.pos === "MF" ? 1.1 : 0.5), 0) / xi.length;
+  let defense = xi.reduce((s, p) => s + p.defense * staminaMult(p.stamina) * formMult(p) * (p.pos === "FÖ" || p.pos === "MV" ? 1.3 : p.pos === "MF" ? 0.9 : 0.5), 0) / xi.length;
   if (tactic === "anfall") { attack *= 1.16; defense *= 0.88; }
   if (tactic === "forsvar") { attack *= 0.86; defense *= 1.16; }
   const mods = SPELIDE_MODS[spelide] || SPELIDE_MODS.balanserad;
@@ -2633,6 +2697,18 @@ function userStrength(xi, tactic, spelide, tacticalSettings, fitScore, staff, ma
     const fitMult = 0.75 + 0.25 * clamp(fitScore, 0.3, 1);
     attack *= fitMult; defense *= fitMult;
   }
+  // Two players can share the same raw attack/defense numbers yet differ in how well their specific
+  // sub-attributes (shooting, passing, dribbling, pace, defending, physical) actually suit their position
+  // — a striker who's genuinely sharp in front of goal outperforms one whose "attack" rating is padded by
+  // something less relevant there. Deliberately modest and capped so it nudges match strength rather than
+  // overriding the tuned attack/defense balance.
+  const qualityDeltas = xi.map(p => {
+    const rawEstimate = p.pos === "MV" ? p.defense : (p.attack + p.defense) / 2;
+    return overallOf(p) - rawEstimate;
+  });
+  const avgQualityDelta = qualityDeltas.reduce((s, d) => s + d, 0) / xi.length;
+  const qualityMult = 1 + clamp(avgQualityDelta * 0.006, -0.12, 0.12);
+  attack *= qualityMult; defense *= qualityMult;
   if (staff) {
     const gkLevel = staff.gkCoach?.level || 0;
     const analystLevel = staff.analyst?.level || 0;
@@ -2650,8 +2726,13 @@ function pickScorerDetailed(squad, count, setPieceTakers) {
   const outfield = squad.filter(p => p.pos !== "MV");
   const openPlayWeighted = [];
   outfield.forEach(p => {
-    const w = p.pos === "AN" ? 3 : p.pos === "MF" ? 1.6 : 0.5;
-    const weight = Math.max(1, Math.round((p.attack / 10) * w));
+    // Weighted by actual finishing quality (position-aware — a defender's "shooting" is already
+    // dampened relative to a striker's, since scoring chances mostly come from being in the right
+    // areas with the composure to finish, not raw attack rating alone), further scaled by how often
+    // that position realistically gets those chances in the first place.
+    const posMult = p.pos === "AN" ? 2.2 : p.pos === "MF" ? 1.1 : 0.22;
+    const shooting = getAttrs(p).shooting;
+    const weight = Math.max(0, Math.round((shooting / 12) * posMult));
     for (let i = 0; i < weight; i++) openPlayWeighted.push(p);
   });
   const penaltyTakers = ((setPieceTakers && setPieceTakers.penalties) || []).map(id => squad.find(p => p.id === id)).filter(Boolean);
@@ -2664,11 +2745,13 @@ function pickScorerDetailed(squad, count, setPieceTakers) {
     } else if (roll < 0.13 && freeKickTaker) {
       results.push({ player: freeKickTaker, method: "freekick" });
     } else if (outfield.length && Math.random() < 0.2) {
+      // Headers from set pieces do favour physically strong players, including center-backs — that part
+      // is realistic — but still need genuine finishing composure, not just height and strength alone.
       const setPieceWeighted = [];
-      outfield.forEach(p => { const w = Math.max(1, Math.round(getAttrs(p).physical / 12)); for (let j = 0; j < w; j++) setPieceWeighted.push(p); });
+      outfield.forEach(p => { const attrs = getAttrs(p); const w = Math.max(1, Math.round((attrs.physical * 0.6 + attrs.shooting * 0.4) / 14)); for (let j = 0; j < w; j++) setPieceWeighted.push(p); });
       results.push({ player: pick(setPieceWeighted), method: "header" });
     } else {
-      results.push({ player: openPlayWeighted.length ? pick(openPlayWeighted) : pick(squad), method: "openplay" });
+      results.push({ player: openPlayWeighted.length ? pick(openPlayWeighted) : pick(outfield.length ? outfield : squad), method: "openplay" });
     }
   }
   return results;
@@ -2750,23 +2833,39 @@ function distributeMatchStats(squad, goalCount) {
   const outfield = available.filter(p => p.pos !== "MV");
   if (!outfield.length) return ticked;
   const scorerWeighted = [];
-  outfield.forEach(p => { const w = p.pos === "AN" ? 3 : p.pos === "MF" ? 1.5 : 0.6; const weight = Math.max(1, Math.round(w * 2)); for (let i = 0; i < weight; i++) scorerWeighted.push(p.id); });
+  outfield.forEach(p => {
+    const posMult = p.pos === "AN" ? 2.2 : p.pos === "MF" ? 1.1 : 0.22;
+    const shooting = getAttrs(p).shooting;
+    const weight = Math.max(0, Math.round((shooting / 12) * posMult));
+    for (let i = 0; i < weight; i++) scorerWeighted.push(p.id);
+  });
   const assistWeighted = [];
-  outfield.forEach(p => { const w = p.pos === "MF" ? 3 : p.pos === "AN" ? 1.3 : 0.7; const weight = Math.max(1, Math.round(w * 2)); for (let i = 0; i < weight; i++) assistWeighted.push(p.id); });
+  outfield.forEach(p => {
+    const posMult = p.pos === "MF" ? 2.4 : p.pos === "AN" ? 1.3 : 0.6;
+    const passing = getAttrs(p).passing;
+    const weight = Math.max(0, Math.round((passing / 14) * posMult));
+    for (let i = 0; i < weight; i++) assistWeighted.push(p.id);
+  });
   const goalInc = {}, assistInc = {};
   for (let i = 0; i < goalCount; i++) {
-    const scorerId = pick(scorerWeighted);
+    const scorerId = scorerWeighted.length ? pick(scorerWeighted) : pick(outfield).id;
     goalInc[scorerId] = (goalInc[scorerId] || 0) + 1;
     if (Math.random() < 0.78) {
-      const assisterId = pick(assistWeighted);
+      const assisterId = assistWeighted.length ? pick(assistWeighted) : pick(outfield).id;
       if (assisterId !== scorerId) assistInc[assisterId] = (assistInc[assisterId] || 0) + 1;
     }
   }
   const yellowInc = new Set(), redInc = new Set();
   available.forEach(p => {
+    if (p.pos === "MV") return; // goalkeepers essentially never pick up cards in open play
+    // Defenders and physical, duel-heavy players realistically rack up more cards than attackers —
+    // scaled by both position (more tackling/duels) and physical intensity.
+    const posMult = p.pos === "FÖ" ? 1.5 : p.pos === "MF" ? 1.15 : 0.7;
+    const physicalMult = 0.75 + (getAttrs(p).physical / 100) * 0.5;
+    const cardMult = posMult * physicalMult;
     const roll = Math.random();
-    if (roll < 0.003) redInc.add(p.id);
-    else if (roll < 0.05) yellowInc.add(p.id);
+    if (roll < 0.003 * cardMult) redInc.add(p.id);
+    else if (roll < 0.05 * cardMult) yellowInc.add(p.id);
   });
   // A plausible "starting XI" (1 keeper + best ~10 outfield by attribute, roughly matching a real lineup)
   // actually plays this match, drawn only from currently available (non-injured, non-suspended) players.
@@ -2855,21 +2954,49 @@ function pickAssist(squad, scorer, setPieceTakers) {
   const cornerIds = new Set([setPieceTakers?.cornerLeft, setPieceTakers?.cornerRight].filter(Boolean));
   const weighted = [];
   candidates.forEach(p => {
-    const w = (p.pos === "MF" ? 3 : p.pos === "AN" ? 1.5 : p.pos === "FÖ" ? 0.8 : 1) * (cornerIds.has(p.id) ? 1.8 : 1);
-    const weight = Math.max(1, Math.round((p.attack / 12) * w));
+    // Weighted by actual passing quality, not raw attack — assists are about vision and delivery,
+    // and a corner-taker's set-piece delivery skill matters more there than open-play creativity alone.
+    const w = (p.pos === "MF" ? 2.4 : p.pos === "AN" ? 1.3 : p.pos === "FÖ" ? 0.6 : 1) * (cornerIds.has(p.id) ? 1.8 : 1);
+    const passing = getAttrs(p).passing;
+    const weight = Math.max(0, Math.round((passing / 14) * w));
     for (let i = 0; i < weight; i++) weighted.push(p);
   });
-  return pick(weighted);
+  return weighted.length ? pick(weighted) : pick(candidates);
 }
-function ratingsForResult(squad, scorerNames, result) {
-  const counts = {}; scorerNames.forEach(n => { counts[n] = (counts[n] || 0) + 1; });
+function ratingsForResult(squad, scorerNames, result, assistNames, oppGoals) {
+  const scorerCounts = {}; scorerNames.forEach(n => { scorerCounts[n] = (scorerCounts[n] || 0) + 1; });
+  const assistCounts = {}; (assistNames || []).forEach(n => { if (n) assistCounts[n] = (assistCounts[n] || 0) + 1; });
+  const cleanSheet = oppGoals === 0;
   return squad.map(p => {
-    const goals = counts[p.name] || 0;
-    const rating = clamp(6.0 + rnd(-0.6, 0.6) + (result === "win" ? 0.35 : result === "loss" ? -0.25 : 0) + goals * 1.1, 3.5, 9.8);
-    return { id: p.id, name: p.name, pos: p.pos, rating: Math.round(rating * 10) / 10, goals };
+    const goals = scorerCounts[p.name] || 0;
+    const assists = assistCounts[p.name] || 0;
+    // A genuinely better player performs more consistently — the position-relevant attribute gives a
+    // real (if modest) baseline nudge, so a strong defender or passer tends to rate a bit higher on
+    // average even in matches where they don't score or assist, not just pure random noise every time.
+    const attrs = getAttrs(p);
+    const relevantQuality = p.pos === "MV" ? attrs.defending : p.pos === "FÖ" ? attrs.defending : p.pos === "MF" ? (attrs.passing + attrs.defending) / 2 : attrs.dribbling;
+    const qualityBonus = clamp((relevantQuality - 55) * 0.006, -0.25, 0.35);
+    let rating = 6.0 + rnd(-0.5, 0.5) + qualityBonus + (result === "win" ? 0.35 : result === "loss" ? -0.25 : 0) + goals * 1.1 + assists * 0.55;
+    if (cleanSheet && (p.pos === "MV" || p.pos === "FÖ")) {
+      // A clean sheet built on genuinely strong defending earns more credit than one that was mostly luck.
+      rating += 0.15 + clamp((attrs.defending - 55) * 0.006, -0.1, 0.25);
+    }
+    rating = clamp(rating, 3.5, 9.8);
+    return { id: p.id, name: p.name, pos: p.pos, rating: Math.round(rating * 10) / 10, goals, assists };
   }).sort((a, b) => b.rating - a.rating);
 }
 
+// In bad conditions (rain, wind, snow), a technical, passing-and-dribbling-heavy lineup loses more of its
+// edge than a physical, direct one — control and touch matter less when the pitch and ball are working
+// against you. Good weather doesn't differentiate; it's specifically the rough days that separate styles.
+function weatherTeamMult(xi, weatherMult) {
+  if (weatherMult >= 1 || !xi.length) return 1;
+  const severity = 1 - weatherMult;
+  const avgTechnical = xi.reduce((s, p) => { const a = getAttrs(p); return s + (a.dribbling + a.passing) / 2; }, 0) / xi.length;
+  const avgPhysical = xi.reduce((s, p) => { const a = getAttrs(p); return s + (a.physical + a.pace) / 2; }, 0) / xi.length;
+  const technicalLean = (avgTechnical - avgPhysical) / 100;
+  return 1 - clamp(technicalLean * severity * 1.5, -0.06, 0.06);
+}
 // ---------- Weather, scouting reports, and match-moment flavor ----------
 const WEATHER_OPTIONS = [
   { name: "Strålande sol", icon: "☀️", mult: 1.05 },
@@ -3004,7 +3131,7 @@ function processDomesticCupRound(teams, clubs, userClubId, squad, tactic, spelid
         penalties = userWon ? `${rndInt(4, 6)}-${rndInt(2, 4)}` : `${rndInt(2, 4)}-${rndInt(4, 6)}`;
       } else { userWon = userGoals > oppGoals; }
       const scorers = pickScorer(xi, userGoals).map(p => p.name);
-      const ratings = ratingsForResult(xi, scorers, userWon ? "win" : "loss");
+      const ratings = ratingsForResult(xi, scorers, userWon ? "win" : "loss", null, oppGoals);
       const winnerId = userWon ? userClubId : oppId;
       winners.push(winnerId);
       userReport = { oppName: opp.name, oppColor: opp.color, userColor: clubs[userClubId]?.color, userGoals, oppGoals, penalties, result: userWon ? "win" : "loss", ratings };
@@ -3099,7 +3226,7 @@ function simulateUserDecisiveLeg(oppStrength, squad, tactic, spelide, userIsHome
     penalties = userWon ? `${rndInt(4, 6)}-${rndInt(2, 4)}` : `${rndInt(2, 4)}-${rndInt(4, 6)}`;
   } else userWon = userGoals > oppGoals;
   const scorers = pickScorer(xi, userGoals).map(p => p.name);
-  const ratings = ratingsForResult(xi, scorers, userWon ? "win" : "loss");
+  const ratings = ratingsForResult(xi, scorers, userWon ? "win" : "loss", null, oppGoals);
   return { userGoals, oppGoals, penalties, userWon, ratings };
 }
 function topTwoByStrengthNoise(teamIds, clubs) {
@@ -3659,7 +3786,7 @@ function setupCup(type, base) {
     if (type === "domestic") {
       const field = domesticCupField(base.leagueId, base.clubs);
       const dueRounds = cupDueSchedule("domestic", field.length);
-      return { type: "domestic", label: LEAGUES.find(l => l.id === base.leagueId).cupName, phase: "knockoutSimple", teams: field, roundName: field.length <= 4 ? bracketName(field.length) : `Omgång 1`, roundIndex: 1, userReport: null, pendingWinners: null, eliminated: false, champion: null, dueRounds, dueIndex: 0 };
+      return { type: "domestic", label: LEAGUES.find(l => l.id === base.leagueId).cupName, phase: "knockoutSimple", teams: field, roundName: field.length <= 4 ? bracketName(field.length) : `Omgång 1`, roundIndex: 1, userReport: null, pendingWinners: null, eliminated: false, champion: null, dueRounds, dueIndex: 0, resultLog: [] };
     }
     const { cup1, cup2 } = base.season1Qualifiers || buildContinentalQualifiers(base.clubs, base.seasonEndSnapshot.worldStandings, base.seasonEndSnapshot.otherCupWinners, base.leagueId, base.lastSeasonSummary.domesticCupWinnerId, base.lastCup2ChampionId);
     if (type === "cup1") {
@@ -3669,11 +3796,11 @@ function setupCup(type, base) {
       const groupSchedule = generateGroupSchedule(groups[userGroupIndex]);
       const groupDueRounds = spreadRounds(3, 24, groupSchedule.length);
       const knockoutDueRounds = cupDueSchedule("cup1knockout", 8);
-      return { type: "cup1", label: "Kimby Mästerskapet", finalArena: pick(CUP1_ARENAS), phase: "groups", groups, userGroupIndex, groupSchedule, groupRound: 0, otherGroupsQualifiers, roundName: "Gruppspelet", pendingReport: null, eliminated: false, champion: null, dueRounds: groupDueRounds, knockoutDueRounds, dueIndex: 0 };
+      return { type: "cup1", label: "Kimby Mästerskapet", finalArena: pick(CUP1_ARENAS), phase: "groups", groups, userGroupIndex, groupSchedule, groupRound: 0, otherGroupsQualifiers, roundName: "Gruppspelet", pendingReport: null, eliminated: false, champion: null, dueRounds: groupDueRounds, knockoutDueRounds, dueIndex: 0, resultLog: [] };
     }
     const { pendingOtherWinners, tie } = setupKnockoutRound(cup2, base.clubs, base.userClubId);
     const dueRounds = cupDueSchedule("cup2", cup2.length);
-    return { type: "cup2", label: "Kimby Cupen", finalArena: pick(CUP2_ARENAS), phase: "knockout", teams: cup2, roundName: bracketName(16), pendingOtherWinners, tie, pendingReport: null, eliminated: false, champion: null, dueRounds, dueIndex: 0 };
+    return { type: "cup2", label: "Kimby Cupen", finalArena: pick(CUP2_ARENAS), phase: "knockout", teams: cup2, roundName: bracketName(16), pendingOtherWinners, tie, pendingReport: null, eliminated: false, champion: null, dueRounds, dueIndex: 0, resultLog: [] };
 }
 
   function beginRound() {
@@ -3764,7 +3891,7 @@ function setupCup(type, base) {
     let physioImpactDelta = 0;
     unionXi.forEach(pl => {
       const attrs = getAttrs(pl);
-      const staminaRisk = clamp((70 - (pl.stamina ?? 100)) / 3000, 0, 0.015);
+      const staminaRisk = clamp((70 - (pl.stamina ?? 100)) / 700, 0, 0.07);
       const chance = clamp((0.045 - attrs.physical / 2200 - physioLevel * 0.003 + staminaRisk) * difficultySettings.injuryMult * injuryProneMult(pl), 0.005, 0.12);
       const baselineChance = clamp((0.045 - attrs.physical / 2200 + staminaRisk) * difficultySettings.injuryMult * injuryProneMult(pl), 0.005, 0.12);
       physioImpactDelta += Math.max(0, baselineChance - chance);
@@ -3779,10 +3906,11 @@ function setupCup(type, base) {
     let assistantImpactDelta = 0;
     unionXi.forEach(pl => {
       const personalityCardMult = pl.personality === "Problemspelare" ? 1.6 : 1;
-      const yellowChance = clamp((0.09 - assistantLevel * 0.008) * tacticCardMult * personalityCardMult, 0.02, 0.2);
-      const redChance = clamp((0.012 - assistantLevel * 0.001) * tacticCardMult * personalityCardMult, 0.002, 0.03);
-      const baselineYellow = clamp(0.09 * tacticCardMult * personalityCardMult, 0.02, 0.2);
-      const baselineRed = clamp(0.012 * tacticCardMult * personalityCardMult, 0.002, 0.03);
+      const positionCardMult = pl.pos === "MV" ? 0.15 : pl.pos === "FÖ" ? 1.4 : pl.pos === "MF" ? 1.1 : 0.7;
+      const yellowChance = clamp((0.09 - assistantLevel * 0.008) * tacticCardMult * personalityCardMult * positionCardMult, 0.005, 0.24);
+      const redChance = clamp((0.012 - assistantLevel * 0.001) * tacticCardMult * personalityCardMult * positionCardMult, 0.0005, 0.035);
+      const baselineYellow = clamp(0.09 * tacticCardMult * personalityCardMult * positionCardMult, 0.005, 0.24);
+      const baselineRed = clamp(0.012 * tacticCardMult * personalityCardMult * positionCardMult, 0.0005, 0.035);
       assistantImpactDelta += Math.max(0, (baselineYellow - yellowChance) + (baselineRed - redChance));
       if (Math.random() < redChance) cardEvents[pl.id] = "red";
       else if (Math.random() < yellowChance) cardEvents[pl.id] = "yellow";
@@ -3881,9 +4009,9 @@ function setupCup(type, base) {
       if (card === "red") { suspendedMatches += rndInt(1, 2); }
       else if (card === "yellow") { yellowCards += 1; if (yellowCards >= 5) { suspendedMatches += 1; yellowCards -= 5; } }
       const fitnessCoachLevel = staff.fitnessCoach ? staff.fitnessCoach.level : 0;
-      const newStamina = clamp(staminaNow - Math.max(1, rndInt(4, 8) - fitnessCoachLevel * 0.4), 0, 100);
+      const newStamina = clamp(staminaNow - Math.max(1, (rndInt(4, 8) - fitnessCoachLevel * 0.4) * enduranceMult(pl)), 0, 100);
       const outOfPos = (pl.personality === "Ambitiös" && (cellFitByPlayer[pl.id] ?? 1) < 0.6) ? 1 : 0;
-      return { ...pl, apps: pl.apps + 1, goals: pl.goals + goals, assists: (pl.assists || 0) + assists, ratingSum: pl.ratingSum + rating, recentRatings: [...(pl.recentRatings || []), rating].slice(-5), attack: clamp(pl.attack + attackDelta, 15, 99), defense: clamp(pl.defense + defenseDelta, 15, 99), injuryWeeks, yellowCards, suspendedMatches, fatigued: false, stamina: newStamina, outOfPositionApps: (pl.outOfPositionApps || 0) + outOfPos };
+      return { ...pl, apps: pl.apps + 1, goals: pl.goals + goals, assists: (pl.assists || 0) + assists, ratingSum: pl.ratingSum + rating, recentRatings: [...(pl.recentRatings || []), rating].slice(-5), attack: clamp(pl.attack + attackDelta, 15, 99), defense: clamp(pl.defense + defenseDelta, 15, 99), injuryWeeks, yellowCards, suspendedMatches, seasonYellowCards: (pl.seasonYellowCards || 0) + (card === "yellow" ? 1 : 0), seasonRedCards: (pl.seasonRedCards || 0) + (card === "red" ? 1 : 0), goals_league: (pl.goals_league || 0) + goals, assists_league: (pl.assists_league || 0) + assists, seasonYellowCards_league: (pl.seasonYellowCards_league || 0) + (card === "yellow" ? 1 : 0), seasonRedCards_league: (pl.seasonRedCards_league || 0) + (card === "red" ? 1 : 0), fatigued: false, stamina: newStamina, outOfPositionApps: (pl.outOfPositionApps || 0) + outOfPos };
     });
     matchReport.ratings.sort((a, b) => b.rating - a.rating);
     matchReport.motm = matchReport.ratings[0] || null;
@@ -4263,7 +4391,7 @@ function setupCup(type, base) {
     const scorers = scorerObjects.map(pl => pl.name);
     const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, "domestic", scorerObjects, assistProviders);
     if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i cupmatchen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
-    const ratings = ratingsForResult(xi, scorers, userWon ? "win" : "loss");
+    const ratings = ratingsForResult(xi, scorers, userWon ? "win" : "loss", assistProviders.map(a => a?.name), oppGoals);
     const winnerId = userWon ? g.userClubId : p.oppId;
     const winners = [...ctx.winners, winnerId];
     if (userWon) {
@@ -4282,7 +4410,7 @@ function setupCup(type, base) {
     const finances = simulateCupMatchFinances(g, p.userIsHome, p.oppStrength, false);
     const cupFinanceRecord = { round: g.round, oppName: p.oppName, userIsHome: p.userIsHome, ticketPrice: g.ticketPrice, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity, income: finances.income, competition: COMPETITION_LABEL_SHORT.domestic };
     const userReport = { oppName: p.oppName, oppColor: g.clubs[p.oppId]?.color, userColor: g.clubs[g.userClubId]?.color, userIsHome: p.userIsHome, userGoals, oppGoals, penalties, result: userWon ? "win" : "loss", ratings, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity };
-    setG(prev => ({ ...prev, budget: prev.budget + finances.income, view: shootout ? "penaltyshootout" : "cup", activeCupType: "domestic", squad: newSquad, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, domestic: { ...prev.cups.domestic, pendingWinners: winners, userReport } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) }));
+    setG(prev => ({ ...prev, budget: prev.budget + finances.income, view: shootout ? "penaltyshootout" : "cup", activeCupType: "domestic", squad: newSquad, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, domestic: { ...prev.cups.domestic, pendingWinners: winners, userReport, resultLog: [...(prev.cups.domestic.resultLog || []), { round: prev.cups.domestic.teams.length, oppId: p.oppId, oppName: p.oppName, won: userWon }] } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) }));
   }
   function continueDomesticCupRound() {
     const cup = g.cups.domestic;
@@ -4338,7 +4466,7 @@ function setupCup(type, base) {
     const scorers = scorerObjects.map(pl => pl.name);
     const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, "cup1", scorerObjects, assistProviders);
     if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i cupmatchen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
-    const ratings = ratingsForResult(xi, scorers, result);
+    const ratings = ratingsForResult(xi, scorers, result, assistProviders.map(a => a?.name), oppGoals);
     const finances = simulateCupMatchFinances(g, p.userIsHome, p.oppStrength, false);
     const capturedReport = { oppName: p.oppName, oppColor: g.clubs[p.oppId]?.color, userColor: g.clubs[g.userClubId]?.color, userIsHome: p.userIsHome, userGoals, oppGoals, result, ratings, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity };
     const cupFinanceRecord = { round: g.round, oppName: p.oppName, userIsHome: p.userIsHome, ticketPrice: g.ticketPrice, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity, income: finances.income, competition: COMPETITION_LABEL_SHORT.cup1 };
@@ -4392,7 +4520,7 @@ function setupCup(type, base) {
     const scorers = scorerObjects.map(pl => pl.name);
     const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, ctx.cupType, scorerObjects, assistProviders);
     if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i cupmatchen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
-    const ratings = ratingsForResult(xi, scorers, result);
+    const ratings = ratingsForResult(xi, scorers, result, assistProviders.map(a => a?.name), oppGoals);
     const legResult = { userGoals, oppGoals, userWon: userGoals > oppGoals, ratings };
     const finances = simulateCupMatchFinances(g, p.userIsHome, p.oppStrength, false);
     const cupFinanceRecord = { round: g.round, oppName: p.oppName, userIsHome: p.userIsHome, ticketPrice: g.ticketPrice, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity, income: finances.income, competition: COMPETITION_LABEL_SHORT[ctx.cupType] || "Cupen" };
@@ -4458,15 +4586,16 @@ function setupCup(type, base) {
         });
       }
     }
-    if (!advanced) { setG(prev => ({ ...prev, view: "cup", pendingShootout: null, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], eliminated: true, pendingReport: null } } })); return; }
+    const tieLogEntry = { round: cup.teams.length, oppId: cup.tie.oppId, oppName: g.clubs[cup.tie.oppId]?.name, won: advanced };
+    if (!advanced) { setG(prev => ({ ...prev, view: "cup", pendingShootout: null, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], eliminated: true, pendingReport: null, resultLog: [...(prev.cups[cupType].resultLog || []), tieLogEntry] } } })); return; }
     const nextTeams = [...cup.pendingOtherWinners, g.userClubId];
     if (nextTeams.length === 2) {
       const finalOpponentId = nextTeams.find(id => id !== g.userClubId);
-      setG(prev => ({ ...prev, view: "cup", pendingShootout: null, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], phase: "final", finalOpponentId, tie: null, pendingReport: null, roundName: "Final", dueIndex: (prev.cups[cupType].dueIndex ?? 0) + 1 } } }));
+      setG(prev => ({ ...prev, view: "cup", pendingShootout: null, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], phase: "final", finalOpponentId, tie: null, pendingReport: null, roundName: "Final", dueIndex: (prev.cups[cupType].dueIndex ?? 0) + 1, resultLog: [...(prev.cups[cupType].resultLog || []), tieLogEntry] } } }));
       return;
     }
     const { pendingOtherWinners, tie } = setupKnockoutRound(nextTeams, g.clubs, g.userClubId);
-    setG(prev => ({ ...prev, view: "cup", pendingShootout: null, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], teams: nextTeams, pendingOtherWinners, tie, pendingReport: null, roundName: bracketName(nextTeams.length), dueIndex: (prev.cups[cupType].dueIndex ?? 0) + 1 } } }));
+    setG(prev => ({ ...prev, view: "cup", pendingShootout: null, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], teams: nextTeams, pendingOtherWinners, tie, pendingReport: null, roundName: bracketName(nextTeams.length), dueIndex: (prev.cups[cupType].dueIndex ?? 0) + 1, resultLog: [...(prev.cups[cupType].resultLog || []), tieLogEntry] } } }));
   }
   function playCupFinal() {
     const cupType = g.activeCupType;
@@ -4510,11 +4639,11 @@ function setupCup(type, base) {
     const scorers = scorerObjects.map(pl => pl.name);
     const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, ctx.cupType, scorerObjects, assistProviders);
     if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i finalen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
-    const ratings = ratingsForResult(xi, scorers, result);
+    const ratings = ratingsForResult(xi, scorers, result, assistProviders.map(a => a?.name), oppGoals);
     const finances = simulateCupMatchFinances(g, p.userIsHome, p.oppStrength, false);
     const cupFinanceRecord = { round: g.round, oppName: p.oppName, userIsHome: p.userIsHome, ticketPrice: g.ticketPrice, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity, income: finances.income, competition: `${COMPETITION_LABEL_SHORT[ctx.cupType] || "Cupen"} (final)` };
     const report = { oppName: p.oppName, oppColor: g.clubs[p.oppId]?.color, userColor: g.clubs[g.userClubId]?.color, userIsHome: p.userIsHome, userGoals, oppGoals, penalties, result, ratings, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity };
-    setG(prev => ({ ...prev, budget: prev.budget + finances.income, view: shootout ? "penaltyshootout" : "cup", activeCupType: ctx.cupType, squad: newSquad, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, [ctx.cupType]: { ...prev.cups[ctx.cupType], pendingReport: report, finalWon: userWon } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) }));
+    setG(prev => ({ ...prev, budget: prev.budget + finances.income, view: shootout ? "penaltyshootout" : "cup", activeCupType: ctx.cupType, squad: newSquad, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, [ctx.cupType]: { ...prev.cups[ctx.cupType], pendingReport: report, finalWon: userWon, resultLog: [...(prev.cups[ctx.cupType].resultLog || []), { round: 2, oppId: p.oppId, oppName: p.oppName, won: userWon }] } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) }));
   }
   function continueCupFinal() {
     const cupType = g.activeCupType;
@@ -5406,7 +5535,7 @@ function setupCup(type, base) {
         let attack = p.attack, defense = p.defense;
         const utveckling = prev.manager?.attributes?.utveckling ?? 50;
         const devMult = 1 + clamp(utveckling - 50, -30, 40) * 0.008;
-        if (age < 24) { attack = clamp(attack + rnd(0.3, 1.2) * devMult, 15, 99); defense = clamp(defense + rnd(0.3, 1.2) * devMult, 15, 99); }
+        if (age < 24) { const detMult = determinationMult(p); attack = clamp(attack + rnd(0.3, 1.2) * devMult * detMult, 15, 99); defense = clamp(defense + rnd(0.3, 1.2) * devMult * detMult, 15, 99); }
         else if (age >= 30) { const decline = (age - 29) * rnd(0.5, 1.1); attack = clamp(attack - decline, 15, 99); defense = clamp(defense - decline, 15, 99); }
         const playTimeRatio = p.apps / totalRoundsLastSeason;
         const outOfPosRatio = p.apps ? (p.outOfPositionApps || 0) / p.apps : 0;
@@ -5808,17 +5937,24 @@ function setupCup(type, base) {
                   onContinue={() => setG(prev => ({ ...prev, view: "press" }))} />
               ) : g.view === "press" && g.lastMatchReport ? (
                 <PressConferenceView report={g.lastMatchReport} onRespond={respondPress} />
+              ) : g.view === "press" && !g.lastMatchReport ? (
+                <div className="rise-in space-y-2.5">
+                  <PaperCard><div className="text-sm text-center py-3" style={{ color: C.inkSoft }}>Presskonferensen kunde inte laddas — matchrapporten saknas. Ingen fara, ni kan fortsätta därifrån.</div></PaperCard>
+                  <button onClick={() => setG(prev => ({ ...prev, view: "home" }))} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep }}>TILLBAKA TILL HEM</button>
+                </div>
               ) : g.view === "trophies" ? (
                 <TrophyCabinetView history={g.history} club={userClub} season={g.season} clubRecords={g.clubRecords} onBack={() => setG(prev => ({ ...prev, view: prev.activeTab === "home" ? "home" : "tab" }))} />
               ) : g.view === "manager" ? (
                 <ManagerProfileView manager={g.manager} assistantManager={g.assistantManager} staff={g.staff} g={g} userClub={userClub}
                   onRespondInterest={respondManagerInterest} onHireAssistant={hireAssistantManager} onSetDifficulty={setDifficulty}
-                  onOpenJobMarket={openJobMarket} onOpenCV={() => setG(prev => ({ ...prev, view: "managercv" }))} onOpenVision={() => setG(prev => ({ ...prev, view: "visionboard" }))}
+                  onOpenJobMarket={openJobMarket} onOpenCV={() => setG(prev => ({ ...prev, view: "managercv" }))} onOpenVision={() => setG(prev => ({ ...prev, view: "visionboard" }))} onOpenMatchGuide={() => setG(prev => ({ ...prev, view: "matchguide" }))}
                   onBack={() => setG(prev => ({ ...prev, view: prev.activeTab === "home" ? "home" : "tab" }))} />
               ) : g.view === "managercv" ? (
                 <ManagerCVView manager={g.manager} onBack={() => setG(prev => ({ ...prev, view: "manager" }))} />
               ) : g.view === "visionboard" ? (
                 <VisionBoardView manager={g.manager} season={g.season} division={g.division} history={g.history} transferHistory={g.transferHistory} squad={g.squad} userClubId={g.userClubId} onCreateVision={createNewVision} onBack={() => setG(prev => ({ ...prev, view: "manager" }))} />
+              ) : g.view === "matchguide" ? (
+                <MatchInsightsGuideView onBack={() => setG(prev => ({ ...prev, view: "manager" }))} />
               ) : g.view === "matchprep" ? (
                 <MatchPrepView g={g} userClub={userClub} oppClub={oppClub} countryName={countryName} isHome={nextFixture ? nextFixture.home === g.userClubId : true}
                   onBack={() => setG(prev => ({ ...prev, view: "home" }))}
@@ -6087,6 +6223,7 @@ function worldToExcelRows(world) {
         Skadeveckor: p.injuryWeeks || 0, Avstängd: p.suspendedMatches || 0, "Gula kort": p.yellowCards || 0,
         Avslut: attrs.shooting, Passning: attrs.passing, Dribbling: attrs.dribbling, Fart: attrs.pace, Försvarsspel: attrs.defending, Fysik: attrs.physical,
         "Svag fot": weakFoot(p), Huvudspel: headingAbility(p), Skaderisk: injuryProneness(p), Storform: clutchFactor(p),
+        Uthållighet: endurance(p), Beslutsamhet: determination(p),
       });
     });
     (c.youthSquad || []).forEach(y => {
@@ -6136,7 +6273,7 @@ function excelRowsToWorld(clubRows, playerRows, youthRows) {
       shooting: num(row.Avslut), passing: num(row.Passning), dribbling: num(row.Dribbling), pace: num(row.Fart), defending: num(row.Försvarsspel), physical: num(row.Fysik),
       weakFoot: num(row["Svag fot"]), headingAbility: num(row.Huvudspel),
       injuryProneness: row.Skaderisk && ["Skör", "Normal", "Robust"].includes(row.Skaderisk) ? row.Skaderisk : undefined,
-      clutchFactor: num(row.Storform),
+      clutchFactor: num(row.Storform), endurance: num(row.Uthållighet), determination: num(row.Beslutsamhet),
     });
   });
   (youthRows || []).forEach(row => {
@@ -6506,6 +6643,14 @@ function DatabaseView({ world, dbName, isCustom, onSave, onSaveAs, onExport, onS
               <div>
                 <div className="text-9 mb-1" style={{ color: C.paperDim }}>Storform (−1 till 1)</div>
                 <input type="number" step="0.1" min="-1" max="1" value={editingPlayer.clutchFactor ?? ""} placeholder={String(clutchFactor(editingPlayer))} onChange={e => updatePlayer(selectedClub.id, editingPlayer.id, { clutchFactor: e.target.value === "" ? undefined : clamp(Number(e.target.value) || 0, -1, 1) })} className="w-full px-2.5 py-1.5 rounded-lg text-sm" style={{ background: C.paper, color: C.ink }} />
+              </div>
+              <div>
+                <div className="text-9 mb-1" style={{ color: C.paperDim }}>Uthållighet</div>
+                <input type="number" value={editingPlayer.endurance ?? ""} placeholder={String(endurance(editingPlayer))} onChange={e => updatePlayer(selectedClub.id, editingPlayer.id, { endurance: e.target.value === "" ? undefined : clamp(Number(e.target.value) || 0, 1, 99) })} className="w-full px-2.5 py-1.5 rounded-lg text-sm" style={{ background: C.paper, color: C.ink }} />
+              </div>
+              <div>
+                <div className="text-9 mb-1" style={{ color: C.paperDim }}>Beslutsamhet</div>
+                <input type="number" value={editingPlayer.determination ?? ""} placeholder={String(determination(editingPlayer))} onChange={e => updatePlayer(selectedClub.id, editingPlayer.id, { determination: e.target.value === "" ? undefined : clamp(Number(e.target.value) || 0, 1, 99) })} className="w-full px-2.5 py-1.5 rounded-lg text-sm" style={{ background: C.paper, color: C.ink }} />
               </div>
             </div>
           </div>
@@ -6883,6 +7028,29 @@ function generateWorldNews(clubs, userClubId, userLeagueId, cups) {
   const activeCups = ["domestic", "cup1", "cup2"].map(t => cups?.[t]).filter(c => c && !c.champion && !c.eliminated);
   if (activeCups.length) {
     const cup = pick(activeCups);
+    const fieldIds = (cup.teams || cup.groups?.flat() || []).filter(id => id !== userClubId);
+    const twoClubs = fieldIds.length >= 2 ? shuffle(fieldIds).slice(0, 2).map(id => clubs[id]).filter(Boolean) : null;
+    if (twoClubs && twoClubs.length === 2) {
+      const [a, b] = twoClubs;
+      const scoreA = Math.round(a.strength + rnd(-13, 13)), scoreB = Math.round(b.strength + rnd(-13, 13));
+      const winner = scoreA >= scoreB ? a : b, loser = scoreA >= scoreB ? b : a;
+      const winnerGoals = rndInt(1, 3) + (Math.abs(scoreA - scoreB) > 15 ? 1 : 0), loserGoals = rndInt(0, Math.min(2, winnerGoals));
+      const templates = [
+        () => ({ text: `${cup.label}: ${winner.name} tros ha slagit ut ${loser.name} i en jämn drabbning.`, category: "Cup" }),
+        () => ({ text: `${cup.label} fortsätter att bjuda på dramatik — ${loser.name} ser ut att ha fått lämna turneringen.`, category: "Cup" }),
+        () => ({ text: `Experterna pekar ut ${winner.name} som en av favoriterna att gå långt i ${cup.label}.`, category: "Cup" }),
+      ];
+      const chosen = pick(templates)();
+      return {
+        ...chosen,
+        detail: {
+          competition: cup.label,
+          homeName: winner.name, awayName: loser.name, homeScore: winnerGoals, awayScore: loserGoals,
+          rows: [{ label: "Styrka", value: `${Math.round(winner.strength)} vs ${Math.round(loser.strength)}` }],
+          note: `Troligt resultat baserat på klubbarnas styrka — inte den officiella gången i turneringen.`,
+        },
+      };
+    }
     const templates = [
       () => ({ text: `${cup.label}: flera överraskande resultat i den senaste omgången skakar om turneringen.`, category: "Cup" }),
       () => ({ text: `${cup.label} fortsätter att bjuda på dramatik — flera favoritlag har fått det tufft.`, category: "Cup" }),
@@ -7497,7 +7665,7 @@ function PressConferenceView({ report, onRespond }) {
   );
 }
 
-function ManagerProfileView({ manager, assistantManager, staff, g, userClub, onRespondInterest, onHireAssistant, onSetDifficulty, onOpenJobMarket, onOpenCV, onOpenVision, onBack }) {
+function ManagerProfileView({ manager, assistantManager, staff, g, userClub, onRespondInterest, onHireAssistant, onSetDifficulty, onOpenJobMarket, onOpenCV, onOpenVision, onOpenMatchGuide, onBack }) {
   const [hiringOpen, setHiringOpen] = useState(false);
   const [assistOffers, setAssistOffers] = useState([]);
   const orgReady = assistantManagerUnlockedViaOrg(staff);
@@ -7576,6 +7744,7 @@ function ManagerProfileView({ manager, assistantManager, staff, g, userClub, onR
               </div>
             ))}
           </div>
+          <button onClick={onOpenMatchGuide} className="mt-3 w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-1.5" style={{ background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>ⓘ Vad påverkar matchresultat?</button>
         </PaperCard>
       ) : (
         <PaperCard>
@@ -8039,8 +8208,18 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
     const famBonus = 1 + familiarityBonus(formationFamiliarity);
     const [start, end] = MATCH_SEGMENTS[segmentIdx];
     const segLen = end - start;
-    const lambdaUser = expectedGoals(attack * talk.atkMult * famBonus, pending.oppStrength, pending.userIsHome) * pending.weather.mult * (segLen / 90);
-    const lambdaOpp = expectedGoals(pending.oppStrength, defense * talk.defMult * famBonus, !pending.userIsHome) * pending.weather.mult * (segLen / 90);
+    // Match momentum: chasing the game late means throwing more numbers forward at some defensive cost;
+    // protecting a lead late means the reverse. Only kicks in from the hour mark on, and only meaningfully
+    // when the gap is still realistically chaseable (a heavy deficit isn't "push a bit harder" territory).
+    const scoreDiff = userGoals - oppGoals;
+    const lateGame = start >= 60;
+    let momentumAtk = 1, momentumDef = 1;
+    if (lateGame && scoreDiff < 0 && scoreDiff >= -2) { momentumAtk = 1 + clamp(-scoreDiff * 0.07, 0, 0.14); momentumDef = 1 - clamp(-scoreDiff * 0.05, 0, 0.1); }
+    else if (lateGame && scoreDiff > 0 && scoreDiff <= 2) { momentumDef = 1 + clamp(scoreDiff * 0.06, 0, 0.12); momentumAtk = 1 - clamp(scoreDiff * 0.04, 0, 0.08); }
+    const attackMomentum = attack * momentumAtk, defenseMomentum = defense * momentumDef;
+    const weatherStyleMult = weatherTeamMult(xi, pending.weather.mult);
+    const lambdaUser = expectedGoals(attackMomentum * talk.atkMult * famBonus, pending.oppStrength, pending.userIsHome) * pending.weather.mult * weatherStyleMult * (segLen / 90);
+    const lambdaOpp = expectedGoals(pending.oppStrength, defenseMomentum * talk.defMult * famBonus, !pending.userIsHome) * pending.weather.mult * weatherStyleMult * (segLen / 90);
     const segUser = poisson(lambdaUser), segOpp = poisson(lambdaOpp);
     const entries = [];
     const attackers = xi.filter(p => p.pos !== "MV");
@@ -8068,7 +8247,12 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
     setRatings(r => {
       const next = { ...r };
       const teamDelta = segUser > segOpp ? rnd(0.05, 0.18) : segUser < segOpp ? -rnd(0.05, 0.2) : rnd(-0.03, 0.05);
-      xi.forEach(p => { next[p.id] = clamp((next[p.id] ?? 6.0) + teamDelta + rnd(-0.05, 0.08), 3.5, 9.8); });
+      xi.forEach(p => {
+        const attrs = getAttrs(p);
+        const relevantQuality = p.pos === "MV" ? attrs.defending : p.pos === "FÖ" ? attrs.defending : p.pos === "MF" ? (attrs.passing + attrs.defending) / 2 : attrs.dribbling;
+        const qualityNudge = clamp((relevantQuality - 55) * 0.0018, -0.06, 0.08);
+        next[p.id] = clamp((next[p.id] ?? 6.0) + teamDelta + qualityNudge + rnd(-0.05, 0.08), 3.5, 9.8);
+      });
       scorerIds.forEach(id => { next[id] = clamp((next[id] ?? 6.0) + 0.45, 3.5, 9.8); });
       return next;
     });
@@ -8343,6 +8527,14 @@ function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onConti
   }
 
   // knockout phase (two-legged)
+  if (!cup.tie) {
+    return (
+      <div className="rise-in space-y-2.5">
+        <PaperCard><div className="text-sm text-center py-3" style={{ color: C.inkSoft }}>{cup.label} · {cup.roundName || "Väntar på lottning"}</div></PaperCard>
+        <button onClick={onBackToHome} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep }}>TILLBAKA</button>
+      </div>
+    );
+  }
   if (cup.tie.leg1 && cup.tie.leg === 2 && !cup.tie.leg2 && !cup.pendingReport) {
     const opp = clubs[cup.tie.oppId];
     const userClub = clubs[userClubId];
@@ -8429,6 +8621,7 @@ function CupStandingsPanel({ cup, clubs, userClubId }) {
     );
   }
 
+  if (!cup.tie) return <PaperCard><div className="text-sm text-center py-2" style={{ color: C.inkSoft }}>{cup.label} · {cup.roundName || "Väntar på nästa omgång"}</div></PaperCard>;
   const opp = clubs[cup.tie.oppId];
   const leg1Score = cup.tie.leg1 ? (cup.tie.userHomeLeg1 ? `${cup.tie.leg1.userGoals}–${cup.tie.leg1.oppGoals}` : `${cup.tie.leg1.oppGoals}–${cup.tie.leg1.userGoals}`) : null;
   return (
@@ -8586,7 +8779,7 @@ function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId,
   const domesticField = withSeededRandom(`${homeLeagueId}_domestic_${season}`, () => domesticCupField(homeLeagueId, clubs));
   const domesticDue = cupDueSchedule("domestic", domesticField.length);
   const domesticRevealed = domesticDue.filter(r => currentRound >= r).length;
-  const domesticRounds = seededResolveBracket(domesticField, clubs, `${homeLeagueId}_domestic_${season}_bracket`);
+  const domesticRounds = seededResolveBracket(domesticField, clubs, `${homeLeagueId}_domestic_${season}_bracket`, userClubId, domesticLive?.resultLog);
 
   // Use the real qualifier assignment (season 1) so this preview always matches what's actually
   // happening — previously this recomputed its own independent "top 16 by raw strength" split that
@@ -8611,7 +8804,7 @@ function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId,
   const cup1GroupResults = cup1Groups.map((g2, gi) => seededResolveGroup(g2, clubs, `cup1_${season}_group${gi}`, cup1GroupRevealed));
   const cup1Qualifiers = cup1GroupResults.flatMap(r => r.standings.slice(0, 2).map(row => row.id));
   const cup1QualifiersShuffled = withSeededRandom(`cup1_${season}_ko`, () => shuffle(cup1Qualifiers));
-  const cup1KnockoutRounds = seededResolveBracket(cup1QualifiersShuffled, clubs, `cup1_${season}_ko_bracket`);
+  const cup1KnockoutRounds = seededResolveBracket(cup1QualifiersShuffled, clubs, `cup1_${season}_ko_bracket`, userClubId, cup1Live?.resultLog);
   const cup1KoDue = cupDueSchedule("cup1knockout", 8);
   const cup1KoCheckpoints = [cup1KoDue[1], cup1KoDue[3], cup1KoDue[4]];
   const cup1KoRevealed = cup1GroupRevealed < 6 ? 0 : cup1KoCheckpoints.filter(r => currentRound >= r).length;
@@ -8619,7 +8812,7 @@ function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId,
   const cup2Due = cupDueSchedule("cup2", cup2Field.length);
   const cup2Checkpoints = [cup2Due[1], cup2Due[3], cup2Due[5], cup2Due[6]];
   const cup2Revealed = cup2Checkpoints.filter(r => currentRound >= r).length;
-  const cup2Rounds = seededResolveBracket(cup2Field, clubs, `cup2_${season}_bracket`);
+  const cup2Rounds = seededResolveBracket(cup2Field, clubs, `cup2_${season}_bracket`, userClubId, cup2Live?.resultLog);
 
   const leagueName = LEAGUES.find(l => l.id === homeLeagueId)?.name || homeLeagueId;
   return (
@@ -8801,6 +8994,84 @@ function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputat
           ))}
         </div>
       </PaperCard>
+    </div>
+  );
+}
+function MatchInsightsGuideView({ onBack }) {
+  const sections = [
+    {
+      title: "🏃 Grundstyrka: anfall & försvar",
+      body: "Varje spelares anfall/försvar viktas efter position — anfallare och mittfältare bidrar mest till lagets anfallsstyrka, försvarare och målvakt mest till försvarsstyrkan. En stark trupp på pappret räcker dock inte ensamt — hur de faktiskt presterar beror på allt nedan.",
+    },
+    {
+      title: "🎯 Position & passform",
+      body: "Att spela spelare på sina rätta positioner är ett av de enskilt största sätten att öka matchstyrkan — en spelare långt utanför sin position kan sänka laget upp till 25%. Träna en spelare mot en ny position (eller för att perfektionera en de redan har) i deras spelarprofil för att gradvis höja passformen ända upp mot 100%.",
+    },
+    {
+      title: "⚙️ Delegenskaper räknas — inte bara siffran",
+      body: "Två spelare med samma anfallssiffra kan ändå prestera olika i matcher, beroende på om deras avslut/passning/dribbling/fart/försvarsspel/fysik faktiskt matchar vad positionen kräver. En anfallare med genuint bra avslut och dribbling presterar bättre än en vars siffra bara är \"uppblåst\" av annat.",
+    },
+    {
+      title: "🔥 Stråkform",
+      body: "En spelares senaste matcher påverkar deras nästa insats — en spelare i strålande form presterar bättre än vad grundsiffrorna säger, medan en i svacka presterar sämre. Effekten kräver några matchers historik innan den slår in på riktigt.",
+    },
+    {
+      title: "⏱️ Matchmomentum",
+      body: "Ligger ni under sent i en jämn match trycker laget på hårdare offensivt, men blir samtidigt sårbarare defensivt. Leder ni istället sent håller laget igen och skyddar resultatet. Gäller bara i den sista tredjedelen av matchen och vid en realistisk poängskillnad.",
+    },
+    {
+      title: "🧠 Taktik & spelidé",
+      body: "Offensiv/defensiv grundtaktik samt spelidén (t.ex. kontringsfotboll eller possession) skiftar balansen mellan anfall och försvar. Byter ni taktik ofta tar det tid för laget att vänja sig — formationsvana byggs upp över tid och sänks vid täta ändringar.",
+    },
+    {
+      title: "🌧️ Väder & spelstil",
+      body: "Dåligt väder (regn, blåst, snöfall) sänker den totala målchansen — men tekniska, passningstunga lag drabbas extra hårt, medan fysiska, direkta lag klarar sig bättre relativt sett i tuffa förhållanden.",
+    },
+    {
+      title: "🔋 Uthållighet, ork & skaderisk",
+      body: "Ork töms i takt med matchbelastning, snabbare för spelare med låg uthållighet. Låg ork sänker prestationen direkt, och en tungt belastad spelare (många matcher tätt inpå varandra) löper också märkbart högre skaderisk — rotera truppen för att hålla nyckelspelare fräscha inför viktiga matcher.",
+    },
+    {
+      title: "👔 Personal & din managerprofil",
+      body: "Assisterande tränare minskar antalet gula/röda kort, målvaktstränare stärker försvaret, analytiker stärker anfallet, fystränare snabbar upp återhämtningen. Din egen taktik-attribut som manager ger också ett litet men märkbart lyft till hela laget.",
+    },
+    {
+      title: "🏟️ Hemmaplan & derby",
+      body: "Hemmalag har ett naturligt övertag. Lokala derbyn adderar extra volatilitet och kan trigga storform-effekten hos spelare som är starka i stora matcher — eller tvärtom tynga de som inte är det.",
+    },
+  ];
+  const tips = [
+    "Håll spelare på sina bästa positioner — flytta hellre truppen än att tvinga in någon där de inte hör hemma.",
+    "Träna upp passform i förväg, inte akut inför en stor match — det tar tid att bygga.",
+    "Rotera truppen mot slutet av en tät period med många matcher för att hålla ork uppe och skaderisk nere.",
+    "Undvik att byta taktik precis inför avgörande matcher — låt formationsvanan hinna byggas upp.",
+    "Kolla väderprognosen inför match — ett tekniskt lag kan behöva en mer direkt plan B en regnig kväll.",
+    "En trupp i god stråkform slår ofta en trupp med högre siffror men sämre form just nu.",
+  ];
+  return (
+    <div className="rise-in space-y-3">
+      <PaperCard>
+        <div className="text-lg font-display font-bold">Vad påverkar matchresultat?</div>
+        <div className="text-11 mt-1" style={{ color: C.inkSoft }}>En genomgång av allt som formar hur era matcher går, från din assisterande manager.</div>
+      </PaperCard>
+      {sections.map((s, i) => (
+        <PaperCard key={i}>
+          <div className="text-sm font-semibold">{s.title}</div>
+          <div className="text-11 mt-1.5" style={{ color: C.ink }}>{s.body}</div>
+        </PaperCard>
+      ))}
+      <PaperCard style={{ background: "rgba(201,154,62,0.1)", border: `1px solid ${C.gold}` }}>
+        <div className="text-sm font-semibold" style={{ color: "#B8862E" }}>💡 Tips för att maximera resultat</div>
+        <div className="mt-2 space-y-1.5">
+          {tips.map((t, i) => (
+            <div key={i} className="flex items-start gap-1.5 text-11" style={{ color: C.ink }}>
+              <span className="shrink-0" style={{ color: C.gold }}>•</span>
+              <span>{t}</span>
+            </div>
+          ))}
+        </div>
+      </PaperCard>
+      <button onClick={onBack} className="w-full py-3 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Tillbaka</button>
     </div>
   );
 }
@@ -9151,18 +9422,26 @@ function StatsLeagueView({ clubs, leagueId, division, userClubId, onBack }) {
   const [selectedLeagueId, setSelectedLeagueId] = useState(leagueId);
   const [selectedDivision, setSelectedDivision] = useState(division);
   const [statType, setStatType] = useState("goals");
+  const [competitionFilter, setCompetitionFilter] = useState("all");
   const countryName = LEAGUES.find(l => l.id === selectedLeagueId)?.name || "";
+
+  // "all" reads the season-wide combined totals (works for every club, AI included, since those have
+  // always been tracked). Per-competition views read the competition-specific fields — meaningful mainly
+  // for your own squad, since AI-vs-AI cup matches aren't simulated at individual-player detail.
+  const suffix = competitionFilter === "all" ? "" : `_${competitionFilter}`;
+  const goalsKey = `goals${suffix}`, assistsKey = `assists${suffix}`;
+  const yellowKey = `seasonYellowCards${suffix}`, redKey = `seasonRedCards${suffix}`;
 
   const players = [];
   Object.values(clubs).forEach(c => {
     if (c.league !== selectedLeagueId || c.division !== selectedDivision) return;
     (c.squad || []).forEach(p => {
-      const cards = (p.seasonYellowCards || 0) + (p.seasonRedCards || 0);
-      if (!(p.goals || 0) && !(p.assists || 0) && !cards) return;
-      players.push({ ...p, club: c, clubName: c.name, clubId: c.id, cards });
+      const cards = (p[yellowKey] || 0) + (p[redKey] || 0);
+      if (!(p[goalsKey] || 0) && !(p[assistsKey] || 0) && !cards) return;
+      players.push({ ...p, club: c, clubName: c.name, clubId: c.id, cards, displayGoals: p[goalsKey] || 0, displayAssists: p[assistsKey] || 0, displayYellow: p[yellowKey] || 0, displayRed: p[redKey] || 0 });
     });
   });
-  const sortKey = statType === "goals" ? "goals" : statType === "assists" ? "assists" : "cards";
+  const sortKey = statType === "goals" ? "displayGoals" : statType === "assists" ? "displayAssists" : "cards";
   const sorted = [...players].sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0)).slice(0, 25);
 
   return (
@@ -9187,6 +9466,12 @@ function StatsLeagueView({ clubs, leagueId, division, userClubId, onBack }) {
           <button key={key} onClick={() => setStatType(key)} className="py-1.5 rounded-xl text-11 font-semibold" style={statType === key ? { background: C.turf, color: C.paper } : { background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim }}>{label}</button>
         ))}
       </div>
+      <div className="flex gap-1.5 overflow-x-auto pb-1">
+        {[["all", "Alla tävlingar"], ["league", "Ligan"], ["domestic", "Inhemska cupen"], ["cup1", "Kimby Mästerskapet"], ["cup2", "Kimby Cupen"]].map(([key, label]) => (
+          <button key={key} onClick={() => setCompetitionFilter(key)} className="px-3 py-1.5 rounded-full text-10 font-semibold shrink-0" style={competitionFilter === key ? { background: C.gold, color: C.turfDeep } : { background: C.paperDim, color: C.inkSoft }}>{label}</button>
+        ))}
+      </div>
+      {competitionFilter !== "all" && <div className="text-9 px-1" style={{ color: C.inkSoft }}>Visar bara {competitionFilter === "league" ? "ligamatcher" : "denna cup"} — mest meningsfullt för din egen trupp, eftersom motståndarnas cupmatcher inte simuleras med individuell spelarstatistik.</div>}
       <PaperCard style={{ padding: 0 }}>
         {sorted.length === 0 ? (
           <div className="text-sm text-center py-6" style={{ color: C.inkSoft }}>Ingen statistik registrerad ännu den här säsongen.</div>
@@ -9198,8 +9483,8 @@ function StatsLeagueView({ clubs, leagueId, division, userClubId, onBack }) {
               <div className="text-sm font-semibold truncate">{p.name}</div>
               <div className="text-9 flex items-center gap-1" style={{ color: C.inkSoft }}><ClubJersey club={p.club} size={12} />{p.clubName}</div>
             </div>
-            <div className="font-mono text-base font-bold shrink-0" style={{ color: statType === "cards" ? (p.seasonRedCards > 0 ? C.loss : C.gold) : C.win }}>
-              {statType === "goals" ? p.goals || 0 : statType === "assists" ? p.assists || 0 : `${p.seasonYellowCards || 0}🟨${p.seasonRedCards ? ` ${p.seasonRedCards}🟥` : ""}`}
+            <div className="font-mono text-base font-bold shrink-0" style={{ color: statType === "cards" ? (p.displayRed > 0 ? C.loss : C.gold) : C.win }}>
+              {statType === "goals" ? p.displayGoals || 0 : statType === "assists" ? p.displayAssists || 0 : `${p.displayYellow || 0}🟨${p.displayRed ? ` ${p.displayRed}🟥` : ""}`}
             </div>
           </div>
         ))}
@@ -10824,6 +11109,20 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
             </div>
             <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Storform</div>
             <div className="text-10 font-bold mt-0.5" style={{ color: clutchFactor(player) >= 0.6 ? C.win : clutchFactor(player) <= -0.6 ? C.loss : C.inkSoft }}>{clutchLabel(clutchFactor(player))}</div>
+          </div>
+          <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
+            <div className="flex items-center justify-between">
+              <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: `${attrQualityColor(endurance(player))}22` }}>🔋</span>
+              <span className="font-mono text-11 font-bold" style={{ color: C.ink }}>{endurance(player)}</span>
+            </div>
+            <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Uthållighet</div>
+          </div>
+          <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
+            <div className="flex items-center justify-between">
+              <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: `${attrQualityColor(determination(player))}22` }}>🎓</span>
+              <span className="font-mono text-11 font-bold" style={{ color: C.ink }}>{determination(player)}</span>
+            </div>
+            <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Beslutsamhet</div>
           </div>
         </div>
         </PaperCard>
