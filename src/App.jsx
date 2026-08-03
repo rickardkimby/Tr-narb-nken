@@ -11380,12 +11380,15 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
         })()}
         <PaperCard>
         <div className="grid grid-cols-5 gap-1.5 text-center">
-          <div><div className="font-display text-lg">{careerApps}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Matcher</div></div>
-          <div><div className="font-display text-lg">{careerGoals}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Mål</div></div>
-          <div><div className="font-display text-lg">{careerAssists}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Assist</div></div>
+          <div><div className="font-display text-lg">{careerApps}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Matcher (karriär)</div></div>
+          <div><div className="font-display text-lg">{careerGoals}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Mål (karriär)</div></div>
+          <div><div className="font-display text-lg">{careerAssists}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Assist (karriär)</div></div>
           <div><div className="font-display text-lg">{recentAvgRating}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Snitt (5)</div></div>
           <div><div className="font-display text-lg">{avgRating}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Snitt (säsong)</div></div>
         </div>
+        {/* Career totals above include past seasons (seasonLog) — shown separately here so it's clear
+            why they won't match the current season's Statistikliga table, which only tracks this season. */}
+        <div className="mt-2 text-11 text-center" style={{ color: C.inkSoft }}>Denna säsong: {player.apps || 0} matcher · {player.goals || 0} mål · {player.assists || 0} assist</div>
         <div className="mt-3 flex items-center justify-between text-11" style={{ color: C.inkSoft }}>
           <span>Gula kort denna säsong: {player.yellowCards}/5</span>
         </div>
