@@ -1808,7 +1808,7 @@ function simulateCupMatchFinances(g, isHome, oppStrength, isDerby) {
   const incomeShop = g.arenaFacilities.shop * 10;
   return { attendance, arenaCapacity: arenaCapacityOf(g.dev, g.arenaStands), income: incomeTickets + incomeRestaurant + incomeShop, isAway: false };
 }
-function simulateCupMatchPlayerUpdates(xi, fullSquad, staff, tacticalSettings, difficulty, teamTalk, competition, scorerObjects, assistProviders, sentOffIds = []) {
+function simulateCupMatchPlayerUpdates(xi, fullSquad, staff, tacticalSettings, difficulty, teamTalk, competition, scorerObjects, assistProviders, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
   const scorers = scorerObjects;
   const suspField = SUSPENSION_FIELD[competition] || "suspendedDomestic";
   const yellowField = competition === "league" ? "yellowCards" : `yellowCards_${competition}`;
@@ -1816,7 +1816,7 @@ function simulateCupMatchPlayerUpdates(xi, fullSquad, staff, tacticalSettings, d
   const assistantLevel = staff?.assistant ? staff.assistant.level : 0;
   const difficultySettings = DIFFICULTY_SETTINGS[difficulty] || DIFFICULTY_SETTINGS.normal;
   const talkCardMult = (TEAM_TALK_OPTIONS[teamTalk] || TEAM_TALK_OPTIONS.neutral).cardMult;
-  const refereeStrictness = rnd(0.75, 1.3);
+  // Same referee, same strictness, as the live red-card rolls during the match (see LiveMatchView).
   const tacticCardMult = combinedTacticalMods(tacticalSettings).cardMult * talkCardMult * refereeStrictness;
   let injuredPlayer = null;
   const cardEvents = {};
@@ -2566,7 +2566,12 @@ function developmentDeltas(pl, rating) {
   const gap = potential - overall;
   const gapFactor = clamp(gap / 15, -0.6, 1.4); // slows near potential, can even reverse slightly if over it
   const baseDelta = rating >= 7.4 ? rnd(0.1, 0.4) : rating < 5.4 ? -rnd(0.05, 0.25) : 0;
-  const growthDelta = baseDelta > 0 ? baseDelta * Math.max(gapFactor, 0.12) : baseDelta;
+  // Still-developing players (under 30) keep a guaranteed sliver of growth even once they've nudged past
+  // their rated ceiling on a good day — they're not done growing yet. Past that, a good individual
+  // performance no longer overrides the underlying trend: an older player who's exceeded potential can
+  // genuinely get worse from here, not just plateau at a floor.
+  const growthFloor = pl.age < 30 ? 0.12 : -0.6;
+  const growthDelta = baseDelta > 0 ? baseDelta * Math.max(gapFactor, growthFloor) : baseDelta;
   const ageDecline = pl.age >= 31 ? -rnd(0.02, 0.05) * (pl.age - 30) : 0;
   const total = growthDelta + ageDecline;
   const attackShare = pl.pos === "AN" ? 0.65 : pl.pos === "MF" ? 0.5 : pl.pos === "FÖ" ? 0.3 : 0.2;
@@ -4021,7 +4026,7 @@ function setupCup(type, base) {
     }));
   }
 
-  function finalizeMatch(p, secondHalfXiIds, subText, userGoals, oppGoals, lateGameNote, scoredByIds, sentOffIds = []) {
+  function finalizeMatch(p, secondHalfXiIds, subText, userGoals, oppGoals, lateGameNote, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
     const newClubs = g.clubs;
     const staff = g.staff;
     const analystImpactDelta = p.analystImpactDelta || 0;
@@ -4073,7 +4078,8 @@ function setupCup(type, base) {
     // card rolls (assisterande tränare lowers chance, taktiska val kan höja/sänka)
     const assistantLevel = staff.assistant ? staff.assistant.level : 0;
     const talkCardMult = (TEAM_TALK_OPTIONS[g.teamTalk] || TEAM_TALK_OPTIONS.neutral).cardMult;
-    const refereeStrictness = rnd(0.75, 1.3);
+    // Same referee, same strictness, as the live red-card rolls during the match (see LiveMatchView) —
+    // no longer a second, independent roll for the post-match yellow cards and the "domaren..." commentary.
     const tacticCardMult = combinedTacticalMods(g.tacticalSettings).cardMult * talkCardMult * refereeStrictness;
     const cardEvents = {};
     let assistantImpactDelta = 0;
@@ -4559,7 +4565,7 @@ function setupCup(type, base) {
     const pending = { oppId: userOppId, oppName: opp.name, oppStrength: opp.strength, userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "domesticRound", winners } }));
   }
-  function finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = []) {
+  function finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
     const p = g.pendingRound, ctx = g.pendingCupContext;
     const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
     let penalties = null, userWon, shootout = null;
@@ -4574,7 +4580,7 @@ function setupCup(type, base) {
       : pickScorer(xi, userGoals);
     const assistProviders = scorerObjects.map(s => pickAssist(xi, s, g.setPieceTakers));
     const scorers = scorerObjects.map(pl => pl.name);
-    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, "domestic", scorerObjects, assistProviders, sentOffIds);
+    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, "domestic", scorerObjects, assistProviders, sentOffIds, refereeStrictness);
     if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i cupmatchen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
     const ratings = ratingsForResult(xi, scorers, userWon ? "win" : "loss", assistProviders.map(a => a?.name), oppGoals);
     const winnerId = userWon ? g.userClubId : p.oppId;
@@ -4626,7 +4632,7 @@ function setupCup(type, base) {
     const pending = { oppId: oppId2, oppName: opp.name, oppStrength: opp.strength, userIsHome, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "groupMatch", resolvedOthers } }));
   }
-  function finalizeGroupMatch(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = []) {
+  function finalizeGroupMatch(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
     const p = g.pendingRound, ctx = g.pendingCupContext;
     const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
     const result = userGoals > oppGoals ? "win" : userGoals < oppGoals ? "loss" : "draw";
@@ -4649,7 +4655,7 @@ function setupCup(type, base) {
       : pickScorer(xi, userGoals);
     const assistProviders = scorerObjects.map(s => pickAssist(xi, s, g.setPieceTakers));
     const scorers = scorerObjects.map(pl => pl.name);
-    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, "cup1", scorerObjects, assistProviders, sentOffIds);
+    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, "cup1", scorerObjects, assistProviders, sentOffIds, refereeStrictness);
     if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i cupmatchen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
     const ratings = ratingsForResult(xi, scorers, result, assistProviders.map(a => a?.name), oppGoals);
     const finances = simulateCupMatchFinances(g, p.userIsHome, p.oppStrength, false);
@@ -4694,7 +4700,7 @@ function setupCup(type, base) {
     const pending = { oppId: cup.tie.oppId, oppName: opp.name, oppStrength: opp.strength, userIsHome: userIsHomeThisLeg, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "leg", cupType, legNum: cup.tie.leg } }));
   }
-  function finalizeCupLeg(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = []) {
+  function finalizeCupLeg(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
     const p = g.pendingRound, ctx = g.pendingCupContext;
     const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
     const result = userGoals > oppGoals ? "win" : userGoals < oppGoals ? "loss" : "draw";
@@ -4703,7 +4709,7 @@ function setupCup(type, base) {
       : pickScorer(xi, userGoals);
     const assistProviders = scorerObjects.map(s => pickAssist(xi, s, g.setPieceTakers));
     const scorers = scorerObjects.map(pl => pl.name);
-    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, ctx.cupType, scorerObjects, assistProviders, sentOffIds);
+    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, ctx.cupType, scorerObjects, assistProviders, sentOffIds, refereeStrictness);
     if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i cupmatchen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
     const ratings = ratingsForResult(xi, scorers, result, assistProviders.map(a => a?.name), oppGoals);
     const legResult = { userGoals, oppGoals, userWon: userGoals > oppGoals, ratings };
@@ -4793,7 +4799,7 @@ function setupCup(type, base) {
     const pending = { oppId: cup.finalOpponentId, oppName: opp.name, oppStrength: opp.strength, userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "final", cupType } }));
   }
-  function finalizeCupFinal(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = []) {
+  function finalizeCupFinal(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
     const p = g.pendingRound, ctx = g.pendingCupContext;
     const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
     let penalties = null, userWon, shootout = null;
@@ -4822,7 +4828,7 @@ function setupCup(type, base) {
       : pickScorer(xi, userGoals);
     const assistProviders = scorerObjects.map(s => pickAssist(xi, s, g.setPieceTakers));
     const scorers = scorerObjects.map(pl => pl.name);
-    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, ctx.cupType, scorerObjects, assistProviders, sentOffIds);
+    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, ctx.cupType, scorerObjects, assistProviders, sentOffIds, refereeStrictness);
     if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i finalen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
     const ratings = ratingsForResult(xi, scorers, result, assistProviders.map(a => a?.name), oppGoals);
     const finances = simulateCupMatchFinances(g, p.userIsHome, p.oppStrength, false);
@@ -6128,13 +6134,13 @@ function setupCup(type, base) {
                 <LiveMatchView pending={g.pendingRound} userClub={userClub} oppClub={g.clubs[g.pendingRound.oppId]} squad={g.squad}
                   tactic={g.tactic} spelide={g.spelide} tacticalSettings={g.tacticalSettings} lineupCells={g.lineupCells} staff={g.staff}
                   formationFamiliarity={g.formationFamiliarity} teamTalk={g.teamTalk}
-                  onFinalize={(secondHalfXiIds, subText, userGoals, oppGoals, note, scoredByIds, sentOffIds) => {
+                  onFinalize={(secondHalfXiIds, subText, userGoals, oppGoals, note, scoredByIds, sentOffIds, refereeStrictness) => {
                     const ctxType = g.pendingCupContext?.type;
-                    if (ctxType === "domesticRound") finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds);
-                    else if (ctxType === "groupMatch") finalizeGroupMatch(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds);
-                    else if (ctxType === "leg") finalizeCupLeg(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds);
-                    else if (ctxType === "final") finalizeCupFinal(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds);
-                    else finalizeMatch(g.pendingRound, secondHalfXiIds, subText, userGoals, oppGoals, note, scoredByIds, sentOffIds);
+                    if (ctxType === "domesticRound") finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds, refereeStrictness);
+                    else if (ctxType === "groupMatch") finalizeGroupMatch(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds, refereeStrictness);
+                    else if (ctxType === "leg") finalizeCupLeg(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds, refereeStrictness);
+                    else if (ctxType === "final") finalizeCupFinal(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds, refereeStrictness);
+                    else finalizeMatch(g.pendingRound, secondHalfXiIds, subText, userGoals, oppGoals, note, scoredByIds, sentOffIds, refereeStrictness);
                   }} />
               ) : g.view === "result" && g.lastMatchReport ? (
                 <MatchResultView report={g.lastMatchReport} userTeamName={userClub.name} competitionLabel="Ligamatch"
@@ -6510,6 +6516,13 @@ function excelRowsToWorld(clubRows, playerRows, youthRows) {
       value: yValue, wage: num(row["Lön"]), nationality: String(row.Nationalitet || "").trim(),
       endurance: num(row.Uthållighet), determination: num(row.Beslutsamhet),
     });
+  });
+  // Potential is a ceiling — a player already rated above it on their actual position-weighted attributes
+  // is a contradiction the sheet can introduce (seen in an imported database: ~26% of players had this),
+  // and it would otherwise quietly break development math downstream that assumes potential is the cap.
+  Object.values(world).forEach(club => {
+    club.squad.forEach(p => { if (p.potential !== undefined) p.potential = Math.max(p.potential, overallOf(p)); });
+    club.youthSquad.forEach(y => { if (y.potential !== undefined) y.potential = Math.max(y.potential, overallOf(y)); });
   });
   return world;
 }
@@ -8535,7 +8548,7 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
   }
 
   function handleFinish() {
-    onFinalize(currentXiIds, subLog.length ? subLog.join("; ") : null, userGoals, oppGoals, null, scoredByIds, sentOffIds);
+    onFinalize(currentXiIds, subLog.length ? subLog.join("; ") : null, userGoals, oppGoals, null, scoredByIds, sentOffIds, refereeStrictness);
   }
 
   const xiPlayers = squad.filter(p => currentXiIds.includes(p.id));
