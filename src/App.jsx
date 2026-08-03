@@ -6435,6 +6435,14 @@ function excelRowsToWorld(clubRows, playerRows, youthRows) {
       clutchFactor: num(row.Storform), endurance: num(row.Uthållighet), determination: num(row.Beslutsamhet),
     });
   });
+  // Match strength must reflect what's actually on the pitch, not a separate hand-set number that can
+  // drift out of sync with the imported squad (e.g. a stacked "storklubb" whose sheet-level Styrka was
+  // never updated to match its players). Recompute it from the real squad, same as freshly generated
+  // clubs — the sheet's Styrka only survives as a fallback for a club with no importable squad.
+  Object.values(world).forEach(club => {
+    if (club.squad.length) club.strength = deriveClubStrength(club.squad, 0);
+    else if (club.strength === undefined) club.strength = 50;
+  });
   (youthRows || []).forEach(row => {
     const clubId = String(row.KlubbID || "").trim();
     if (!world[clubId]) return;
