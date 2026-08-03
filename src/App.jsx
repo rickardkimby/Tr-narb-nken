@@ -911,10 +911,15 @@ function makePlayer(pos, homeCountry, forcedSpecificPosition, archetype, divisio
   const nationality = homeCountry ? randomDomesticNationality(homeCountry) : pick(NATIONALITY_KEYS);
   const age = youthSlot ? rndInt(18, 21) : rndInt(18, 33);
   const finalValue = Math.max(40, value);
-  const overall = (attack + defense) / 2;
+  const id = uid();
+  // Potential is a ceiling — must never sit below the player's actual position-weighted overall, not
+  // the naive attack/defense average. Uses the real id so the sub-attribute jitter matches exactly what
+  // will later be computed for this same player — a preview computed without the real id would roll
+  // different jitter and could let the real overall creep past the potential set here.
+  const overall = overallOf({ id, pos, attack, defense });
   const ageRoom = youthSlot ? rndInt(16, 28) : age <= 21 ? rndInt(8, 22) : age <= 25 ? rndInt(3, 12) : age <= 29 ? rndInt(0, 5) : 0;
-  const potential = clamp(Math.round(overall + ageRoom), Math.round(overall), 99);
-  return { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition: forcedSpecificPosition || randomSpecificPosition(pos), attack, defense, potential, value: finalValue, wage: computeWage(finalValue, attack, defense), contractYears: rndInt(1, 4), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, personality: pick(PERSONALITIES), apps: 0, goals: 0, assists: 0, seasonLog: [], ratingSum: 0 };
+  const potential = clamp(Math.round(overall + ageRoom), overall, 99);
+  return { id, name: randomPlayerName(nationality), nationality, age, pos, specificPosition: forcedSpecificPosition || randomSpecificPosition(pos), attack, defense, potential, value: finalValue, wage: computeWage(finalValue, attack, defense), contractYears: rndInt(1, 4), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, personality: pick(PERSONALITIES), apps: 0, goals: 0, assists: 0, seasonLog: [], ratingSum: 0 };
 }
 function distributeSpecificPositions(pos, count) {
   if (pos !== "FÖ" && pos !== "MF") return Array.from({ length: count }, () => randomSpecificPosition(pos));
@@ -1011,7 +1016,13 @@ function generateWorldPoolPlayer(region) {
   const value = Math.max(50, Math.round((((attack + defense) / 2) * 7.5 * bias.priceMult + rndInt(-20, 30)) * 1.05));
   const nationality = bias.nationality || pick(EUROPEAN_NATIONALITIES);
   const age = rndInt(18, 32);
-  return { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition: randomSpecificPosition(pos), attack, defense, potential: clamp(Math.round((attack + defense) / 2 + rndInt(0, 12)), 20, 96), value, wage: computeWage(value, attack, defense), region, contractYears: rndInt(1, 4), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, apps: 0, goals: 0, assists: 0, ratingSum: 0 };
+  const player = { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition: randomSpecificPosition(pos), attack, defense, value, wage: computeWage(value, attack, defense), region, contractYears: rndInt(1, 4), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, apps: 0, goals: 0, assists: 0, ratingSum: 0 };
+  // Potential is a ceiling, so it can never sit below the player's actual current overall — computed the
+  // same position-weighted way "overall" itself is, not a naive attack/defense average that can badly
+  // under-count a lopsided player (e.g. a striker whose weak defense barely factors into their real overall).
+  const currentOverall = overallOf(player);
+  player.potential = clamp(currentOverall + rndInt(0, 12), currentOverall, 96);
+  return player;
 }
 // The full "Övriga världen" pool — counts per region reflect roughly how much of the real footballing
 // world each region represents outside the leagues actually simulated in the game.
@@ -1179,10 +1190,14 @@ function generateSyntheticScoutCandidate(mission, scoutLevel, clubs, division) {
     const nationality = pick(NATIONALITY_KEYS);
     const clubId = pickOwningClub(clubs, (attack + defense) / 2);
     const ageRoom = clamp((26 - age) * 2.2, 0, 22);
-    const potential = clamp(Math.round((attack + defense) / 2 + ageRoom + rnd(-4, 8)), Math.round((attack + defense) / 2), 99);
+    // Potential is a ceiling — computed using the real id so the sub-attribute jitter matches exactly
+    // what will later be shown for this same player.
+    const candidateId = uid();
+    const currentOverall = overallOf({ id: candidateId, pos, attack, defense });
+    const potential = clamp(Math.round(currentOverall + ageRoom + rnd(-4, 8)), currentOverall, 99);
     if (mission.minPotential && potential < mission.minPotential) { if (tries < maxTries - 1) continue; }
     const specificPosition = mission.sideFilter ? sideFilterPosition(pos, mission.sideFilter) : randomSpecificPosition(pos);
-    const candidate = { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition, attack, defense, potential, value, wage: mission.maxWage ? Math.min(wage, mission.maxWage) : wage, clubId, contractYears: rndInt(1, 4), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, personality: pick(PERSONALITIES), apps: 0, goals: 0, assists: 0, seasonLog: [], ratingSum: 0 };
+    const candidate = { id: candidateId, name: randomPlayerName(nationality), nationality, age, pos, specificPosition, attack, defense, potential, value, wage: mission.maxWage ? Math.min(wage, mission.maxWage) : wage, clubId, contractYears: rndInt(1, 4), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, personality: pick(PERSONALITIES), apps: 0, goals: 0, assists: 0, seasonLog: [], ratingSum: 0 };
     if (activeAttrKeys.length) {
       const attrs = getAttrs(candidate);
       const meetsAll = activeAttrKeys.every(k => attrs[k] >= attrFilters[k]);
@@ -3355,31 +3370,57 @@ const DOMESTIC_PRIZES = { participation: 15, quarterfinal: 70, semifinal: 150, r
 
 // ---------- Continental qualification ----------
 function buildSeason1Qualifiers(clubs) {
-  // Hand-picked season-1 qualifiers, based on the real 2000/2001 Champions League and UEFA Cup fields —
-  // mapped onto this game's fictional club names. Two real clubs (Kaiserslautern, Sedan) only exist as
-  // Division 2/3 clubs in this game's database, so they're swapped for a comparable Division 1 side.
-  const CUP1_IDS = {
-    england: ["eng7", "eng4", "eng11"], // Trafford United (Man Utd), North London Gunners (Arsenal), Elland Whites (Leeds)
-    italy: ["ita4", "ita14", "ita2"], // Piemonte Bianconeri (Juventus), Laziale Capitolina (Lazio), Milano 1899 (Milan)
-    spain: ["esp1", "esp2", "esp11", "esp5"], // CF Madrid, Deportivo Barcelona, Turia Valencia, UD Santander (sub for Deportivo La Coruña)
-    france: ["fra1", "fra4", "fra3"], // FC Paris (PSG), AS Monégasque (Monaco), Rhône Lyonnais (Lyon)
-    germany: ["ger4", "ger14", "ger1"], // Leverkusen Werkself, Elbe Hamburg, München 1900 (Bayern)
+  // Hand-picked season-1 qualifiers, based on the real 2000/2001 Champions League and UEFA Cup fields.
+  // Matched by recognizable NAME patterns rather than hardcoded club IDs — a custom or imported database
+  // can freely use its own KlubbID scheme, so matching on the name (which stays recognizable whether it's
+  // the default fictional name or a renamed real club name) is what actually makes this reliable.
+  // Order matters within each league: more specific patterns (e.g. "nerazzurri"/"inter") are checked
+  // before more generic ones (e.g. "milan") so a club can't be claimed by the wrong entry.
+  const CUP1_PATTERNS = {
+    england: [["trafford", "manchester united", "man utd", "man united"], ["north london", "arsenal", "gunners"], ["elland", "leeds"]],
+    italy: [["piemonte", "juventus", "juve"], ["laziale", "lazio"], ["milano 1899", "ac milan", "milan"]],
+    spain: [["cf madrid", "real madrid"], ["deportivo barcelona", "barcelona", "barca"], ["turia", "valencia"], ["santander", "deportivo la coru", "la coruna", "la coruña"]],
+    france: [["fc paris", "psg", "paris saint"], ["monegasque", "monaco"], ["rhone", "lyonnais", "lyon"]],
+    germany: [["leverkusen"], ["elbe hamburg", "hamburg", "hsv"], ["münchen 1900", "munchen", "münchen", "bayern"]],
   };
-  const CUP2_IDS = {
-    england: ["eng1", "eng8", "eng13"], // Liverpool Athletic, Stamford Athletic (Chelsea), Villa Claret (Aston Villa)
-    italy: ["ita3", "ita20", "ita9", "ita1"], // Milano Nerazzurri (Inter), Parma Ducale, Udine Sportiva, Roma 1927
-    spain: ["esp17", "esp15", "esp16"], // Osasuna Rojillo (sub for Alavés), Célticos Vigo (Celta Vigo), Periquito Espanyol
-    france: ["fra13", "fra15", "fra12"], // Sang et Or Lens (sub for Sedan), Nantais Canaris (Nantes), Gironde Bordeaux
-    germany: ["ger11", "ger19", "ger18"], // Weser Bremen, Rheinhessen Mainz (sub for Kaiserslautern), Neckar Stuttgart
+  const CUP2_PATTERNS = {
+    england: [["liverpool"], ["stamford", "chelsea"], ["villa claret", "aston villa"]],
+    italy: [["nerazzurri", "inter milan", "inter"], ["parma"], ["udine", "udinese"], ["roma 1927", "as roma", "roma"]],
+    spain: [["osasuna", "alav"], ["celticos", "celta"], ["periquito", "espanyol"]],
+    france: [["sang et or", "lens", "sedan"], ["nantais", "nantes"], ["gironde", "bordeaux"]],
+    germany: [["weser", "bremen", "werder"], ["rheinhessen", "mainz", "kaiserslautern", "lautern"], ["neckar", "stuttgart"]],
   };
+  function matchByPatterns(leagueClubs, patternGroups, exclude) {
+    const claimed = new Set(exclude);
+    const result = [];
+    patternGroups.forEach(patterns => {
+      const found = leagueClubs.find(c => !claimed.has(c.id) && patterns.some(p => c.name.toLowerCase().includes(p)));
+      if (found) { result.push(found.id); claimed.add(found.id); }
+    });
+    return result;
+  }
   const cup1List = [], cup2List = [];
   LEAGUES.forEach(l => {
-    cup1List.push(...(CUP1_IDS[l.id] || []).filter(id => clubs[id]));
-    cup2List.push(...(CUP2_IDS[l.id] || []).filter(id => clubs[id]));
+    const leagueClubs = Object.values(clubs).filter(c => c.league === l.id && c.division === 1);
+    const c1 = matchByPatterns(leagueClubs, CUP1_PATTERNS[l.id] || [], []);
+    const c2 = matchByPatterns(leagueClubs, CUP2_PATTERNS[l.id] || [], c1);
+    // If name-matching came up short for this league (e.g. a heavily customized database with
+    // unrecognizable names), fall back to the strongest remaining Division 1 sides from that league.
+    const targetC1 = (CUP1_PATTERNS[l.id] || []).length, targetC2 = (CUP2_PATTERNS[l.id] || []).length;
+    if (c1.length < targetC1) {
+      const remaining = leagueClubs.filter(c => !c1.includes(c.id) && !c2.includes(c.id)).sort((a, b) => b.strength - a.strength);
+      for (const c of remaining) { if (c1.length >= targetC1) break; c1.push(c.id); }
+    }
+    if (c2.length < targetC2) {
+      const remaining = leagueClubs.filter(c => !c1.includes(c.id) && !c2.includes(c.id)).sort((a, b) => b.strength - a.strength);
+      for (const c of remaining) { if (c2.length >= targetC2) break; c2.push(c.id); }
+    }
+    cup1List.push(...c1);
+    cup2List.push(...c2);
   });
-  // Safety net in case any league is short on clubs — top up from the strongest remaining Division 1 sides.
+  // Global safety net in case any league is short on Division 1 clubs entirely.
   if (cup1List.length < 16) {
-    const remaining = Object.values(clubs).filter(c => c.division === 1 && !cup1List.includes(c.id)).sort((a, b) => b.strength - a.strength);
+    const remaining = Object.values(clubs).filter(c => c.division === 1 && !cup1List.includes(c.id) && !cup2List.includes(c.id)).sort((a, b) => b.strength - a.strength);
     for (const c of remaining) { if (cup1List.length >= 16) break; cup1List.push(c.id); }
   }
   if (cup2List.length < 16) {
