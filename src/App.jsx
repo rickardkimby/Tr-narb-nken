@@ -1808,7 +1808,7 @@ function simulateCupMatchFinances(g, isHome, oppStrength, isDerby) {
   const incomeShop = g.arenaFacilities.shop * 10;
   return { attendance, arenaCapacity: arenaCapacityOf(g.dev, g.arenaStands), income: incomeTickets + incomeRestaurant + incomeShop, isAway: false };
 }
-function simulateCupMatchPlayerUpdates(xi, fullSquad, staff, tacticalSettings, difficulty, teamTalk, competition, scorerObjects, assistProviders) {
+function simulateCupMatchPlayerUpdates(xi, fullSquad, staff, tacticalSettings, difficulty, teamTalk, competition, scorerObjects, assistProviders, sentOffIds = []) {
   const scorers = scorerObjects;
   const suspField = SUSPENSION_FIELD[competition] || "suspendedDomestic";
   const yellowField = competition === "league" ? "yellowCards" : `yellowCards_${competition}`;
@@ -1820,7 +1820,11 @@ function simulateCupMatchPlayerUpdates(xi, fullSquad, staff, tacticalSettings, d
   const tacticCardMult = combinedTacticalMods(tacticalSettings).cardMult * talkCardMult * refereeStrictness;
   let injuredPlayer = null;
   const cardEvents = {};
+  // Already sent off live (see LiveMatchView) — record it here instead of rolling a second, independent
+  // red card for the same player.
+  (sentOffIds || []).forEach(id => { cardEvents[id] = "red"; });
   xi.forEach(pl => {
+    if (cardEvents[pl.id] === "red") return;
     const attrs = getAttrs(pl);
     const staminaRisk = clamp((70 - (pl.stamina ?? 100)) / 700, 0, 0.07);
     const chance = clamp((0.045 - attrs.physical / 2200 - physioLevel * 0.003 + staminaRisk) * difficultySettings.injuryMult * injuryProneMult(pl), 0.005, 0.12);
@@ -1838,7 +1842,12 @@ function simulateCupMatchPlayerUpdates(xi, fullSquad, staff, tacticalSettings, d
     // Anyone still serving a suspension in THIS competition has it tick down by one now that a match
     // in this competition has been played, regardless of whether they personally featured.
     const tickedSuspension = Math.max(0, (pl[suspField] || 0) - (xiIds.has(pl.id) ? 0 : 1));
-    if (!xiIds.has(pl.id)) return pl[suspField] > 0 ? { ...pl, [suspField]: tickedSuspension } : pl;
+    if (!xiIds.has(pl.id)) {
+      // Sent off live but subbed out before this helper's `xi` snapshot was taken — the red card (and its
+      // suspension) still needs to land even though the normal per-match update loop below won't see them.
+      if (cardEvents[pl.id] === "red") return { ...pl, [suspField]: (pl[suspField] || 0) + rndInt(1, 2), seasonRedCards: (pl.seasonRedCards || 0) + 1 };
+      return pl[suspField] > 0 ? { ...pl, [suspField]: tickedSuspension } : pl;
+    }
     const goals = scorers.filter(s => s.id === pl.id).length;
     const assists = assistProviders.filter(a => a && a.id === pl.id).length;
     const rating = clamp(6.0 + rnd(-0.6, 0.6) + goals * 1.1 + assists * 0.5, 3.5, 9.8);
@@ -4012,7 +4021,7 @@ function setupCup(type, base) {
     }));
   }
 
-  function finalizeMatch(p, secondHalfXiIds, subText, userGoals, oppGoals, lateGameNote, scoredByIds) {
+  function finalizeMatch(p, secondHalfXiIds, subText, userGoals, oppGoals, lateGameNote, scoredByIds, sentOffIds = []) {
     const newClubs = g.clubs;
     const staff = g.staff;
     const analystImpactDelta = p.analystImpactDelta || 0;
@@ -4068,7 +4077,11 @@ function setupCup(type, base) {
     const tacticCardMult = combinedTacticalMods(g.tacticalSettings).cardMult * talkCardMult * refereeStrictness;
     const cardEvents = {};
     let assistantImpactDelta = 0;
+    // A player already sent off live (see LiveMatchView) already has their red card — record it here
+    // for the suspension logic below without rolling for a second, independent one.
+    (sentOffIds || []).forEach(id => { cardEvents[id] = "red"; });
     unionXi.forEach(pl => {
+      if (cardEvents[pl.id] === "red") return;
       const personalityCardMult = pl.personality === "Problemspelare" ? 1.6 : 1;
       const positionCardMult = pl.pos === "MV" ? 0.15 : pl.pos === "FÖ" ? 1.4 : pl.pos === "MF" ? 1.1 : 0.7;
       const yellowChance = clamp((0.09 - assistantLevel * 0.008) * tacticCardMult * personalityCardMult * positionCardMult, 0.005, 0.24);
@@ -4546,7 +4559,7 @@ function setupCup(type, base) {
     const pending = { oppId: userOppId, oppName: opp.name, oppStrength: opp.strength, userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "domesticRound", winners } }));
   }
-  function finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds) {
+  function finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = []) {
     const p = g.pendingRound, ctx = g.pendingCupContext;
     const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
     let penalties = null, userWon, shootout = null;
@@ -4561,7 +4574,7 @@ function setupCup(type, base) {
       : pickScorer(xi, userGoals);
     const assistProviders = scorerObjects.map(s => pickAssist(xi, s, g.setPieceTakers));
     const scorers = scorerObjects.map(pl => pl.name);
-    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, "domestic", scorerObjects, assistProviders);
+    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, "domestic", scorerObjects, assistProviders, sentOffIds);
     if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i cupmatchen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
     const ratings = ratingsForResult(xi, scorers, userWon ? "win" : "loss", assistProviders.map(a => a?.name), oppGoals);
     const winnerId = userWon ? g.userClubId : p.oppId;
@@ -4613,7 +4626,7 @@ function setupCup(type, base) {
     const pending = { oppId: oppId2, oppName: opp.name, oppStrength: opp.strength, userIsHome, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "groupMatch", resolvedOthers } }));
   }
-  function finalizeGroupMatch(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds) {
+  function finalizeGroupMatch(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = []) {
     const p = g.pendingRound, ctx = g.pendingCupContext;
     const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
     const result = userGoals > oppGoals ? "win" : userGoals < oppGoals ? "loss" : "draw";
@@ -4636,7 +4649,7 @@ function setupCup(type, base) {
       : pickScorer(xi, userGoals);
     const assistProviders = scorerObjects.map(s => pickAssist(xi, s, g.setPieceTakers));
     const scorers = scorerObjects.map(pl => pl.name);
-    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, "cup1", scorerObjects, assistProviders);
+    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, "cup1", scorerObjects, assistProviders, sentOffIds);
     if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i cupmatchen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
     const ratings = ratingsForResult(xi, scorers, result, assistProviders.map(a => a?.name), oppGoals);
     const finances = simulateCupMatchFinances(g, p.userIsHome, p.oppStrength, false);
@@ -4681,7 +4694,7 @@ function setupCup(type, base) {
     const pending = { oppId: cup.tie.oppId, oppName: opp.name, oppStrength: opp.strength, userIsHome: userIsHomeThisLeg, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "leg", cupType, legNum: cup.tie.leg } }));
   }
-  function finalizeCupLeg(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds) {
+  function finalizeCupLeg(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = []) {
     const p = g.pendingRound, ctx = g.pendingCupContext;
     const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
     const result = userGoals > oppGoals ? "win" : userGoals < oppGoals ? "loss" : "draw";
@@ -4690,7 +4703,7 @@ function setupCup(type, base) {
       : pickScorer(xi, userGoals);
     const assistProviders = scorerObjects.map(s => pickAssist(xi, s, g.setPieceTakers));
     const scorers = scorerObjects.map(pl => pl.name);
-    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, ctx.cupType, scorerObjects, assistProviders);
+    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, ctx.cupType, scorerObjects, assistProviders, sentOffIds);
     if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i cupmatchen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
     const ratings = ratingsForResult(xi, scorers, result, assistProviders.map(a => a?.name), oppGoals);
     const legResult = { userGoals, oppGoals, userWon: userGoals > oppGoals, ratings };
@@ -4780,7 +4793,7 @@ function setupCup(type, base) {
     const pending = { oppId: cup.finalOpponentId, oppName: opp.name, oppStrength: opp.strength, userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "final", cupType } }));
   }
-  function finalizeCupFinal(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds) {
+  function finalizeCupFinal(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = []) {
     const p = g.pendingRound, ctx = g.pendingCupContext;
     const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
     let penalties = null, userWon, shootout = null;
@@ -4809,7 +4822,7 @@ function setupCup(type, base) {
       : pickScorer(xi, userGoals);
     const assistProviders = scorerObjects.map(s => pickAssist(xi, s, g.setPieceTakers));
     const scorers = scorerObjects.map(pl => pl.name);
-    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, ctx.cupType, scorerObjects, assistProviders);
+    const { newSquad, injuredPlayer } = simulateCupMatchPlayerUpdates(xi, g.squad, g.staff, g.tacticalSettings, g.difficulty, g.teamTalk, ctx.cupType, scorerObjects, assistProviders, sentOffIds);
     if (injuredPlayer) pushNews(`${injuredPlayer.name} skadades i finalen — borta i ca ${newSquad.find(pl => pl.id === injuredPlayer.id)?.injuryWeeks} omgångar.`, "Skada");
     const ratings = ratingsForResult(xi, scorers, result, assistProviders.map(a => a?.name), oppGoals);
     const finances = simulateCupMatchFinances(g, p.userIsHome, p.oppStrength, false);
@@ -6115,13 +6128,13 @@ function setupCup(type, base) {
                 <LiveMatchView pending={g.pendingRound} userClub={userClub} oppClub={g.clubs[g.pendingRound.oppId]} squad={g.squad}
                   tactic={g.tactic} spelide={g.spelide} tacticalSettings={g.tacticalSettings} lineupCells={g.lineupCells} staff={g.staff}
                   formationFamiliarity={g.formationFamiliarity} teamTalk={g.teamTalk}
-                  onFinalize={(secondHalfXiIds, subText, userGoals, oppGoals, note, scoredByIds) => {
+                  onFinalize={(secondHalfXiIds, subText, userGoals, oppGoals, note, scoredByIds, sentOffIds) => {
                     const ctxType = g.pendingCupContext?.type;
-                    if (ctxType === "domesticRound") finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds);
-                    else if (ctxType === "groupMatch") finalizeGroupMatch(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds);
-                    else if (ctxType === "leg") finalizeCupLeg(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds);
-                    else if (ctxType === "final") finalizeCupFinal(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds);
-                    else finalizeMatch(g.pendingRound, secondHalfXiIds, subText, userGoals, oppGoals, note, scoredByIds);
+                    if (ctxType === "domesticRound") finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds);
+                    else if (ctxType === "groupMatch") finalizeGroupMatch(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds);
+                    else if (ctxType === "leg") finalizeCupLeg(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds);
+                    else if (ctxType === "final") finalizeCupFinal(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds);
+                    else finalizeMatch(g.pendingRound, secondHalfXiIds, subText, userGoals, oppGoals, note, scoredByIds, sentOffIds);
                   }} />
               ) : g.view === "result" && g.lastMatchReport ? (
                 <MatchResultView report={g.lastMatchReport} userTeamName={userClub.name} competitionLabel="Ligamatch"
@@ -8405,6 +8418,11 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
   const [stats, setStats] = useState({ shotsUser: 0, shotsOpp: 0, possessionSum: 0, segmentsPlayed: 0 });
   const [ratings, setRatings] = useState(() => Object.fromEntries(pending.xiIds.map(id => [id, 6.0])));
   const [scoredByIds, setScoredByIds] = useState([]);
+  const [sentOffIds, setSentOffIds] = useState([]);
+  const [oppRedCards, setOppRedCards] = useState(0);
+  // Rolled once per match rather than per segment, same as a real referee doesn't change temperament
+  // card to card — also keeps every segment's card odds consistent with each other.
+  const [refereeStrictness] = useState(() => rnd(0.75, 1.3));
 
   const done = segmentIdx >= MATCH_SEGMENTS.length;
   const homeIsUser = pending.userIsHome;
@@ -8416,7 +8434,37 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
   const possessionUser = stats.segmentsPlayed > 0 ? Math.round(stats.possessionSum / stats.segmentsPlayed) : 50;
 
   function playSegment() {
-    const xi = squad.filter(p => currentXiIds.includes(p.id));
+    let liveXiIds = currentXiIds;
+    const entries = [];
+
+    // Red cards: rolled per segment against whoever is actually still on the pitch, same odds shape as
+    // the post-match card roll (personality/position weighted, scaled to a per-segment slice of a full
+    // match's ~1.2% red-card rate) — but resolved here, live, since a sending-off needs to actually cost
+    // the team a body for the rest of THIS match, not just show up as a stat afterward.
+    const onPitchNow = squad.filter(p => liveXiIds.includes(p.id));
+    let newSentOff = null;
+    for (const p of onPitchNow) {
+      const personalityCardMult = p.personality === "Problemspelare" ? 1.6 : 1;
+      const positionCardMult = p.pos === "MV" ? 0.15 : p.pos === "FÖ" ? 1.4 : p.pos === "MF" ? 1.1 : 0.7;
+      const redChance = clamp((0.012 / MATCH_SEGMENTS.length) * refereeStrictness * personalityCardMult * positionCardMult, 0.00005, 0.01);
+      if (Math.random() < redChance) { newSentOff = p; break; }
+    }
+    if (newSentOff) {
+      liveXiIds = liveXiIds.filter(id => id !== newSentOff.id);
+      setCurrentXiIds(liveXiIds);
+      setSentOffIds(ids => [...ids, newSentOff.id]);
+      entries.push({ minute: rndInt(MATCH_SEGMENTS[segmentIdx][0] + 1, MATCH_SEGMENTS[segmentIdx][1]), text: `🟥 RÖTT KORT! ${newSentOff.name} blir utvisad — ni spelar resten av matchen i numerärt underläge.`, goal: false, card: true });
+    }
+    let newOppRedCard = false;
+    const oppRedChance = clamp((0.012 / MATCH_SEGMENTS.length) * refereeStrictness, 0.00005, 0.01);
+    if (Math.random() < oppRedChance) {
+      newOppRedCard = true;
+      setOppRedCards(n => n + 1);
+      entries.push({ minute: rndInt(MATCH_SEGMENTS[segmentIdx][0] + 1, MATCH_SEGMENTS[segmentIdx][1]), text: `🟥 Rött kort för ${oppClub.name} — de spelar resten av matchen med en spelare färre.`, goal: false, card: true });
+    }
+    const effectiveOppRedCards = oppRedCards + (newOppRedCard ? 1 : 0);
+
+    const xi = squad.filter(p => liveXiIds.includes(p.id));
     const { attack, defense } = userStrength(xi, localTactic, spelide, tacticalSettings, teamPositionFit(lineupCells, squad), staff);
     const talk = TEAM_TALK_OPTIONS[teamTalk] || TEAM_TALK_OPTIONS.neutral;
     const famBonus = 1 + familiarityBonus(formationFamiliarity);
@@ -8425,17 +8473,29 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
     // Match momentum: chasing the game late means throwing more numbers forward at some defensive cost;
     // protecting a lead late means the reverse. Only kicks in from the hour mark on, and only meaningfully
     // when the gap is still realistically chaseable (a heavy deficit isn't "push a bit harder" territory).
+    // Mirrored for the opponent from their own side of the scoreline, so a leading AI side sits back late
+    // on instead of only ever reacting to what the user's team does.
     const scoreDiff = userGoals - oppGoals;
+    const oppScoreDiff = -scoreDiff;
     const lateGame = start >= 60;
     let momentumAtk = 1, momentumDef = 1;
     if (lateGame && scoreDiff < 0 && scoreDiff >= -2) { momentumAtk = 1 + clamp(-scoreDiff * 0.07, 0, 0.14); momentumDef = 1 - clamp(-scoreDiff * 0.05, 0, 0.1); }
     else if (lateGame && scoreDiff > 0 && scoreDiff <= 2) { momentumDef = 1 + clamp(scoreDiff * 0.06, 0, 0.12); momentumAtk = 1 - clamp(scoreDiff * 0.04, 0, 0.08); }
-    const attackMomentum = attack * momentumAtk, defenseMomentum = defense * momentumDef;
+    let oppMomentumAtk = 1, oppMomentumDef = 1;
+    if (lateGame && oppScoreDiff < 0 && oppScoreDiff >= -2) { oppMomentumAtk = 1 + clamp(-oppScoreDiff * 0.07, 0, 0.14); oppMomentumDef = 1 - clamp(-oppScoreDiff * 0.05, 0, 0.1); }
+    else if (lateGame && oppScoreDiff > 0 && oppScoreDiff <= 2) { oppMomentumDef = 1 + clamp(oppScoreDiff * 0.06, 0, 0.12); oppMomentumAtk = 1 - clamp(oppScoreDiff * 0.04, 0, 0.08); }
+    // A sending-off costs a body, not just an average — userStrength() averages over the XI, so it
+    // barely reacts to losing one player. This applies the numerical disadvantage explicitly, on both
+    // sides of the ball, for whichever team is actually down a man.
+    const menOut = Math.max(0, 11 - xi.length);
+    const manDownMult = Math.pow(0.9, menOut);
+    const oppManDownMult = Math.pow(0.9, effectiveOppRedCards);
+    const attackMomentum = attack * momentumAtk * manDownMult, defenseMomentum = defense * momentumDef * manDownMult;
+    const oppEffAtk = pending.oppStrength * oppMomentumAtk * oppManDownMult, oppEffDef = pending.oppStrength * oppMomentumDef * oppManDownMult;
     const weatherStyleMult = weatherTeamMult(xi, pending.weather.mult);
-    const lambdaUser = expectedGoals(attackMomentum * talk.atkMult * famBonus, pending.oppStrength, pending.userIsHome) * pending.weather.mult * weatherStyleMult * (segLen / 90);
-    const lambdaOpp = expectedGoals(pending.oppStrength, defenseMomentum * talk.defMult * famBonus, !pending.userIsHome) * pending.weather.mult * weatherStyleMult * (segLen / 90);
+    const lambdaUser = expectedGoals(attackMomentum * talk.atkMult * famBonus, oppEffDef, pending.userIsHome) * pending.weather.mult * weatherStyleMult * (segLen / 90);
+    const lambdaOpp = expectedGoals(oppEffAtk, defenseMomentum * talk.defMult * famBonus, !pending.userIsHome) * pending.weather.mult * weatherStyleMult * (segLen / 90);
     const segUser = poisson(lambdaUser), segOpp = poisson(lambdaOpp);
-    const entries = [];
     const attackers = xi.filter(p => p.pos !== "MV");
     const scorerIds = [];
     for (let i = 0; i < segUser; i++) { const scorer = pick(attackers) || xi[0]; if (scorer) scorerIds.push(scorer.id); entries.push({ minute: rndInt(start + 1, end), text: `⚽ MÅL! ${scorer?.name || userClub.name} sätter dit den för ${userClub.name}!`, goal: true, isUser: true }); }
@@ -8468,17 +8528,18 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
         next[p.id] = clamp((next[p.id] ?? 6.0) + teamDelta + qualityNudge + rnd(-0.05, 0.08), 3.5, 9.8);
       });
       scorerIds.forEach(id => { next[id] = clamp((next[id] ?? 6.0) + 0.45, 3.5, 9.8); });
+      if (newSentOff) next[newSentOff.id] = clamp((next[newSentOff.id] ?? 6.0) - 1, 3.5, 9.8);
       return next;
     });
     setSegmentIdx(i => i + 1);
   }
 
   function handleFinish() {
-    onFinalize(currentXiIds, subLog.length ? subLog.join("; ") : null, userGoals, oppGoals, null, scoredByIds);
+    onFinalize(currentXiIds, subLog.length ? subLog.join("; ") : null, userGoals, oppGoals, null, scoredByIds, sentOffIds);
   }
 
   const xiPlayers = squad.filter(p => currentXiIds.includes(p.id));
-  const benchPlayers = squad.filter(p => !currentXiIds.includes(p.id) && !p.injuryWeeks && !p.suspendedMatches && !p.internationalDuty);
+  const benchPlayers = squad.filter(p => !currentXiIds.includes(p.id) && !sentOffIds.includes(p.id) && !p.injuryWeeks && !p.suspendedMatches && !p.internationalDuty);
   function makeSub(outId, inId) {
     const outP = squad.find(p => p.id === outId), inP = squad.find(p => p.id === inId);
     if (!outP || !inP) return;
@@ -8500,6 +8561,11 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
             <span className="flex items-center gap-1.5 w-28"><ClubJersey club={homeIsUser ? oppClub : userClub} size={20} /><span className="text-sm font-medium text-left truncate">{awayName}</span></span>
           </div>
           {subLog.length > 0 && <div className="text-10 mt-1" style={{ color: C.inkSoft }}>{subLog.length} byte{subLog.length > 1 ? "n" : ""} gjorda · Taktik: {localTactic}</div>}
+          {(sentOffIds.length > 0 || oppRedCards > 0) && (
+            <div className="text-10 mt-1 font-semibold" style={{ color: C.loss }}>
+              {11 - sentOffIds.length} mot {11 - oppRedCards} spelare på plan
+            </div>
+          )}
         </div>
         <div className="border-t px-4 py-2 grid grid-cols-3 gap-2 text-center" style={{ borderColor: C.paperDim }}>
           <div>
@@ -8597,7 +8663,7 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
         <div className="space-y-1.5">
           {log.length === 0 && <div className="text-12 text-center py-2" style={{ color: C.inkSoft }}>Matchen är igång...</div>}
           {log.slice().reverse().map((e, i) => (
-            <div key={i} className="text-12 flex gap-2" style={{ fontWeight: e.goal ? 700 : 400, color: e.goal ? (e.isUser ? C.win : C.loss) : C.ink }}>
+            <div key={i} className="text-12 flex gap-2" style={{ fontWeight: (e.goal || e.card) ? 700 : 400, color: e.card ? C.loss : e.goal ? (e.isUser ? C.win : C.loss) : C.ink }}>
               <span className="font-mono shrink-0" style={{ color: C.inkSoft }}>{e.minute}'</span>
               <span>{e.text}</span>
             </div>
