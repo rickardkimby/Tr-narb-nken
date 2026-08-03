@@ -844,6 +844,145 @@ const AS_LAST = ["Tanaka","Kim","Park","Sato","Nakamura","Lee","Chen","Watanabe"
 const NA_FIRST = ["Jordan","Tyler","Cole","Ricardo","Diego","Marco","Ethan","Caleb","Mason","Jayden"];
 const NA_LAST = ["Johnson","Rivera","Reyna","Morales","Aaronson","Adams","Wright","Turner","Bello","Hernández"];
 
+// Individual-country nationality pools, on top of the original 5 leagues + 4 world-region buckets —
+// added so a hand-authored real-world database (e.g. a historical season) can give every player their
+// actual nationality instead of folding non-{England,Italy,Spain,Germany,France} Europeans into one of
+// those 5, or every South American/African/Asian/North American into one continent-wide blob.
+const NED_FIRST = ["Daan","Sem","Lucas","Milan","Levi","Luuk","Bram","Thijs","Ruben","Stan","Jesse","Sven","Tim","Wouter","Niels"];
+const NED_LAST = ["de Jong","Jansen","de Vries","van den Berg","Bakker","Visser","Smit","Meijer","de Boer","Mulder","Bos","Vos","Peters","Hoekstra","Dekker"];
+const POR_FIRST = ["João","Pedro","Miguel","Rui","Bruno","Ricardo","Tiago","Nuno","André","Hugo","Rafael","Diogo","Gonçalo","Fábio","Filipe"];
+const POR_LAST = ["Silva","Santos","Ferreira","Pereira","Costa","Rodrigues","Martins","Sousa","Oliveira","Carvalho","Gomes","Lopes","Marques","Alves","Ribeiro"];
+const BEL_FIRST = ["Thibault","Kevin","Eden","Axel","Jan","Wout","Yannick","Dries","Toby","Romelu","Nacer","Timothy","Youri","Adnan","Simon"];
+const BEL_LAST = ["Peeters","Janssens","Maes","Jacobs","Mertens","Willems","Claes","Goossens","Wouters","Desmet","De Smet","Dubois","Lambert","Michiels","Hermans"];
+const SWE_FIRST = ["Erik","Anders","Johan","Karl","Lars","Henrik","Fredrik","Mikael","Niklas","Oscar","Gustav","Viktor","Emil","Sebastian","Marcus"];
+const SWE_LAST = ["Andersson","Johansson","Karlsson","Nilsson","Eriksson","Larsson","Olsson","Persson","Svensson","Gustafsson","Pettersson","Jonsson","Lindqvist","Berg","Lindberg"];
+const NOR_FIRST = ["Erik","Ole","Kristian","Magnus","Henrik","Jonas","Anders","Petter","Morten","Espen","Vegard","Stian","Bjørn","Fredrik","Tore"];
+const NOR_LAST = ["Hansen","Johansen","Olsen","Larsen","Andersen","Pedersen","Nilsen","Kristiansen","Jensen","Karlsen","Berg","Haugen","Solberg","Strand","Dahl"];
+const DEN_FIRST = ["Lars","Peter","Mikkel","Christian","Anders","Morten","Jesper","Thomas","Nikolaj","Rasmus","Kasper","Mads","Jonas","Frederik","Emil"];
+const DEN_LAST = ["Nielsen","Jensen","Hansen","Pedersen","Andersen","Christensen","Larsen","Sørensen","Rasmussen","Jørgensen","Petersen","Madsen","Kristensen","Olsen","Thomsen"];
+const FIN_FIRST = ["Mikko","Juha","Antti","Sami","Jari","Kari","Ville","Petri","Tomi","Janne","Marko","Tuomas","Aleksi","Joonas","Niko"];
+const FIN_LAST = ["Korhonen","Virtanen","Mäkinen","Nieminen","Mäkelä","Hämäläinen","Laine","Heikkinen","Koskinen","Järvinen","Lehtonen","Lehtinen","Saarinen","Salminen","Turunen"];
+const ISL_FIRST = ["Jón","Gunnar","Björn","Eiður","Kristján","Ólafur","Þór","Ragnar","Aron","Arnór","Gylfi","Kári","Sigurður","Hörður","Rúrik"];
+const ISL_LAST = ["Jónsson","Gunnarsson","Björnsson","Sigurðsson","Guðmundsson","Þórðarson","Ólafsson","Kristjánsson","Halldórsson","Einarsson","Magnússon","Þórsson","Arnórsson","Ingason","Bjarnason"];
+const SUI_FIRST = ["Xherdan","Stephan","Valon","Granit","Ricardo","Yann","Fabian","Josip","Breel","Haris","Steve","Michael","Johan","Gökhan","Blerim"];
+const SUI_LAST = ["Müller","Meier","Schmid","Keller","Weber","Huber","Frei","Zuber","Steiner","Baumann","Vogel","Brunner","Schneider","Widmer","Baumgartner"];
+const SCO_FIRST = ["Andy","Kenny","Craig","Gary","Robert","Steven","Scott","Callum","Ryan","Stuart","Grant","Barry","Kieran","John","Alan"];
+const SCO_LAST = ["MacDonald","Wilson","Robertson","Fraser","Stewart","Campbell","Anderson","Murray","Kerr","McLean","Ross","Ferguson","Reid","Gordon","Christie"];
+const WAL_FIRST = ["Gareth","Aaron","Rhys","Wayne","Ryan","Craig","Joe","Ben","Ethan","Neco","David","Ashley","Sam","Chris","Ian"];
+const WAL_LAST = ["Jones","Williams","Davies","Evans","Thomas","Roberts","Hughes","Lewis","Morgan","Griffiths","Bale","Rush","Giggs","Vaughan","Price"];
+const IRL_FIRST = ["Seán","Robbie","Damien","Kevin","Niall","Shane","Roy","Paul","Aiden","James","Matt","Jack","Conor","Liam","Cian"];
+const IRL_LAST = ["Murphy","Kelly","O'Brien","Byrne","Ryan","Duffy","McCarthy","Coleman","Doherty","Egan","Keane","Brady","Whelan","Doyle","Walsh"];
+const NIR_FIRST = ["Steven","Steve","Kyle","Jonny","Corry","Chris","Niall","David","Craig","Aaron","Jamie","Josh","Michael","Paddy","Liam"];
+const NIR_LAST = ["Davis","Evans","McGinn","Lafferty","Whitley","Lomas","Healy","Brunt","Norwood","Cathcart","Hughes","Ferguson","McAuley","Doherty","Magennis"];
+const CRO_FIRST = ["Luka","Ivan","Mario","Marko","Josip","Ante","Dejan","Nikola","Domagoj","Andrej","Šime","Mateo","Tin","Duje","Borna"];
+const CRO_LAST = ["Modrić","Rakitić","Perišić","Kovačić","Vida","Lovren","Kramarić","Brozović","Šubašić","Vrsaljko","Barišić","Ćorluka","Mandžukić","Olić","Kalinić"];
+const SRB_FIRST = ["Nemanja","Dušan","Aleksandar","Miloš","Filip","Luka","Dragan","Nikola","Marko","Branislav","Ivan","Antonio","Sergej","Predrag","Zoran"];
+const SRB_LAST = ["Jovanović","Petrović","Nikolić","Marković","Đorđević","Stojković","Ilić","Pavlović","Kostić","Milenković","Mitrović","Tadić","Kolarov","Stanković","Vidić"];
+const UKR_FIRST = ["Andriy","Andrii","Oleh","Serhiy","Vitaliy","Yevhen","Ruslan","Taras","Denys","Mykola","Oleksandr","Roman","Artem","Bohdan","Ihor"];
+const UKR_LAST = ["Shevchenko","Rebrov","Blokhin","Tymoshchuk","Voronin","Kalynychenko","Husyev","Zinchenko","Yarmolenko","Konoplyanka","Pyatov","Khacheridi","Fedetskiy","Rakitskiy","Mykhalyk"];
+const RUS_FIRST = ["Andrei","Dmitri","Sergei","Aleksandr","Roman","Igor","Yuri","Denis","Alan","Viktor","Valeri","Vladimir","Konstantin","Maksim","Aleksei"];
+const RUS_LAST = ["Ivanov","Smirnov","Kuznetsov","Popov","Sokolov","Volkov","Titov","Karpin","Mostovoi","Onopko","Nikiforov","Alenichev","Semak","Loskov","Bystrov"];
+const POL_FIRST = ["Jakub","Kamil","Robert","Grzegorz","Michał","Tomasz","Łukasz","Wojciech","Piotr","Marcin","Sebastian","Artur","Dariusz","Krzysztof","Paweł"];
+const POL_LAST = ["Kowalski","Wiśniewski","Wójcik","Kamiński","Lewandowski","Zieliński","Szymański","Woźniak","Kozłowski","Jankowski","Mazur","Kwiatkowski","Krawczyk","Piątek","Głowacki"];
+const CZE_FIRST = ["Pavel","Petr","Tomáš","Milan","Jan","Karel","Vladimír","Radek","Marek","Zdeněk","David","Antonín","Patrik","Ondřej","Michal"];
+const CZE_LAST = ["Novák","Svoboda","Novotný","Dvořák","Černý","Procházka","Kučera","Veselý","Horák","Němec","Pospíšil","Poborský","Nedvěd","Rosický","Baroš"];
+const SVK_FIRST = ["Marek","Martin","Ján","Miroslav","Ľuboš","Peter","Robert","Vladimír","Milan","Marián","Juraj","Stanislav","Tomáš","Filip","Adam"];
+const SVK_LAST = ["Horváth","Kováč","Varga","Baláž","Nemec","Novák","Šimko","Hamšík","Škrtel","Weiss","Kozák","Vittek","Ďurica","Pekarík","Šesták"];
+const ROU_FIRST = ["Adrian","Cristian","Gheorghe","Marius","Cosmin","Dorinel","Florin","Ionuț","Nicolae","Bogdan","Ciprian","Răzvan","Andrei","Vlad","Alexandru"];
+const ROU_LAST = ["Popescu","Ionescu","Popa","Stan","Dumitrescu","Hagi","Chivu","Mutu","Petrescu","Munteanu","Rădoi","Ganea","Ilie","Lăcătuș","Marin"];
+const BUL_FIRST = ["Hristo","Krasimir","Dimitar","Stiliyan","Martin","Yordan","Valeri","Nikolay","Georgi","Ivan","Blagoy","Radostin","Zdravko","Todor","Emil"];
+const BUL_LAST = ["Stoichkov","Balakov","Berbatov","Petrov","Kostadinov","Todorov","Lechkov","Yankov","Ivanov","Kirilov","Iliev","Bonev","Dimitrov","Georgiev","Kishishev"];
+const GRE_FIRST = ["Giorgos","Theodoros","Nikos","Dimitris","Kostas","Vasilis","Angelos","Panagiotis","Christos","Ioannis","Stelios","Sotiris","Michalis","Fanis","Traianos"];
+const GRE_LAST = ["Papadopoulos","Karagounis","Charisteas","Zagorakis","Giannakopoulos","Basinas","Dellas","Katsouranis","Seitaridis","Vryzas","Nikopolidis","Fyssas","Kapsis","Tsiartas","Amanatidis"];
+const TUR_FIRST = ["Hakan","Emre","Tuncay","Hamit","Nihat","Rüştü","Alpay","Arif","Okan","Ümit","Fatih","Hasan","Sergen","Ilhan","Ergün"];
+const TUR_LAST = ["Şükür","Yıldıray","Altıntop","Belözoğlu","Kahveci","Reçber","Buruk","Tayfun","Korkmaz","Erdem","Terim","Mansız","Güven","Aksoy","Doğan"];
+const AUT_FIRST = ["Andreas","Martin","Christian","Markus","David","Marc","Peter","Ivica","Sebastian","Julian","Thomas","Michael","Florian","Aleksandar","Marko"];
+const AUT_LAST = ["Herzog","Vastic","Polster","Baric","Hütter","Wagner","Alaba","Arnautović","Dragović","Prödl","Janko","Harnik","Fuchs","Gruber","Steiner"];
+const HUN_FIRST = ["Ferenc","Zoltán","Krisztián","Balázs","Gábor","Ádám","Roland","Attila","László","Tamás","Dániel","Márton","Péter","Bálint","Norbert"];
+const HUN_LAST = ["Puskás","Kocsis","Hidegkuti","Nagy","Kovács","Szabó","Tóth","Varga","Horváth","Kiss","Molnár","Németh","Farkas","Balogh","Gera"];
+const SLO_FIRST = ["Zlatko","Milivoje","Robert","Sebastjan","Bojan","Boštjan","Miran","Aleš","Rene","Andraž","Jasmin","Nejc","Josip","Kevin","Tim"];
+const SLO_LAST = ["Zahovič","Cimirotič","Novak","Krmac","Karničnik","Osterc","Cesar","Kirm","Handanovič","Birsa","Ljubijankič","Pečnik","Vugdalič","Kavčič","Kampl"];
+const LAT_FIRST = ["Māris","Andrejs","Vitālijs","Igors","Aleksandrs","Kaspars","Deniss","Artūrs","Genādijs","Valentīns","Jurijs","Antons","Oskars","Roberts","Dāvis"];
+const LAT_LAST = ["Verpakovskis","Astafjevs","Rubins","Zemlinskis","Lobaņovs","Blagonadeždins","Rimkus","Karlsons","Prohorenkovs","Kolcovs","Šternbergs","Ostrovskis","Isakovs","Cauņa","Višņakovs"];
+const EST_FIRST = ["Andres","Marko","Toomas","Raio","Enar","Martin","Konstantin","Ragnar","Sergei","Taavi","Joel","Mihkel","Henrik","Rauno","Karol"];
+const EST_LAST = ["Oper","Kristal","Piiroja","Kink","Jürgenson","Vassiljev","Terekhov","Klavan","Purje","Zenjov","Dmitrijev","Lindpere","Reim","Poom","Rooba"];
+const GEO_FIRST = ["Kakha","Levan","Temuri","Georgi","Zurab","Shota","Giorgi","Gia","Vladimer","Nika","Aleksandre","Otar","Ioseb","Data","Beso"];
+const GEO_LAST = ["Kaladze","Arveladze","Mchedlidze","Kobiashvili","Ketsbaia","Iashvili","Demetradze","Nemsadze","Tskitishvili","Khizanishvili","Kvirkvelia","Kankava","Kvaratskhelia","Dvalishvili","Salukvadze"];
+const BIH_FIRST = ["Edin","Zvjezdan","Sergej","Emir","Miralem","Vedad","Asmir","Senad","Ognjen","Muhamed","Elvir","Hasan","Zlatan","Ermin","Toni"];
+const BIH_LAST = ["Bolić","Konjić","Barbarez","Spahić","Pjanić","Ibišević","Begović","Lulić","Vranješ","Bešlija","Zahirović","Salihović","Misimović","Ćurić","Kodro"];
+const BRA_FIRST = ["Ronaldo","Rivaldo","Ronaldinho","Roberto","Cafu","Denílson","Emerson","Juninho","Edmílson","Kaká","Lúcio","Adriano","Robinho","Kléberson","Gilberto"];
+const BRA_LAST = ["Silva","Santos","Souza","Oliveira","Pereira","Costa","Rodrigues","Almeida","Nascimento","Carvalho","Gomes","Martins","Araújo","Melo","Barbosa"];
+const ARG_FIRST = ["Diego","Gabriel","Juan","Hernán","Javier","Pablo","Esteban","Ariel","Walter","Marcelo","Fernando","Roberto","Claudio","Kily","Sebastián"];
+const ARG_LAST = ["González","Rodríguez","Sánchez","Romero","Sosa","Álvarez","Torres","Ruiz","Medina","Aimar","Verón","Crespo","Simeone","Batistuta","Ortega"];
+const URU_FIRST = ["Álvaro","Diego","Paolo","Darío","Nicolás","Marcelo","Fabián","Gustavo","Sebastián","Richard","Rubén","Walter","Gonzalo","Egidio","Jorge"];
+const URU_LAST = ["Recoba","Forlán","Montero","Silva","Rodríguez","Sosa","Morales","Suárez","Godín","Cavani","Pereira","Varela","González","Fonseca","Olivera"];
+const CHI_FIRST = ["Iván","Marcelo","Matías","Claudio","Reinaldo","Rodrigo","Luis","Sebastián","David","Nicolás","Gonzalo","Jorge","Pablo","Humberto","Fernando"];
+const CHI_LAST = ["Zamorano","Salas","Sánchez","Vidal","Bravo","Medel","Isla","Valdivia","Suazo","Villarroel","Contreras","Rojas","Pinilla","Beausejour","Fernández"];
+const COL_FIRST = ["Carlos","Faustino","Iván","Freddy","Mario","Radamel","Juan","Fredy","Andrés","Faryd","Léider","Adolfo","Jorge","Hamilton","Wílmar"];
+const COL_LAST = ["Valderrama","Asprilla","Rincón","Guerrero","Yepes","Valencia","Falcao","Zapata","Perea","Mosquera","Ricardo","Preciado","Cortés","Higuita","Herrera"];
+const PER_FIRST = ["Nolberto","Claudio","Roberto","Jefferson","José","Andrés","Paolo","Juan","Flavio","Teófilo","Nicolás","César","Yoshimar","Christian","Carlos"];
+const PER_LAST = ["Solano","Pizarro","Palacios","Farfán","Guerrero","Fernández","Vargas","Cubillas","Uribe","Yotún","Ramírez","Zambrano","Advíncula","Trauco","Lobatón"];
+const PAR_FIRST = ["José","Roque","Carlos","Julio","Denis","Nelson","Justo","Aureliano","Gustavo","Celso","Cristian","Óscar","Derlis","Miguel","Pedro"];
+const PAR_LAST = ["Chilavert","Santa Cruz","Gamarra","Cáceres","Torres","Villalba","Ayala","Paredes","Alcaraz","Cardozo","Enciso","Riveros","Estigarribia","Da Silva","Núñez"];
+const ECU_FIRST = ["Agustín","Iván","Álex","Ulises","Edison","Antonio","Christian","Jaime","Carlos","Felipe","Néicer","Segundo","Eduardo","Byron","Cristian"];
+const ECU_LAST = ["Delgado","Kaviedes","Aguinaga","De la Cruz","Méndez","Valencia","Ayoví","Reasco","Hurtado","Noboa","Castillo","Caicedo","Ambrosi","Guerrero","Espinoza"];
+const VEN_FIRST = ["Juan","Rafael","José","Miku","Salomón","Fernando","Gabriel","Alejandro","Tomás","Giancarlo","César","Renny","Nixon","Alexander","Ricardo"];
+const VEN_LAST = ["Arango","Dolgetta","Rey","Rondón","Aguirre","Amorebieta","Feltscher","Vizcarrondo","Guerra","Machís","González","Fariñez","Osorio","Martínez","Villanueva"];
+const NGA_FIRST = ["Nwankwo","Jay-Jay","Sunday","Taribo","Celestine","Victor","Austin","Finidi","Daniel","Rashidi","Emmanuel","Yakubu","Mutiu","Wilson","Ike"];
+const NGA_LAST = ["Kanu","Okocha","Oliseh","West","Babayaro","Ikpeba","Eguavoen","George","Amokachi","Yekini","Amunike","Ayew","Oparanozie","Adepoju","Oruma"];
+const GHA_FIRST = ["Abedi","Anthony","Michael","Samuel","Sulley","Asamoah","Stephen","Derek","Kwame","Emmanuel","Baffour","Ibrahim","Otto","John","Nii"];
+const GHA_LAST = ["Pelé","Yeboah","Essien","Kuffour","Appiah","Muntari","Gyan","Boateng","Addo","Adjei","Mensah","Amoah","Annan","Sulemana","Ayew"];
+const CMR_FIRST = ["Roger","Samuel","Rigobert","Patrick","Marc-Vivien","Geremi","Idriss","Pierre","Joseph-Désiré","Jean","Alioum","Lauren","Emmanuel","Achille","Salomon"];
+const CMR_LAST = ["Milla","Eto'o","Song","Mboma","Foé","Kameni","Fotso","Njanka","Webó","Eyong","Enow","Ndjeng","Bikey","Kalla","Emana"];
+const SEN_FIRST = ["El Hadji","Khalilou","Aliou","Salif","Papa","Henri","Ferdinand","Souleymane","Pape","Moussa","Diomansy","Habib","Amara","Omar","Sadio"];
+const SEN_LAST = ["Diouf","Fadiga","Cissé","Diao","Camara","Coly","Ndiaye","Faye","Diagne","Beye","Kamara","Diatta","Sarr","Gueye","Ba"];
+const RSA_FIRST = ["Lucas","Benni","Mark","Quinton","Shaun","Aaron","Sibusiso","Steven","Siphiwe","Bongani","Thabo","Teko","Delron","Katlego","Itumeleng"];
+const RSA_LAST = ["Radebe","McCarthy","Fish","Fortune","Bartlett","Mokoena","Zuma","Pienaar","Tshabalala","Modise","Buthelezi","Khumalo","Ngcongca","Khune","September"];
+const MAR_FIRST = ["Mustapha","Noureddine","Salaheddine","Youssef","Abdeslam","Hicham","Talal","Mustafa","Nabil","Karim","Achraf","Hakim","Younes","Marouane","Sofiane"];
+const MAR_LAST = ["Hadji","Naybet","Bassir","Chippo","Ouaddou","Zerouali","El Karkouri","Aboutrika","Mokhtari","Belhanda","Boussoufa","Hakimi","Ziyech","Fellaini","En-Nesyri"];
+const ALG_FIRST = ["Rabah","Karim","Djamel","Riyad","Antar","Islam","Nabil","Yacine","Sofiane","Ismaël","Faouzi","Rafik","Hameur","Djamel-Eddine","Madjer"];
+const ALG_LAST = ["Madjer","Belloumi","Ziani","Yahia","Mahrez","Slimani","Bennacer","Brahimi","Feghouli","Bougherra","Halliche","Djabou","Bentaleb","Belmadi","Meftah"];
+const CIV_FIRST = ["Didier","Kolo","Yaya","Emmanuel","Salomon","Aruna","Gervinho","Wilfried","Bonaventure","Abdoulaye","Arthur","Serge","Cheick","Souleymane","Max"];
+const CIV_LAST = ["Drogba","Touré","Kalou","Eboué","Diarra","Kaluyituka","Zokora","Bakayoko","Konan","Doumbia","Guel","Boka","Traoré","Kouassi","Aurier"];
+const LBR_FIRST = ["George","Jonathan","Kelvin","Christopher","James","Anthony","Sackie","Momo","Peter","David","Dulee","Mulbah","Musa","Sekou","Alphonso"];
+const LBR_LAST = ["Weah","Wleh","Sirleaf","Doe","Toe","Freeman","Wesseh","Nagbe","Debbah","Karngbaye","Gray","Manneh","Konneh","Cooper","Johnson"];
+const TUN_FIRST = ["Sami","Hatem","Radhi","Kaies","Wael","Zoubeir","Adel","Khaled","Chokri","Mehdi","Yassine","Wahbi","Ferjani","Youssef","Aymen"];
+const TUN_LAST = ["Trabelsi","Baya","Ghommidh","Gmar","Ben Younes","Bouazizi","Chikhaoui","Sassi","Msakni","Khazri","Sliti","Meriah","Ben Amor","Skhiri","Jaziri"];
+const EGY_FIRST = ["Mohamed","Ahmed","Hossam","Ibrahim","Mahmoud","Essam","Amr","Hazem","Emad","Wael","Shikabala","Rabie","Karim","Mido","Omar"];
+const EGY_LAST = ["Salah","Hassan","El-Sawy","Abo Treka","Zaki","El-Hadary","Fathy","Emam","El Metwally","Motaeb","Gomaa","Gaber","Hegazy","Diaz","Barakat"];
+const MLI_FIRST = ["Salif","Cheick","Frédéric","Mamadou","Mahamadou","Seydou","Djibril","Kalifa","Sammy","Amara","Moussa","Yaya","Abdoulaye","Adama","Ibrahim"];
+const MLI_LAST = ["Keita","Diarra","Kanouté","Diallo","Sissoko","Traoré","Sidibé","Coulibaly","Cissé","Kanté","Konaté","Bagayoko","Fofana","Doumbia","Camara"];
+const COD_FIRST = ["Shabani","Trésor","Youssouf","Cédric","Chancel","Dieumerci","Junior","Yannick","Christian","Gabriel","Jonathan","Israel","Dylan","Neeskens","Ben"];
+const COD_LAST = ["Nonda","Mputu","Mulumba","Bakambu","Mbokani","Kabananga","Makengo","Wissa","Kakuta","Massoulou","Kayembe","Luyindama","Musaba","Kongolo","Tomiwa"];
+const ZAM_FIRST = ["Kalusha","Charly","Emmanuel","Jacob","Christopher","Given","Rainford","Collins","Chisamba","Rodgers","Nathan","Fashion","Enock","Winter","William"];
+const ZAM_LAST = ["Bwalya","Musonda","Chabala","Mulenga","Katongo","Mwape","Kaumba","Sinkala","Kangwa","Mubanga","Mumba","Simutowe","Sakala","Chishimba","Bwalya"];
+const JPN_FIRST = ["Hidetoshi","Shunsuke","Shinji","Keisuke","Yasuhito","Junichi","Masashi","Atsushi","Yuto","Makoto","Hiroshi","Naohiro","Kazuyoshi","Yoshikatsu","Genki"];
+const JPN_LAST = ["Nakata","Nakamura","Ono","Nakazawa","Endo","Inamoto","Nishizawa","Takahara","Miyamoto","Kawaguchi","Suzuki","Honda","Kagawa","Okazaki","Nagatomo"];
+const KOR_FIRST = ["Ji-Sung","Sung-Yong","Young-Pyo","Jung-Hwan","Woon-Jae","Nam-Yong","Sang-Chul","Eul-Yong","Do-Heon","Chun-Soo","Heung-Min","Ki-Hyun","Chi-Woo","Byung-Ho","Sun-Min"];
+const KOR_LAST = ["Park","Kim","Lee","Hong","Yoo","Choi","Ahn","Song","Cha","Jung","Han","Yoon","Ji","Koo","Hwang"];
+const CHN_FIRST = ["Sun","Fan","Li","Hao","Zheng","Yang","Zhao","Wang","Wu","Zhang","Xie","Shao","Yu","Chi","Cao"];
+const CHN_LAST = ["Jihai","Zhiyi","Weifeng","Haidong","Peng","Chengyang","Wu","Xu","Sun","Wang","Zheng","Yang","Zhao","Feng","Liu"];
+const AUS_FIRST = ["Harry","Mark","Craig","Lucas","Brett","Vince","Tim","Josh","Aaron","Tony","Mile","Ned","John","Danny","Robbie"];
+const AUS_LAST = ["Kewell","Viduka","Moore","Neill","Emerton","Grella","Cahill","Kennedy","Sterjovski","Popovic","Jedinak","Sainsbury","Milligan","Wilkshire","Zullo"];
+const KSA_FIRST = ["Sami","Mohammed","Fuad","Saeed","Yasser","Khamis","Hamzah","Saleh","Nawaf","Yasir","Fahad","Salman","Abdullah","Nasser","Majed"];
+const KSA_LAST = ["Al-Jaber","Al-Deayea","Amin","Al-Owairan","Al-Harbi","Al-Shahrani","Al-Zoraie","Al-Muwallad","Al-Faraj","Al-Dawsari","Al-Buraikan","Al-Jassim","Al-Hamdan","Al-Amri","Al-Ghamdi"];
+const IRN_FIRST = ["Ali","Mehdi","Karim","Vahid","Khodadad","Sirous","Reza","Ehsan","Mohammad","Alireza","Saeid","Sardar","Ashkan","Ramin","Hossein"];
+const IRN_LAST = ["Daei","Mahdavikia","Bagheri","Karimi","Hashemian","Azizi","Estili","Rezaei","Dejagah","Jahanbakhsh","Azmoun","Taremi","Beiranvand","Ansarifard","Hosseini"];
+const USA_FIRST = ["Landon","Claudio","Brad","Kasey","DaMarcus","Clint","Tim","Eddie","Brian","Cobi","Alexi","Tab","John","Jozy","Michael"];
+const USA_LAST = ["Donovan","Reyna","Friedel","Keller","Beasley","Dempsey","Howard","Lewis","McBride","Jones","Lalas","Ramos","Harkes","Altidore","Bradley"];
+const CAN_FIRST = ["Dwayne","Tomasz","Jonathan","Julian","Atiba","Paul","Jason","Iain","Alphonso","Junior","Cyle","Stephen","Milan","David","Ali"];
+const CAN_LAST = ["De Rosario","Radzinski","De Guzman","Osorio","Hutchinson","Stalteri","Bent","Hume","Davies","Hoilett","Larin","Eustaquio","Borjan","Wheeldon","Adekugbe"];
+const MEX_FIRST = ["Cuauhtémoc","Rafael","Jared","Claudio","Luis","Alberto","Ramón","Pável","Andrés","Jorge","Hugo","Guillermo","Javier","Carlos","Raúl"];
+const MEX_LAST = ["Blanco","Márquez","Borgetti","Suárez","Hernández","García","Morales","Pardo","Guardado","Campos","Sánchez","Ochoa","Vela","Salcido","Jiménez"];
+const JAM_FIRST = ["Onandi","Ricardo","Fitzroy","Deon","Theodore","Walter","Ian","Andy","Damani","Wolde","Marlon","Peter","Kemar","Lamar","Shaun"];
+const JAM_LAST = ["Lowe","Gardner","Simpson","Burton","Whitmore","Boyd","Goodison","Williams","Richards","Harris","King","Cargill","Lawrence","Miller","Francis"];
+const TRI_FIRST = ["Dwight","Russell","Stern","Shaka","Angus","Kenwyne","Densill","Carlos","Jason","Kevin","Cyd","Marvin","Gary","Anthony","Hayden"];
+const TRI_LAST = ["Yorke","Latapy","John","Hislop","Eve","Jones","Theobald","Edwards","Scotland","Molino","Gray","Andrews","Bertrand","Wolfe","Tinto"];
+const CRC_FIRST = ["Paulo","Rónald","Wálter","Erick","Mauricio","Jafet","Álvaro","Bryan","Celso","Keylor","Joel","Christian","Rándall","Óscar","Michael"];
+const CRC_LAST = ["Wanchope","Gómez","Centeno","Lonnis","Wright","Soto","Mesén","Ruiz","Borges","Navas","Campbell","Bolaños","Azofeifa","Umaña","Barrantes"];
+const HON_FIRST = ["Amado","Wilmer","Iván","David","Maynor","Carlos","Emilio","Julio","Ramón","Óscar","Jorge","Roger","Alex","Erick","Denil"];
+const HON_LAST = ["Guevara","Velásquez","Guzmán","Suazo","Figueroa","Pavón","Izaguirre","Martínez","Núñez","Palacios","Rosa","García","Elvir","Pinto","Norales"];
+
 const NATIONALITY_POOLS = {
   england: { first: ENG_FIRST, last: ENG_LAST, label: "England" },
   italy: { first: ITA_FIRST, last: ITA_LAST, label: "Italien" },
@@ -854,6 +993,73 @@ const NATIONALITY_POOLS = {
   afrika: { first: AF_FIRST, last: AF_LAST, label: "Afrika" },
   asien: { first: AS_FIRST, last: AS_LAST, label: "Asien" },
   nordamerika: { first: NA_FIRST, last: NA_LAST, label: "Nordamerika" },
+  netherlands: { first: NED_FIRST, last: NED_LAST, label: "Nederländerna" },
+  portugal: { first: POR_FIRST, last: POR_LAST, label: "Portugal" },
+  belgium: { first: BEL_FIRST, last: BEL_LAST, label: "Belgien" },
+  sweden: { first: SWE_FIRST, last: SWE_LAST, label: "Sverige" },
+  norway: { first: NOR_FIRST, last: NOR_LAST, label: "Norge" },
+  denmark: { first: DEN_FIRST, last: DEN_LAST, label: "Danmark" },
+  finland: { first: FIN_FIRST, last: FIN_LAST, label: "Finland" },
+  iceland: { first: ISL_FIRST, last: ISL_LAST, label: "Island" },
+  switzerland: { first: SUI_FIRST, last: SUI_LAST, label: "Schweiz" },
+  scotland: { first: SCO_FIRST, last: SCO_LAST, label: "Skottland" },
+  wales: { first: WAL_FIRST, last: WAL_LAST, label: "Wales" },
+  ireland: { first: IRL_FIRST, last: IRL_LAST, label: "Irland" },
+  northernireland: { first: NIR_FIRST, last: NIR_LAST, label: "Nordirland" },
+  croatia: { first: CRO_FIRST, last: CRO_LAST, label: "Kroatien" },
+  serbia: { first: SRB_FIRST, last: SRB_LAST, label: "Serbien" },
+  ukraine: { first: UKR_FIRST, last: UKR_LAST, label: "Ukraina" },
+  russia: { first: RUS_FIRST, last: RUS_LAST, label: "Ryssland" },
+  poland: { first: POL_FIRST, last: POL_LAST, label: "Polen" },
+  czechrepublic: { first: CZE_FIRST, last: CZE_LAST, label: "Tjeckien" },
+  slovakia: { first: SVK_FIRST, last: SVK_LAST, label: "Slovakien" },
+  romania: { first: ROU_FIRST, last: ROU_LAST, label: "Rumänien" },
+  bulgaria: { first: BUL_FIRST, last: BUL_LAST, label: "Bulgarien" },
+  greece: { first: GRE_FIRST, last: GRE_LAST, label: "Grekland" },
+  turkey: { first: TUR_FIRST, last: TUR_LAST, label: "Turkiet" },
+  austria: { first: AUT_FIRST, last: AUT_LAST, label: "Österrike" },
+  hungary: { first: HUN_FIRST, last: HUN_LAST, label: "Ungern" },
+  slovenia: { first: SLO_FIRST, last: SLO_LAST, label: "Slovenien" },
+  latvia: { first: LAT_FIRST, last: LAT_LAST, label: "Lettland" },
+  estonia: { first: EST_FIRST, last: EST_LAST, label: "Estland" },
+  georgia: { first: GEO_FIRST, last: GEO_LAST, label: "Georgien" },
+  bosnia: { first: BIH_FIRST, last: BIH_LAST, label: "Bosnien" },
+  brazil: { first: BRA_FIRST, last: BRA_LAST, label: "Brasilien" },
+  argentina: { first: ARG_FIRST, last: ARG_LAST, label: "Argentina" },
+  uruguay: { first: URU_FIRST, last: URU_LAST, label: "Uruguay" },
+  chile: { first: CHI_FIRST, last: CHI_LAST, label: "Chile" },
+  colombia: { first: COL_FIRST, last: COL_LAST, label: "Colombia" },
+  peru: { first: PER_FIRST, last: PER_LAST, label: "Peru" },
+  paraguay: { first: PAR_FIRST, last: PAR_LAST, label: "Paraguay" },
+  ecuador: { first: ECU_FIRST, last: ECU_LAST, label: "Ecuador" },
+  venezuela: { first: VEN_FIRST, last: VEN_LAST, label: "Venezuela" },
+  nigeria: { first: NGA_FIRST, last: NGA_LAST, label: "Nigeria" },
+  ghana: { first: GHA_FIRST, last: GHA_LAST, label: "Ghana" },
+  cameroon: { first: CMR_FIRST, last: CMR_LAST, label: "Kamerun" },
+  senegal: { first: SEN_FIRST, last: SEN_LAST, label: "Senegal" },
+  southafrica: { first: RSA_FIRST, last: RSA_LAST, label: "Sydafrika" },
+  morocco: { first: MAR_FIRST, last: MAR_LAST, label: "Marocko" },
+  algeria: { first: ALG_FIRST, last: ALG_LAST, label: "Algeriet" },
+  ivorycoast: { first: CIV_FIRST, last: CIV_LAST, label: "Elfenbenskusten" },
+  liberia: { first: LBR_FIRST, last: LBR_LAST, label: "Liberia" },
+  tunisia: { first: TUN_FIRST, last: TUN_LAST, label: "Tunisien" },
+  egypt: { first: EGY_FIRST, last: EGY_LAST, label: "Egypten" },
+  mali: { first: MLI_FIRST, last: MLI_LAST, label: "Mali" },
+  drcongo: { first: COD_FIRST, last: COD_LAST, label: "Kongo-Kinshasa" },
+  zambia: { first: ZAM_FIRST, last: ZAM_LAST, label: "Zambia" },
+  japan: { first: JPN_FIRST, last: JPN_LAST, label: "Japan" },
+  southkorea: { first: KOR_FIRST, last: KOR_LAST, label: "Sydkorea" },
+  china: { first: CHN_FIRST, last: CHN_LAST, label: "Kina" },
+  australia: { first: AUS_FIRST, last: AUS_LAST, label: "Australien" },
+  saudiarabia: { first: KSA_FIRST, last: KSA_LAST, label: "Saudiarabien" },
+  iran: { first: IRN_FIRST, last: IRN_LAST, label: "Iran" },
+  usa: { first: USA_FIRST, last: USA_LAST, label: "USA" },
+  canada: { first: CAN_FIRST, last: CAN_LAST, label: "Kanada" },
+  mexico: { first: MEX_FIRST, last: MEX_LAST, label: "Mexiko" },
+  jamaica: { first: JAM_FIRST, last: JAM_LAST, label: "Jamaica" },
+  trinidad: { first: TRI_FIRST, last: TRI_LAST, label: "Trinidad och Tobago" },
+  costarica: { first: CRC_FIRST, last: CRC_LAST, label: "Costa Rica" },
+  honduras: { first: HON_FIRST, last: HON_LAST, label: "Honduras" },
 };
 const NATIONALITY_KEYS = Object.keys(NATIONALITY_POOLS);
 const EUROPEAN_NATIONALITIES = ["england", "italy", "spain", "germany", "france"];
