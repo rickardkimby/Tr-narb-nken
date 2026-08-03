@@ -906,6 +906,8 @@ const LAT_FIRST = ["Māris","Andrejs","Vitālijs","Igors","Aleksandrs","Kaspars"
 const LAT_LAST = ["Verpakovskis","Astafjevs","Rubins","Zemlinskis","Lobaņovs","Blagonadeždins","Rimkus","Karlsons","Prohorenkovs","Kolcovs","Šternbergs","Ostrovskis","Isakovs","Cauņa","Višņakovs"];
 const EST_FIRST = ["Andres","Marko","Toomas","Raio","Enar","Martin","Konstantin","Ragnar","Sergei","Taavi","Joel","Mihkel","Henrik","Rauno","Karol"];
 const EST_LAST = ["Oper","Kristal","Piiroja","Kink","Jürgenson","Vassiljev","Terekhov","Klavan","Purje","Zenjov","Dmitrijev","Lindpere","Reim","Poom","Rooba"];
+const LTU_FIRST = ["Edgaras","Tomas","Deividas","Robertas","Andrius","Marius","Saulius","Darvydas","Vaidas","Aivaras","Ignas","Fiodor","Arvydas","Justas","Vytautas"];
+const LTU_LAST = ["Jankauskas","Danilevičius","Šemberas","Poškus","Skerla","Stankevičius","Mikoliūnas","Sernas","Karčemarskas","Klimavičius","Chvedukas","Černych","Kučys","Ivaškevičius","Žulpa"];
 const GEO_FIRST = ["Kakha","Levan","Temuri","Georgi","Zurab","Shota","Giorgi","Gia","Vladimer","Nika","Aleksandre","Otar","Ioseb","Data","Beso"];
 const GEO_LAST = ["Kaladze","Arveladze","Mchedlidze","Kobiashvili","Ketsbaia","Iashvili","Demetradze","Nemsadze","Tskitishvili","Khizanishvili","Kvirkvelia","Kankava","Kvaratskhelia","Dvalishvili","Salukvadze"];
 const BIH_FIRST = ["Edin","Zvjezdan","Sergej","Emir","Miralem","Vedad","Asmir","Senad","Ognjen","Muhamed","Elvir","Hasan","Zlatan","Ermin","Toni"];
@@ -926,6 +928,8 @@ const PAR_FIRST = ["José","Roque","Carlos","Julio","Denis","Nelson","Justo","Au
 const PAR_LAST = ["Chilavert","Santa Cruz","Gamarra","Cáceres","Torres","Villalba","Ayala","Paredes","Alcaraz","Cardozo","Enciso","Riveros","Estigarribia","Da Silva","Núñez"];
 const ECU_FIRST = ["Agustín","Iván","Álex","Ulises","Edison","Antonio","Christian","Jaime","Carlos","Felipe","Néicer","Segundo","Eduardo","Byron","Cristian"];
 const ECU_LAST = ["Delgado","Kaviedes","Aguinaga","De la Cruz","Méndez","Valencia","Ayoví","Reasco","Hurtado","Noboa","Castillo","Caicedo","Ambrosi","Guerrero","Espinoza"];
+const BOL_FIRST = ["Marco","Julio César","Erwin","Ronald","Joaquín","Milton","José María","Álvaro","Luis","Jhasmani","Pablo","Ramiro","Vladimir","Carmelo","Limber"];
+const BOL_LAST = ["Etcheverry","Baldivieso","Sánchez","Raldes","Botero","Melgar","Peña","Peredo","Cristaldo","Campos","Escobar","Justiniano","Castellón","Vaca","Suárez"];
 const VEN_FIRST = ["Juan","Rafael","José","Miku","Salomón","Fernando","Gabriel","Alejandro","Tomás","Giancarlo","César","Renny","Nixon","Alexander","Ricardo"];
 const VEN_LAST = ["Arango","Dolgetta","Rey","Rondón","Aguirre","Amorebieta","Feltscher","Vizcarrondo","Guerra","Machís","González","Fariñez","Osorio","Martínez","Villanueva"];
 const NGA_FIRST = ["Nwankwo","Jay-Jay","Sunday","Taribo","Celestine","Victor","Austin","Finidi","Daniel","Rashidi","Emmanuel","Yakubu","Mutiu","Wilson","Ike"];
@@ -956,6 +960,10 @@ const COD_FIRST = ["Shabani","Trésor","Youssouf","Cédric","Chancel","Dieumerci
 const COD_LAST = ["Nonda","Mputu","Mulumba","Bakambu","Mbokani","Kabananga","Makengo","Wissa","Kakuta","Massoulou","Kayembe","Luyindama","Musaba","Kongolo","Tomiwa"];
 const ZAM_FIRST = ["Kalusha","Charly","Emmanuel","Jacob","Christopher","Given","Rainford","Collins","Chisamba","Rodgers","Nathan","Fashion","Enock","Winter","William"];
 const ZAM_LAST = ["Bwalya","Musonda","Chabala","Mulenga","Katongo","Mwape","Kaumba","Sinkala","Kangwa","Mubanga","Mumba","Simutowe","Sakala","Chishimba","Bwalya"];
+const ZIM_FIRST = ["Peter","Bruce","Benjani","Norman","Tinashe","Knowledge","Willard","Kaitano","Adam","Ronald","Method","Energy","Never","Costa","Tendai"];
+const ZIM_LAST = ["Ndlovu","Grobler","Mwaruwari","Mapeza","Nengomasha","Musona","Katsande","Tembo","Murambadoro","Sibanda","Mwaruwari","Murekatete","Ndoro","Nhamoinesu","Ncube"];
+const ANG_FIRST = ["Fabrice","Akwá","Flávio","André","Jacques","Marco","Mateus","Manucho","Loco","Love","Amaro","Pauleta","Kali","Zé","Miguel"];
+const ANG_LAST = ["Maieco","Silva","Amado","Macanga","Bandeira","Freitas","Djalva","Gonçalves","Ricardo","Kaká","Vieira","Cabaça","Freeman","António","Ganga"];
 const JPN_FIRST = ["Hidetoshi","Shunsuke","Shinji","Keisuke","Yasuhito","Junichi","Masashi","Atsushi","Yuto","Makoto","Hiroshi","Naohiro","Kazuyoshi","Yoshikatsu","Genki"];
 const JPN_LAST = ["Nakata","Nakamura","Ono","Nakazawa","Endo","Inamoto","Nishizawa","Takahara","Miyamoto","Kawaguchi","Suzuki","Honda","Kagawa","Okazaki","Nagatomo"];
 const KOR_FIRST = ["Ji-Sung","Sung-Yong","Young-Pyo","Jung-Hwan","Woon-Jae","Nam-Yong","Sang-Chul","Eul-Yong","Do-Heon","Chun-Soo","Heung-Min","Ki-Hyun","Chi-Woo","Byung-Ho","Sun-Min"];
@@ -1026,6 +1034,7 @@ const NATIONALITY_POOLS = {
   slovenia: { first: SLO_FIRST, last: SLO_LAST, label: "Slovenien" },
   latvia: { first: LAT_FIRST, last: LAT_LAST, label: "Lettland" },
   estonia: { first: EST_FIRST, last: EST_LAST, label: "Estland" },
+  lithuania: { first: LTU_FIRST, last: LTU_LAST, label: "Litauen" },
   georgia: { first: GEO_FIRST, last: GEO_LAST, label: "Georgien" },
   bosnia: { first: BIH_FIRST, last: BIH_LAST, label: "Bosnien" },
   brazil: { first: BRA_FIRST, last: BRA_LAST, label: "Brasilien" },
@@ -1036,6 +1045,7 @@ const NATIONALITY_POOLS = {
   peru: { first: PER_FIRST, last: PER_LAST, label: "Peru" },
   paraguay: { first: PAR_FIRST, last: PAR_LAST, label: "Paraguay" },
   ecuador: { first: ECU_FIRST, last: ECU_LAST, label: "Ecuador" },
+  bolivia: { first: BOL_FIRST, last: BOL_LAST, label: "Bolivia" },
   venezuela: { first: VEN_FIRST, last: VEN_LAST, label: "Venezuela" },
   nigeria: { first: NGA_FIRST, last: NGA_LAST, label: "Nigeria" },
   ghana: { first: GHA_FIRST, last: GHA_LAST, label: "Ghana" },
@@ -1051,6 +1061,8 @@ const NATIONALITY_POOLS = {
   mali: { first: MLI_FIRST, last: MLI_LAST, label: "Mali" },
   drcongo: { first: COD_FIRST, last: COD_LAST, label: "Kongo-Kinshasa" },
   zambia: { first: ZAM_FIRST, last: ZAM_LAST, label: "Zambia" },
+  zimbabwe: { first: ZIM_FIRST, last: ZIM_LAST, label: "Zimbabwe" },
+  angola: { first: ANG_FIRST, last: ANG_LAST, label: "Angola" },
   japan: { first: JPN_FIRST, last: JPN_LAST, label: "Japan" },
   southkorea: { first: KOR_FIRST, last: KOR_LAST, label: "Sydkorea" },
   china: { first: CHN_FIRST, last: CHN_LAST, label: "Kina" },
