@@ -964,6 +964,36 @@ function deriveClubStrength(squad, noise = 5) {
   const rating = bestAvg * 0.85 + restAvg * 0.15;
   return clamp(Math.round(rating + rnd(-noise, noise)), 20, 97);
 }
+// Gives an AI club's squad the same season-end treatment the user's own squad gets in newSeason()
+// (growth toward potential under 24, decline past 30, retirement, contract expiry) instead of leaving
+// every AI player frozen forever. A retiring/departing player is replaced in kind (same position, same
+// shirt number) via makePlayer so squad size and shape stay stable across many seasons — otherwise a
+// club would slowly shrink to nothing. Club strength is then derived from this living squad (see the
+// deriveClubStrength call in newSeason()) instead of drifting on its own via a standalone random walk.
+function ageAiSquad(squad, homeCountry, archetype, division) {
+  // The archetype's growth trait (0.1 "arbetarklubb" – 0.38 "nyrik") used to drive the old standalone
+  // strength random-walk directly; folded in here as a mild multiplier on young-player development so a
+  // "nyrik" club's promised fast growth (and an "arbetarklubb"'s slow one) still shows up — now as an
+  // actual squad improving faster, not just an abstract number moving.
+  const archMult = 0.7 + (ARCHETYPES[archetype]?.growth ?? 0.2) * 1.2;
+  return squad.map(p => {
+    const age = p.age + 1;
+    if (age >= 36) return { ...makePlayer(p.pos, homeCountry, p.specificPosition, archetype, division, false), number: p.number };
+    let attack = p.attack, defense = p.defense;
+    if (age < 24) { const detMult = determinationMult(p); attack = clamp(attack + rnd(0.3, 1.2) * detMult * archMult, 15, 99); defense = clamp(defense + rnd(0.3, 1.2) * detMult * archMult, 15, 99); }
+    else if (age >= 30) { const decline = (age - 29) * rnd(0.5, 1.1); attack = clamp(attack - decline, 15, 99); defense = clamp(defense - decline, 15, 99); }
+    let contractYears = p.contractYears - 1;
+    if (contractYears <= 0) {
+      // AI clubs re-sign the players worth keeping instead of every contract lapsing into a free-agent
+      // exit — without this, a squad's entire ~22 players would fully turn over every 1-4 seasons
+      // (the same range new contracts are handed out in), which is far too fast to feel like a real club.
+      const keepChance = clamp(0.35 + ((attack + defense) / 2) / 130 - Math.max(0, age - 27) * 0.02, 0.15, 0.9);
+      if (Math.random() < keepChance) contractYears = rndInt(2, 4);
+      else return { ...makePlayer(p.pos, homeCountry, p.specificPosition, archetype, division, false), number: p.number };
+    }
+    return { ...p, age, attack, defense, contractYears, goals: 0, assists: 0, apps: 0, yellowCards: 0, seasonYellowCards: 0, seasonRedCards: 0 };
+  });
+}
 function assignSquadNumber(squad) {
   const used = new Set(squad.map(p => p.number).filter(n => n !== undefined && n !== null));
   for (let n = 1; n <= 99; n++) if (!used.has(n)) return n;
@@ -5590,14 +5620,14 @@ function setupCup(type, base) {
       LEAGUES.forEach(country => {
         [1, 2, 3].forEach(div => {
           const standingsArr = snapshot.worldStandings[country.id][div];
-          const n = standingsArr.length;
-          standingsArr.forEach((s, idx) => {
+          standingsArr.forEach(s => {
+            // The user's own squad gets its own, more detailed aging pass further below (contract
+            // messages, morale, career records) whose result lands in the top-level `squad` field —
+            // skip it here so this pass doesn't leave a second, divergent copy sitting in `clubs`.
+            if (s.id === prev.userClubId) return;
             const c = newClubs[s.id];
-            const arche = ARCHETYPES[c.archetype];
-            const posFactor = ((n - (idx + 1)) / (n - 1) - 0.5) * 2.2;
-            const delta = posFactor + arche.growth * rnd(-0.3, 0.9) + rnd(-0.25, 0.25);
-            const resetSquad = c.squad.map(p => ({ ...p, goals: 0, assists: 0, apps: 0, seasonYellowCards: 0, seasonRedCards: 0 }));
-            newClubs[s.id] = { ...c, strength: clamp(c.strength + delta, 20, 97), squad: resetSquad };
+            const agedSquad = ageAiSquad(c.squad, country.id, c.archetype, c.division);
+            newClubs[s.id] = { ...c, strength: deriveClubStrength(agedSquad, 3), squad: agedSquad };
           });
         });
         const div1 = snapshot.worldStandings[country.id][1], div2 = snapshot.worldStandings[country.id][2], div3 = snapshot.worldStandings[country.id][3];
@@ -5714,6 +5744,9 @@ function setupCup(type, base) {
         newSquad = [...newSquad, returned];
       });
       const loanReturnMsg = returningLoanees.length ? `${returningLoanees.map(p => p.name).join(", ")} är tillbaka från lån och har utvecklats.` : null;
+      // Keep the club-lookup copy in sync with the properly-aged squad above (rather than the skipped
+      // AI-aging pass) — other clubs' scouting/transfer logic reads strength off `clubs[userClubId]`.
+      newClubs[prev.userClubId] = { ...newClubs[prev.userClubId], squad: newSquad, strength: deriveClubStrength(newSquad, 3) };
       const departedIds = new Set(prev.squad.filter(p => !newSquad.some(q => q.id === p.id)).map(p => p.id));
       const offSeasonFamiliarity = clamp((prev.formationFamiliarity || 0) * 0.25, 0, 100);
 
@@ -6417,11 +6450,17 @@ function excelRowsToWorld(clubRows, playerRows, youthRows) {
   (playerRows || []).forEach(row => {
     const clubId = String(row.KlubbID || "").trim();
     if (!world[clubId]) return;
+    const attack = num(row.Anfall), defense = num(row.Försvar);
+    // Same failure mode as the old Styrka column: a sheet's Värde/Lön can drift completely out of sync
+    // with what the player actually is (a database has turned up with an inverse correlation between
+    // Overall and Värde). Derive both from attack/defense the same way a freshly generated player's are
+    // — the sheet's own numbers only survive as a fallback when attack/defense are missing.
+    const value = (attack !== undefined && defense !== undefined) ? Math.max(40, Math.round(((attack + defense) / 2) * 8.8)) : num(row.Värde);
     world[clubId].squad.push({
       id: String(row.SpelarID || "").trim(), name: String(row.Namn || "").trim(), number: num(row.Nummer),
       age: num(row.Ålder), pos: String(row.Position || "").trim(), specificPosition: String(row.SpecifikPosition || "").trim(),
-      attack: num(row.Anfall), defense: num(row.Försvar), potential: num(row.Potential),
-      value: num(row.Värde), wage: num(row["Lön"]), nationality: String(row.Nationalitet || "").trim(),
+      attack, defense, potential: num(row.Potential),
+      value, wage: computeWage(value, attack ?? 50, defense ?? 50), nationality: String(row.Nationalitet || "").trim(),
       contractYears: row.Kontraktsår === "" || row.Kontraktsår === undefined ? 3 : num(row.Kontraktsår),
       morale: row.Moral === "" || row.Moral === undefined ? 70 : num(row.Moral),
       personality: row.Personlighet || "Balanserad",
@@ -6446,11 +6485,16 @@ function excelRowsToWorld(clubRows, playerRows, youthRows) {
   (youthRows || []).forEach(row => {
     const clubId = String(row.KlubbID || "").trim();
     if (!world[clubId]) return;
+    const yAttack = num(row.Anfall), yDefense = num(row.Försvar), yPotential = num(row.Potential);
+    const yId = String(row.SpelarID || "").trim() || uid();
+    // Academy prospects are priced on potential alone (see youthProspectValue) — same drift risk as the
+    // first team, so recompute from the sheet's own attributes rather than trusting Värde directly.
+    const yValue = (yAttack !== undefined && yDefense !== undefined && yPotential !== undefined) ? youthProspectValue(yAttack, yDefense, yPotential, yId) : num(row.Värde);
     world[clubId].youthSquad.push({
-      id: String(row.SpelarID || "").trim() || uid(), name: String(row.Namn || "").trim(),
+      id: yId, name: String(row.Namn || "").trim(),
       age: num(row.Ålder) || 16, pos: String(row.Position || "").trim(), specificPosition: String(row.SpecifikPosition || "").trim(),
-      attack: num(row.Anfall), defense: num(row.Försvar), potential: num(row.Potential),
-      value: num(row.Värde), wage: num(row["Lön"]), nationality: String(row.Nationalitet || "").trim(),
+      attack: yAttack, defense: yDefense, potential: yPotential,
+      value: yValue, wage: num(row["Lön"]), nationality: String(row.Nationalitet || "").trim(),
       endurance: num(row.Uthållighet), determination: num(row.Beslutsamhet),
     });
   });
