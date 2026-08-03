@@ -982,6 +982,10 @@ const CRC_FIRST = ["Paulo","Rónald","Wálter","Erick","Mauricio","Jafet","Álva
 const CRC_LAST = ["Wanchope","Gómez","Centeno","Lonnis","Wright","Soto","Mesén","Ruiz","Borges","Navas","Campbell","Bolaños","Azofeifa","Umaña","Barrantes"];
 const HON_FIRST = ["Amado","Wilmer","Iván","David","Maynor","Carlos","Emilio","Julio","Ramón","Óscar","Jorge","Roger","Alex","Erick","Denil"];
 const HON_LAST = ["Guevara","Velásquez","Guzmán","Suazo","Figueroa","Pavón","Izaguirre","Martínez","Núñez","Palacios","Rosa","García","Elvir","Pinto","Norales"];
+const NZL_FIRST = ["Danny","Ryan","Chris","Winston","Ivan","Wynton","Simon","Ryan","Michael","Ben","Marco","Tommy","Chris","Ben","Sam"];
+const NZL_LAST = ["Hay","Nelsen","Killen","Reid","Vicelich","Rufer","Elliott","Smeltz","Boxall","Sigmund","Rojas","Smith","Wood","Turner","Bertos"];
+const BER_FIRST = ["Shaun","Kyle","Nahki","Reggie","Dennis","Jomo","Kentoye","John","Zeiko","Sam","Willie","Junior","Larry","Osagi","Randolph"];
+const BER_LAST = ["Goater","Lambert","Wells","Lambe","Tucker","Bean","Lambe","Barnes","Wolffe","Nusum","Clarke","Darrell","Ferrari","Steede","Simons"];
 
 const NATIONALITY_POOLS = {
   england: { first: ENG_FIRST, last: ENG_LAST, label: "England" },
@@ -1060,6 +1064,8 @@ const NATIONALITY_POOLS = {
   trinidad: { first: TRI_FIRST, last: TRI_LAST, label: "Trinidad och Tobago" },
   costarica: { first: CRC_FIRST, last: CRC_LAST, label: "Costa Rica" },
   honduras: { first: HON_FIRST, last: HON_LAST, label: "Honduras" },
+  newzealand: { first: NZL_FIRST, last: NZL_LAST, label: "Nya Zeeland" },
+  bermuda: { first: BER_FIRST, last: BER_LAST, label: "Bermuda" },
 };
 const NATIONALITY_KEYS = Object.keys(NATIONALITY_POOLS);
 const EUROPEAN_NATIONALITIES = ["england", "italy", "spain", "germany", "france"];
