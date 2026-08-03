@@ -3355,29 +3355,27 @@ const DOMESTIC_PRIZES = { participation: 15, quarterfinal: 70, semifinal: 150, r
 
 // ---------- Continental qualification ----------
 function buildSeason1Qualifiers(clubs) {
-  const LEAGUE_CUP_COUNTS = {
-    england: { cup1: 4, cup2: 3 },
-    spain: { cup1: 3, cup2: 4 },
-    italy: { cup1: 3, cup2: 3 },
-    germany: { cup1: 3, cup2: 3 },
-    france: { cup1: 3, cup2: 3 },
+  // Hand-picked season-1 qualifiers, based on the real 2000/2001 Champions League and UEFA Cup fields —
+  // mapped onto this game's fictional club names. Two real clubs (Kaiserslautern, Sedan) only exist as
+  // Division 2/3 clubs in this game's database, so they're swapped for a comparable Division 1 side.
+  const CUP1_IDS = {
+    england: ["eng7", "eng4", "eng11"], // Trafford United (Man Utd), North London Gunners (Arsenal), Elland Whites (Leeds)
+    italy: ["ita4", "ita14", "ita2"], // Piemonte Bianconeri (Juventus), Laziale Capitolina (Lazio), Milano 1899 (Milan)
+    spain: ["esp1", "esp2", "esp11", "esp5"], // CF Madrid, Deportivo Barcelona, Turia Valencia, UD Santander (sub for Deportivo La Coruña)
+    france: ["fra1", "fra4", "fra3"], // FC Paris (PSG), AS Monégasque (Monaco), Rhône Lyonnais (Lyon)
+    germany: ["ger4", "ger14", "ger1"], // Leverkusen Werkself, Elbe Hamburg, München 1900 (Bayern)
   };
-  // Hand-picked England season-1 qualifiers: Mästerskapscupen gets the "big four", Kimby Cupen gets Ironworks/Chelsea/Leeds.
-  const ENGLAND_CUP1_IDS = ["eng2", "eng1", "eng4", "eng7"]; // Manchester Rovers (City), Liverpool Athletic, North London Gunners (Arsenal), Trafford United (Man Utd)
-  const ENGLAND_CUP2_IDS = ["eng3", "eng8", "eng11"]; // Thames Ironworks, Stamford Athletic (Chelsea), Elland Whites (Leeds)
-  const cup1List = [];
-  const cup2List = [];
+  const CUP2_IDS = {
+    england: ["eng1", "eng8", "eng13"], // Liverpool Athletic, Stamford Athletic (Chelsea), Villa Claret (Aston Villa)
+    italy: ["ita3", "ita20", "ita9", "ita1"], // Milano Nerazzurri (Inter), Parma Ducale, Udine Sportiva, Roma 1927
+    spain: ["esp17", "esp15", "esp16"], // Osasuna Rojillo (sub for Alavés), Célticos Vigo (Celta Vigo), Periquito Espanyol
+    france: ["fra13", "fra15", "fra12"], // Sang et Or Lens (sub for Sedan), Nantais Canaris (Nantes), Gironde Bordeaux
+    germany: ["ger11", "ger19", "ger18"], // Weser Bremen, Rheinhessen Mainz (sub for Kaiserslautern), Neckar Stuttgart
+  };
+  const cup1List = [], cup2List = [];
   LEAGUES.forEach(l => {
-    const counts = LEAGUE_CUP_COUNTS[l.id] || { cup1: 3, cup2: 3 };
-    if (l.id === "england") {
-      cup1List.push(...ENGLAND_CUP1_IDS.filter(id => clubs[id]));
-      cup2List.push(...ENGLAND_CUP2_IDS.filter(id => clubs[id]));
-      return;
-    }
-    const div1Sorted = Object.values(clubs).filter(c => c.league === l.id && c.division === 1).sort((a, b) => b.strength - a.strength);
-    cup1List.push(...div1Sorted.slice(0, counts.cup1).map(c => c.id));
-    const remaining = div1Sorted.filter(c => !cup1List.includes(c.id));
-    cup2List.push(...remaining.slice(0, counts.cup2).map(c => c.id));
+    cup1List.push(...(CUP1_IDS[l.id] || []).filter(id => clubs[id]));
+    cup2List.push(...(CUP2_IDS[l.id] || []).filter(id => clubs[id]));
   });
   // Safety net in case any league is short on clubs — top up from the strongest remaining Division 1 sides.
   if (cup1List.length < 16) {
