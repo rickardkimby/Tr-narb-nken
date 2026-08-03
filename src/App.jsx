@@ -950,6 +950,8 @@ const CIV_FIRST = ["Didier","Kolo","Yaya","Emmanuel","Salomon","Aruna","Gervinho
 const CIV_LAST = ["Drogba","Touré","Kalou","Eboué","Diarra","Kaluyituka","Zokora","Bakayoko","Konan","Doumbia","Guel","Boka","Traoré","Kouassi","Aurier"];
 const LBR_FIRST = ["George","Jonathan","Kelvin","Christopher","James","Anthony","Sackie","Momo","Peter","David","Dulee","Mulbah","Musa","Sekou","Alphonso"];
 const LBR_LAST = ["Weah","Wleh","Sirleaf","Doe","Toe","Freeman","Wesseh","Nagbe","Debbah","Karngbaye","Gray","Manneh","Konneh","Cooper","Johnson"];
+const SLE_FIRST = ["Mohamed","Sheku","Kandeh","Alhassan","Ibrahim","Rodney","Musa","Mustapha","Kei","Alusine","Umaru","Fasilie","Christian","Sallieu","Kemoh"];
+const SLE_LAST = ["Kallon","Kamara","Conteh","Kanu","Bangura","Strasser","Sesay","Kargbo","Turay","Yillah","Koroma","Mansaray","Kabba","Kaikai","Fofanah"];
 const TUN_FIRST = ["Sami","Hatem","Radhi","Kaies","Wael","Zoubeir","Adel","Khaled","Chokri","Mehdi","Yassine","Wahbi","Ferjani","Youssef","Aymen"];
 const TUN_LAST = ["Trabelsi","Baya","Ghommidh","Gmar","Ben Younes","Bouazizi","Chikhaoui","Sassi","Msakni","Khazri","Sliti","Meriah","Ben Amor","Skhiri","Jaziri"];
 const EGY_FIRST = ["Mohamed","Ahmed","Hossam","Ibrahim","Mahmoud","Essam","Amr","Hazem","Emad","Wael","Shikabala","Rabie","Karim","Mido","Omar"];
@@ -1056,6 +1058,7 @@ const NATIONALITY_POOLS = {
   algeria: { first: ALG_FIRST, last: ALG_LAST, label: "Algeriet" },
   ivorycoast: { first: CIV_FIRST, last: CIV_LAST, label: "Elfenbenskusten" },
   liberia: { first: LBR_FIRST, last: LBR_LAST, label: "Liberia" },
+  sierraleone: { first: SLE_FIRST, last: SLE_LAST, label: "Sierra Leone" },
   tunisia: { first: TUN_FIRST, last: TUN_LAST, label: "Tunisien" },
   egypt: { first: EGY_FIRST, last: EGY_LAST, label: "Egypten" },
   mali: { first: MLI_FIRST, last: MLI_LAST, label: "Mali" },
