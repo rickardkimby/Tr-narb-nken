@@ -371,7 +371,7 @@ const LEAGUES = [
 // real top-flight often has a unique name), while Division 2/3 are simply relabeled Division 1/2 —
 // this is purely a DISPLAY layer; the underlying division numbers (1/2/3) driving all game logic are untouched.
 const DIVISION_DISPLAY_NAME = {
-  england: { 1: "The Football League", 2: "Division 1", 3: "Division 2" },
+  england: { 1: "Premier League", 2: "Division One", 3: "Division Two" },
   italy: { 1: "Campionato d'Italia", 2: "Division 1", 3: "Division 2" },
   spain: { 1: "Primera Liga", 2: "Division 1", 3: "Division 2" },
   germany: { 1: "Bundesmeisterschaft", 2: "Division 1", 3: "Division 2" },
