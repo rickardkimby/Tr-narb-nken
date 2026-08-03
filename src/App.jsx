@@ -1665,7 +1665,12 @@ function negotiateOffer(offerAmount, value, club, reputation, rivalBoost = 1, pl
   let prestigeMult = 1;
   if (player) {
     const overall = overallOf(player);
-    const isBigTalent = overall >= 78 || (player.potential && player.potential >= 80 && player.potential - overall >= 6);
+    // Academy prospects' potential rarely clears the 80 bar the first-team "breakout star" check uses
+    // (their generation formula tops out well below that for most clubs), so without a separate, lower
+    // bar tuned to that distribution, a club's best academy talent would sail through unprotected. Any
+    // young player (own academy scale, not senior stardom) with a clearly-elite ceiling gets the same wall.
+    const isEliteYoungster = player.potential && player.age != null && player.age <= 20 && player.potential >= 72;
+    const isBigTalent = overall >= 78 || (player.potential && player.potential >= 80 && player.potential - overall >= 6) || isEliteYoungster;
     if (isBigTalent && (club.strength || 0) >= reputation) {
       const gap = clamp(((club.strength || 0) - reputation) / 35, 0, 1);
       prestigeMult = 1.55 + gap * 0.85; // up to ~2.4x harder to agree a fee
@@ -5108,17 +5113,41 @@ function setupCup(type, base) {
     const totalCashNow = upfrontAmount + signOnBonus + houseCarCost;
     if (g.budget < totalCashNow) { showToast("Inte tillräcklig budget för direktkostnaden."); return; }
     if (g.boardConfidence < 40 && totalCashNow > g.budget * 0.4) { showToast("Styrelsen blockerar värvningen — för dyr given det svaga förtroendet just nu."); return; }
+    const fromClubNameEarly = player.clubId ? (g.clubs[player.clubId]?.name || "en annan klubb") : "fri agent";
+    const installmentNoteEarly = financedAmount > 0 ? ` Resten (${formatMoney(financedAmount)}) delbetalas över ${plan.months} månader.` : "";
+    const recalcPlan = financedAmount > 0 ? installmentPlan(financedAmount, plan.months) : null;
+    const newInstallment = recalcPlan ? { id: uid(), playerName: player.name, monthsLeft: recalcPlan.months, monthlyPayment: recalcPlan.monthlyPayment, totalRemaining: recalcPlan.totalWithInterest } : null;
+    if (player.age != null && player.age <= 16) {
+      // A signing this young goes straight into your academy regardless of where they were playing —
+      // see finalizeClubBrowseTransfer for the full rationale.
+      if ((g.youthSquad || []).length >= 8) { showToast("Er akademi är redan full (max 8 spelare) — inget utrymme för fler just nu."); return; }
+      const acquiredProspect = { ...player, clubId: undefined, isAcademy: undefined, yearsInAcademy: 0, joinedInfo: { text: `Köptes från ${fromClubNameEarly} för ${formatMoney(price)} i säsong ${g.season} — placeras i akademin på grund av sin ålder (${player.age} år).${installmentNoteEarly}` } };
+      setG(prev => {
+        const rating = effectiveScoutRating(prev.dev, prev.reputation, prev.scoutingParts.analys + (prev.staff.scout?.level || 0) * 0.5);
+        const poolForRegion = prev.worldPool?.[region] || [];
+        const draw = drawFromWorldPool(poolForRegion, rating, 1);
+        const replacement = draw.picks[0] || makeScoutPlayer(pick(POS_ORDER), region, rating, prev.clubs);
+        return {
+          ...prev, budget: prev.budget - totalCashNow, youthSquad: [...(prev.youthSquad || []), acquiredProspect],
+          transferInstallments: newInstallment ? [...(prev.transferInstallments || []), newInstallment] : (prev.transferInstallments || []),
+          market: { ...prev.market, [region]: prev.market[region].filter(p => p.id !== player.id).concat([replacement]) },
+          worldPool: prev.worldPool ? { ...prev.worldPool, [region]: draw.remaining } : prev.worldPool,
+          clubGoodwill: player.clubId ? { ...prev.clubGoodwill, [player.clubId]: clamp((prev.clubGoodwill[player.clubId] ?? 50) + 5, 0, 100) } : prev.clubGoodwill,
+          transferHistory: [{ id: uid(), season: prev.season, round: prev.round, playerId: player.id, playerName: player.name, playerPos: player.specificPosition, fromClubId: player.clubId || null, fromClubName: fromClubNameEarly, fromColor: player.clubId ? prev.clubs[player.clubId]?.color : null, toClubId: prev.userClubId, toClubName: userClub.name, toColor: userClub.color, fee: price, leagueId: (player.clubId ? prev.clubs[player.clubId]?.league : null) || prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000),
+        };
+      });
+      showToast(`${player.name} ansluter till er akademi för ${formatMoney(price)}. Minst 2 år i akademin krävs innan uppflyttning.${installmentNoteEarly}`);
+      return;
+    }
     const wage = agreedWage || player.wage;
     const cap = wageBudgetCap(g.reputation, g.clubs[g.userClubId].division, g.dev.sponsring);
     if (totalWageBill(g.squad) + wage > cap * 1.15) { showToast("Löneutrymmet räcker inte — Financial Fair Play stoppar värvningen."); return; }
-    const fromClubName = player.clubId ? (g.clubs[player.clubId]?.name || "en annan klubb") : "fri agent";
+    const fromClubName = fromClubNameEarly;
     const isDerby = player.clubId && g.clubs[player.clubId]?.rivalId === g.userClubId;
     const fanDelta = fanSigningReaction(player, price, isDerby, g.squad, userClub);
-    const installmentNote = financedAmount > 0 ? ` Resten (${formatMoney(financedAmount)}) delbetalas över ${plan.months} månader.` : "";
+    const installmentNote = installmentNoteEarly;
     const reluctant = (details.clubInterest ?? 100) < 55;
     const signedPlayer = { ...player, clubId: null, contractYears: rndInt(3, 5), wage, number: assignSquadNumber(g.squad), sellOnPct, sellOnClubName: sellOnPct > 0 ? fromClubName : null, releaseClause: details.releaseClauseOffer > 0 ? details.releaseClauseOffer : null, morale: reluctant ? clamp((player.morale ?? 70) - 15, 20, 100) : (player.morale ?? 70), reluctantSign: reluctant, joinedInfo: { text: reluctant ? `Värvades från ${fromClubName} för ${formatMoney(price)} i säsong ${g.season} — övertalades trots tveksamhet inför flytten.${installmentNote}` : `Värvades från ${fromClubName} för ${formatMoney(price)} i säsong ${g.season}.${installmentNote}` } };
-    const recalcPlan = financedAmount > 0 ? installmentPlan(financedAmount, plan.months) : null;
-    const newInstallment = recalcPlan ? { id: uid(), playerName: player.name, monthsLeft: recalcPlan.months, monthlyPayment: recalcPlan.monthlyPayment, totalRemaining: recalcPlan.totalWithInterest } : null;
     setG(prev => {
       const rating = effectiveScoutRating(prev.dev, prev.reputation, prev.scoutingParts.analys + (prev.staff.scout?.level || 0) * 0.5);
       const poolForRegion = prev.worldPool?.[region] || [];
@@ -5167,15 +5196,18 @@ function setupCup(type, base) {
     const installmentNote = financedAmount > 0 ? ` Resten (${formatMoney(financedAmount)}) delbetalas över ${plan.months} månader.` : "";
     const recalcPlan = financedAmount > 0 ? installmentPlan(financedAmount, plan.months) : null;
     const newInstallment = recalcPlan ? { id: uid(), playerName: player.name, monthsLeft: recalcPlan.months, monthlyPayment: recalcPlan.monthlyPayment, totalRemaining: recalcPlan.totalWithInterest } : null;
-    if (player.isAcademy) {
+    if (player.isAcademy || (player.age != null && player.age <= 16)) {
       // A bought academy prospect joins YOUR academy, not your first team — they go through the exact
       // same development clock as a homegrown talent (minimum 2 years, overall 58+) before they're
       // eligible for promotion. Buying potential doesn't buy a shortcut past actually developing it.
-      const acquiredProspect = { ...player, clubId: undefined, isAcademy: undefined, yearsInAcademy: 0, joinedInfo: { text: `Köptes från ${fromClubName}s akademi för ${formatMoney(agreedPrice)} i säsong ${g.season}.${installmentNote}` } };
+      // The same applies to any 16-or-under signing even if the seller had them in their first team —
+      // a 16-year-old belongs in an academy regardless of which club currently fields them.
+      if ((g.youthSquad || []).length >= 8) { showToast("Er akademi är redan full (max 8 spelare) — inget utrymme för fler just nu."); return; }
+      const acquiredProspect = { ...player, clubId: undefined, isAcademy: undefined, yearsInAcademy: 0, joinedInfo: { text: player.isAcademy ? `Köptes från ${fromClubName}s akademi för ${formatMoney(agreedPrice)} i säsong ${g.season}.${installmentNote}` : `Köptes från ${fromClubName} för ${formatMoney(agreedPrice)} i säsong ${g.season} — placeras i akademin på grund av sin ålder (${player.age} år).${installmentNote}` } };
       setG(prev => ({
         ...prev, budget: prev.budget - totalCashNow, youthSquad: [...(prev.youthSquad || []), acquiredProspect],
         transferInstallments: newInstallment ? [...(prev.transferInstallments || []), newInstallment] : (prev.transferInstallments || []),
-        clubs: player.clubId && prev.clubs[player.clubId] ? { ...prev.clubs, [player.clubId]: { ...prev.clubs[player.clubId], youthSquad: (prev.clubs[player.clubId].youthSquad || []).filter(p => p.id !== player.id) } } : prev.clubs,
+        clubs: player.clubId && prev.clubs[player.clubId] ? { ...prev.clubs, [player.clubId]: { ...prev.clubs[player.clubId], squad: (prev.clubs[player.clubId].squad || []).filter(p => p.id !== player.id), youthSquad: (prev.clubs[player.clubId].youthSquad || []).filter(p => p.id !== player.id) } } : prev.clubs,
         clubGoodwill: player.clubId ? { ...prev.clubGoodwill, [player.clubId]: clamp((prev.clubGoodwill[player.clubId] ?? 50) + 5, 0, 100) } : prev.clubGoodwill,
         transferHistory: [{ id: uid(), season: prev.season, round: prev.round, playerId: player.id, playerName: player.name, playerPos: player.specificPosition, fromClubId: player.clubId || null, fromClubName, fromColor: player.clubId ? prev.clubs[player.clubId]?.color : null, toClubId: prev.userClubId, toClubName: userClub.name, toColor: userClub.color, fee: agreedPrice, leagueId: (player.clubId ? prev.clubs[player.clubId]?.league : null) || prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000),
       }));
@@ -5212,16 +5244,34 @@ function setupCup(type, base) {
     const totalCashNow = upfrontAmount + signOnBonus + houseCarCost;
     if (g.budget < totalCashNow) { showToast("Inte tillräcklig budget för direktkostnaden."); return; }
     if (g.boardConfidence < 40 && totalCashNow > g.budget * 0.4) { showToast("Styrelsen blockerar värvningen — för dyr given det svaga förtroendet just nu."); return; }
+    const fromClubNameEarly = player.clubId ? (g.clubs[player.clubId]?.name || "en annan klubb") : "fri agent";
+    const installmentNoteEarly = financedAmount > 0 ? ` Resten (${formatMoney(financedAmount)}) delbetalas över ${plan.months} månader.` : "";
+    const recalcPlan = financedAmount > 0 ? installmentPlan(financedAmount, plan.months) : null;
+    const newInstallment = recalcPlan ? { id: uid(), playerName: player.name, monthsLeft: recalcPlan.months, monthlyPayment: recalcPlan.monthlyPayment, totalRemaining: recalcPlan.totalWithInterest } : null;
+    if (player.age != null && player.age <= 16) {
+      // A signing this young goes straight into your academy regardless of where they were playing —
+      // see finalizeClubBrowseTransfer for the full rationale.
+      if ((g.youthSquad || []).length >= 8) { showToast("Er akademi är redan full (max 8 spelare) — inget utrymme för fler just nu."); return; }
+      const acquiredProspect = { ...player, clubId: undefined, isAcademy: undefined, yearsInAcademy: 0, joinedInfo: { text: `Köptes från ${fromClubNameEarly} för ${formatMoney(agreedPrice)} i säsong ${g.season}, efter att ha upptäckts av scouten — placeras i akademin på grund av sin ålder (${player.age} år).${installmentNoteEarly}` } };
+      setG(prev => ({
+        ...prev, budget: prev.budget - totalCashNow, youthSquad: [...(prev.youthSquad || []), acquiredProspect], scoutMission: null,
+        transferInstallments: newInstallment ? [...(prev.transferInstallments || []), newInstallment] : (prev.transferInstallments || []),
+        clubs: player.clubId && prev.clubs[player.clubId] ? { ...prev.clubs, [player.clubId]: { ...prev.clubs[player.clubId], squad: (prev.clubs[player.clubId].squad || []).filter(p => p.id !== player.id), youthSquad: (prev.clubs[player.clubId].youthSquad || []).filter(p => p.id !== player.id) } } : prev.clubs,
+        worldPool: (player.region && prev.worldPool?.[player.region]) ? { ...prev.worldPool, [player.region]: prev.worldPool[player.region].filter(p => p.id !== player.id) } : prev.worldPool,
+        market: (player.region && prev.market?.[player.region]) ? { ...prev.market, [player.region]: prev.market[player.region].filter(p => p.id !== player.id) } : prev.market,
+        transferHistory: [{ id: uid(), season: prev.season, round: prev.round, playerId: player.id, playerName: player.name, playerPos: player.specificPosition, fromClubId: player.clubId || null, fromClubName: fromClubNameEarly, fromColor: player.clubId ? prev.clubs[player.clubId]?.color : null, toClubId: prev.userClubId, toClubName: userClub.name, toColor: userClub.color, fee: agreedPrice, leagueId: (player.clubId ? prev.clubs[player.clubId]?.league : null) || prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000),
+      }));
+      showToast(`${player.name} ansluter till er akademi för ${formatMoney(agreedPrice)}. Minst 2 år i akademin krävs innan uppflyttning.${installmentNoteEarly}`);
+      return;
+    }
     const wage = agreedWage || player.wage;
     const cap = wageBudgetCap(g.reputation, g.clubs[g.userClubId].division, g.dev.sponsring);
     if (totalWageBill(g.squad) + wage > cap * 1.15) { showToast("Löneutrymmet räcker inte — Financial Fair Play stoppar värvningen."); return; }
-    const fromClubName = player.clubId ? (g.clubs[player.clubId]?.name || "en annan klubb") : "fri agent";
+    const fromClubName = fromClubNameEarly;
     const isDerby = player.clubId && g.clubs[player.clubId]?.rivalId === g.userClubId;
     const fanDelta = fanSigningReaction(player, agreedPrice, isDerby, g.squad, userClub);
-    const installmentNote = financedAmount > 0 ? ` Resten (${formatMoney(financedAmount)}) delbetalas över ${plan.months} månader.` : "";
+    const installmentNote = installmentNoteEarly;
     const sellOnPct = details.sellOnOffer || 0;
-    const recalcPlan = financedAmount > 0 ? installmentPlan(financedAmount, plan.months) : null;
-    const newInstallment = recalcPlan ? { id: uid(), playerName: player.name, monthsLeft: recalcPlan.months, monthlyPayment: recalcPlan.monthlyPayment, totalRemaining: recalcPlan.totalWithInterest } : null;
     const reluctant = (details.clubInterest ?? 100) < 55;
     const signedPlayer = { ...player, clubId: null, contractYears: rndInt(3, 5), wage, number: assignSquadNumber(g.squad), sellOnPct, sellOnClubName: sellOnPct > 0 ? fromClubName : null, releaseClause: details.releaseClauseOffer > 0 ? details.releaseClauseOffer : null, morale: reluctant ? clamp((player.morale ?? 70) - 15, 20, 100) : (player.morale ?? 70), reluctantSign: reluctant, joinedInfo: { text: reluctant ? `Värvades från ${fromClubName} för ${formatMoney(agreedPrice)} i säsong ${g.season}, efter att ha upptäckts av scouten — övertalades trots tveksamhet inför flytten.${installmentNote}` : `Värvades från ${fromClubName} för ${formatMoney(agreedPrice)} i säsong ${g.season}, efter att ha upptäckts av scouten.${installmentNote}` }, scoutReports: [{ season: g.season, comment: scoutComment(player), source: "scout" }] };
     setG(prev => ({
@@ -11978,7 +12028,8 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
   const relation = clubRelationshipLabel(club?.goodwill, isDerbyClub);
   const priceLeverage = negotiationLeverage(reputation, club.strength || 55);
   const wageLeverage = negotiationLeverage(reputation, overallOf(player));
-  const isBigTalent = overallOf(player) >= 78 || (player.potential && player.potential >= 80 && player.potential - overallOf(player) >= 6);
+  const isEliteYoungster = player.potential && player.age != null && player.age <= 20 && player.potential >= 72;
+  const isBigTalent = overallOf(player) >= 78 || (player.potential && player.potential >= 80 && player.potential - overallOf(player) >= 6) || isEliteYoungster;
   const toughSale = isBigTalent && (club.strength || 0) >= reputation;
   function tryOffer(mult, label) {
     const driftedValue = negotiationDrift(player.value, priceAttempts);
