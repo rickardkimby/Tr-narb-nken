@@ -3379,7 +3379,7 @@ function buildSeason1Qualifiers(clubs) {
   const CUP1_PATTERNS = {
     england: [["trafford", "manchester united", "man utd", "man united"], ["north london", "arsenal", "gunners"], ["elland", "leeds"]],
     italy: [["piemonte", "juventus", "juve"], ["laziale", "lazio"], ["milano 1899", "ac milan", "milan"]],
-    spain: [["cf madrid", "real madrid"], ["deportivo barcelona", "barcelona", "barca"], ["turia", "valencia"], ["santander", "deportivo la coru", "la coruna", "la coruña"]],
+    spain: [["cf madrid", "real madrid"], ["deportivo barcelona", "barcelona", "barca"], ["turia", "valencia"], ["deportivo la coru", "la coruna", "la coruña", "santander"]],
     france: [["fc paris", "psg", "paris saint"], ["monegasque", "monaco"], ["rhone", "lyonnais", "lyon"]],
     germany: [["leverkusen"], ["elbe hamburg", "hamburg", "hsv"], ["münchen 1900", "munchen", "münchen", "bayern"]],
   };
@@ -3390,11 +3390,19 @@ function buildSeason1Qualifiers(clubs) {
     france: [["sang et or", "lens", "sedan"], ["nantais", "nantes"], ["gironde", "bordeaux"]],
     germany: [["weser", "bremen", "werder"], ["rheinhessen", "mainz", "kaiserslautern", "lautern"], ["neckar", "stuttgart"]],
   };
+  // Tries each pattern for a slot IN ORDER across all clubs, rather than treating them as equally-weighted
+  // alternatives — so a more specific, preferred name (e.g. an actual "Deportivo La Coruña" in a custom
+  // database) always wins over a looser fallback (e.g. "Santander"), instead of whichever happens to be
+  // found first by iteration order.
   function matchByPatterns(leagueClubs, patternGroups, exclude) {
     const claimed = new Set(exclude);
     const result = [];
     patternGroups.forEach(patterns => {
-      const found = leagueClubs.find(c => !claimed.has(c.id) && patterns.some(p => c.name.toLowerCase().includes(p)));
+      let found = null;
+      for (const p of patterns) {
+        found = leagueClubs.find(c => !claimed.has(c.id) && c.name.toLowerCase().includes(p));
+        if (found) break;
+      }
       if (found) { result.push(found.id); claimed.add(found.id); }
     });
     return result;
@@ -9804,7 +9812,7 @@ function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, t
       {showCupTab && (
         <div className="flex gap-2 mb-3 mt-2.5">
           {[["league", "Liga"], ["cup", cup.label]].map(([key, label]) => (
-            <button key={key} onClick={() => setSubView(key)} className="flex-1 py-2 rounded-xl text-11 font-semibold" style={subView === key ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>{label}</button>
+            <button key={key} onClick={() => setSubView(key)} className="flex-1 py-2 rounded-xl text-11 font-semibold" style={subView === key ? { background: C.gold, color: C.turfDeep } : { background: "rgba(30,42,34,0.08)", color: C.ink }}>{label}</button>
           ))}
         </div>
       )}
@@ -10181,7 +10189,7 @@ function FormationView({ squad, startingXI, formationCode, lineupCells, onBack, 
       <button onClick={() => { setLineup({}); setSelectedCell(null); }} className="text-11 self-start" style={{ color: C.loss }}>Rensa startelva</button>
       <div className="flex gap-1.5 overflow-x-auto pb-1">
         {FORMATION_CODES.map(fc => (
-          <button key={fc} onClick={() => applyPreset(fc)} className="px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap" style={fc === code ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>{fc}</button>
+          <button key={fc} onClick={() => applyPreset(fc)} className="px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap" style={fc === code ? { background: C.gold, color: C.turfDeep } : { background: "rgba(30,42,34,0.08)", color: C.ink }}>{fc}</button>
         ))}
       </div>
       <PaperCard>
@@ -10907,7 +10915,7 @@ function ContractsView({ squad, onBack, onSelectPlayer }) {
             const active = sortBy === opt.key;
             return (
               <button key={opt.key} onClick={() => toggleSort(opt.key)} className="px-3 py-1.5 rounded-full text-11 font-semibold flex items-center gap-1"
-                style={active ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>
+                style={active ? { background: C.gold, color: C.turfDeep } : { background: "rgba(30,42,34,0.08)", color: C.ink }}>
                 {opt.label}{active && <span>{sortDir === "asc" ? "↑" : "↓"}</span>}
               </button>
             );
@@ -11571,6 +11579,10 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
 
 function NegotiationView({ player, club, region, budget, reputation, onBack, onFinalize, difficulty, onNegotiationFailed, userClubId, clubs, scoutedPlayerIds }) {
   const [agreedPrice, setAgreedPrice] = useState(null);
+  // Locked in once, at the moment negotiation starts — the player's base wage ask shouldn't silently
+  // drift mid-negotiation just because the club's budget or reputation happens to shift elsewhere in the
+  // game while this screen is open. Only the deliberate per-attempt drift (negotiationDrift) should move it.
+  const [baseWageDemand] = useState(() => wageDemand(player, reputation, budget));
   const [priceMessages, setPriceMessages] = useState(() => [{ from: "them", text: sellerOpeningLine(club, player) }]);
   const [priceOutcome, setPriceOutcome] = useState(null);
   const [priceAttempts, setPriceAttempts] = useState(0);
@@ -11644,12 +11656,12 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
   const signOnBonusNum = signOnBonus;
   const houseCarCost = houseCar ? 350 : 0;
   const sweetenerScore = perkSweetenerScore(releaseClauseNum, signOnBonusNum, houseCar, player.value);
-  const clubInterest = playerInterestInClub(player, reputation, clubs[userClubId]?.division || 1);
+  const [clubInterest] = useState(() => playerInterestInClub(player, reputation, clubs[userClubId]?.division || 1));
   // A player who isn't keen on joining still CAN be convinced — but it costs real money, not charm. Below
   // ~55 interest the wage premium scales up sharply the more reluctant they are.
   const interestWageMult = clubInterest >= 55 ? 1 : 1 + clamp((55 - clubInterest) / 100, 0, 0.6);
   function tryWage(mult) {
-    const target = negotiationDrift(wageDemand(player, reputation, budget) * interestWageMult, wageAttempts);
+    const target = negotiationDrift(baseWageDemand * interestWageMult, wageAttempts);
     const offerWage = Math.round(target * mult);
     if (wageAttempts === 0 && Math.random() < opportunityChance(wageLeverage)) {
       setWageMessages(prev => [...prev, { from: "you", text: `Erbjuder ${formatMoney(offerWage)}/omg` }, { from: "them", text: `Er klubb känns som rätt nästa steg för mig — jag skriver på utan att krångla.` }]);
@@ -11822,15 +11834,15 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
               </div>
               <div className="text-11" style={{ color: C.inkSoft }}>Ursprungligt löneanspråk: ca {formatMoney(wageDemand(player))}/omgång</div>
               {clubInterest < 55 && <div className="text-11 mt-1 font-semibold" style={{ color: clubInterest < 30 ? C.loss : C.gold }}>{clubInterest < 30 ? "Ovillig att gå till er" : "Avvaktande till en flytt"} — kräver en lönepremie för att övertygas. Att ändå driva igenom värvningen kan skapa dålig stämning över tid.</div>}
-              {wageAttempts > 0 && <div className="text-11 mt-0.5 font-semibold" style={{ color: C.gold }}>Nuvarande anspråk (efter {wageAttempts} {wageAttempts === 1 ? "försök" : "försök"}): ca {formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget) * interestWageMult, wageAttempts)))}/omgång</div>}
-              {sweetenerScore > 0 && <div className="text-11 mb-1" style={{ color: C.win }}>Med lockbetena: ca {formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget) * interestWageMult, wageAttempts) * (1 - sweetenerScore)))}/omgång</div>}
+              {wageAttempts > 0 && <div className="text-11 mt-0.5 font-semibold" style={{ color: C.gold }}>Nuvarande anspråk (efter {wageAttempts} {wageAttempts === 1 ? "försök" : "försök"}): ca {formatMoney(Math.round(negotiationDrift(baseWageDemand * interestWageMult, wageAttempts)))}/omgång</div>}
+              {sweetenerScore > 0 && <div className="text-11 mb-1" style={{ color: C.win }}>Med lockbetena: ca {formatMoney(Math.round(negotiationDrift(baseWageDemand * interestWageMult, wageAttempts) * (1 - sweetenerScore)))}/omgång</div>}
               <div className="mb-2"><LeverageBadge score={wageLeverage} /></div>
               <NegotiationThread messages={wageMessages} />
               {!wageOutcome ? (
                 <div className="grid grid-cols-3 gap-1.5 mt-3">
-                  <button onClick={() => tryWage(0.85)} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.paperDim, color: C.ink }}>Lågt<br />{formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget) * interestWageMult, wageAttempts) * (1 - sweetenerScore) * 0.85))}/omg</button>
-                  <button onClick={() => tryWage(1.0)} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Marknad<br />{formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget) * interestWageMult, wageAttempts) * (1 - sweetenerScore)))}/omg</button>
-                  <button onClick={() => tryWage(1.2)} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Generöst<br />{formatMoney(Math.round(negotiationDrift(wageDemand(player, reputation, budget) * interestWageMult, wageAttempts) * (1 - sweetenerScore) * 1.2))}/omg</button>
+                  <button onClick={() => tryWage(0.85)} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.paperDim, color: C.ink }}>Lågt<br />{formatMoney(Math.round(negotiationDrift(baseWageDemand * interestWageMult, wageAttempts) * (1 - sweetenerScore) * 0.85))}/omg</button>
+                  <button onClick={() => tryWage(1.0)} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Marknad<br />{formatMoney(Math.round(negotiationDrift(baseWageDemand * interestWageMult, wageAttempts) * (1 - sweetenerScore)))}/omg</button>
+                  <button onClick={() => tryWage(1.2)} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Generöst<br />{formatMoney(Math.round(negotiationDrift(baseWageDemand * interestWageMult, wageAttempts) * (1 - sweetenerScore) * 1.2))}/omg</button>
                 </div>
               ) : wageOutcome.result === "accept" ? (
                 <>
@@ -12182,11 +12194,11 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
       <PaperCard>
         <div className="text-xs font-semibold mb-1.5">Var ska scouten leta?</div>
         <div className="flex flex-wrap gap-1.5">
-          <button onClick={() => setWorldPoolRegion(null)} className="px-2.5 py-1.5 rounded-lg text-9 font-semibold" style={!worldPoolRegion ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>Ligaspelare</button>
+          <button onClick={() => setWorldPoolRegion(null)} className="px-2.5 py-1.5 rounded-lg text-9 font-semibold" style={!worldPoolRegion ? { background: C.gold, color: C.turfDeep } : { background: "rgba(30,42,34,0.08)", color: C.ink }}>Ligaspelare</button>
           {Object.entries(REGION_LABELS).map(([key, label]) => {
             const locked = scoutLevel < REGION_UNLOCK[key];
             return (
-              <button key={key} onClick={() => !locked && setWorldPoolRegion(key)} disabled={locked} className="px-2.5 py-1.5 rounded-lg text-9 font-semibold flex items-center gap-1" style={worldPoolRegion === key ? { background: C.gold, color: C.turfDeep } : locked ? { background: "rgba(255,255,255,0.04)", color: C.paperDim, opacity: 0.5 } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>
+              <button key={key} onClick={() => !locked && setWorldPoolRegion(key)} disabled={locked} className="px-2.5 py-1.5 rounded-lg text-9 font-semibold flex items-center gap-1" style={worldPoolRegion === key ? { background: C.gold, color: C.turfDeep } : locked ? { background: "rgba(30,42,34,0.05)", color: C.inkSoft, opacity: 0.7 } : { background: "rgba(30,42,34,0.08)", color: C.ink }}>
                 {locked && <Lock size={9} />}{label}
               </button>
             );
