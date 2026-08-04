@@ -10422,7 +10422,7 @@ function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, t
       {showCupTab && (
         <div className="flex gap-2 mb-3 mt-2.5">
           {[["league", "Liga"], ["cup", cup.label]].map(([key, label]) => (
-            <button key={key} onClick={() => setSubView(key)} className="flex-1 py-2 rounded-xl text-11 font-semibold" style={subView === key ? { background: C.gold, color: C.turfDeep } : { background: "rgba(30,42,34,0.08)", color: C.ink }}>{label}</button>
+            <button key={key} onClick={() => setSubView(key)} className="flex-1 py-2 rounded-xl text-11 font-semibold" style={subView === key ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>{label}</button>
           ))}
         </div>
       )}
@@ -10799,7 +10799,7 @@ function FormationView({ squad, startingXI, formationCode, lineupCells, onBack, 
       <button onClick={() => { setLineup({}); setSelectedCell(null); }} className="text-11 self-start" style={{ color: C.loss }}>Rensa startelva</button>
       <div className="flex gap-1.5 overflow-x-auto pb-1">
         {FORMATION_CODES.map(fc => (
-          <button key={fc} onClick={() => applyPreset(fc)} className="px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap" style={fc === code ? { background: C.gold, color: C.turfDeep } : { background: "rgba(30,42,34,0.08)", color: C.ink }}>{fc}</button>
+          <button key={fc} onClick={() => applyPreset(fc)} className="px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap" style={fc === code ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>{fc}</button>
         ))}
       </div>
       <PaperCard>
@@ -11525,7 +11525,7 @@ function ContractsView({ squad, onBack, onSelectPlayer }) {
             const active = sortBy === opt.key;
             return (
               <button key={opt.key} onClick={() => toggleSort(opt.key)} className="px-3 py-1.5 rounded-full text-11 font-semibold flex items-center gap-1"
-                style={active ? { background: C.gold, color: C.turfDeep } : { background: "rgba(30,42,34,0.08)", color: C.ink }}>
+                style={active ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>
                 {opt.label}{active && <span>{sortDir === "asc" ? "↑" : "↓"}</span>}
               </button>
             );
@@ -12092,7 +12092,7 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
         <div className="text-11 mt-1" style={{ color: C.inkSoft }}>Nuvarande lön: <span className="font-mono font-semibold">{formatMoney(player.wage)}</span>/omgång</div>
         {player.releaseClause && <div className="text-11 mt-1" style={{ color: C.gold }}>Utköpsklausul: {formatMoney(player.releaseClause)}</div>}
         {isBreakoutStar(player, reputation) && <div className="text-11 mt-1.5 font-semibold" style={{ color: C.gold }}>⚠️ Fostrad i akademin och har klart vuxit ur klubbens nivå — risk att {player.name.split(" ")[0]} inte vill förlänga oavsett lön.</div>}
-        {isBreakoutStar(player, reputation) && (() => {
+        {(() => {
           const activeVisions = (manager?.visions || []).filter(v => !v.resolved && !(v.pitches && v.pitches[player.id]));
           if (!activeVisions.length) return <div className="text-10 mt-1.5" style={{ color: C.inkSoft }}>Ingen aktiv framtidsvision att sälja in ännu — sätt en under Manager → Framtidsvisionen.</div>;
           return (
