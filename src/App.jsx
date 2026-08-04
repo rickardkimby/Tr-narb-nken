@@ -3974,6 +3974,8 @@ function TranarbankenApp() {
       boardConfidence: parsed.boardConfidence === undefined ? 60 : parsed.boardConfidence,
       boardCrisisWarned: parsed.boardCrisisWarned || false,
       lastCrisisWasFinancial: parsed.lastCrisisWasFinancial || false,
+      eliteReputationSeasons: parsed.eliteReputationSeasons || 0,
+      eliteStreakHasTrophy: parsed.eliteStreakHasTrophy || false,
       economicWarningIssued: parsed.economicWarningIssued || false,
       customArenaName: parsed.customArenaName || null,
       pendingSelectedPlayerId: null,
@@ -4217,7 +4219,7 @@ function TranarbankenApp() {
       arenaStands: startArenaStands(club, division), arenaFacilities: { restaurant: startPartLevel(3), shop: startPartLevel(3) },
       akademiParts: { tranare: startPartLevel(3), intag: startPartLevel(3) }, scoutingParts: { analys: startPartLevel(3), kontakter: startPartLevel(3) },
       sponsors: { main: null, stadium: null, local: null },
-      staff: { assistant: null, physio: null, scout: null, gkCoach: null, analyst: null, fitnessCoach: null }, boardConfidence: startBoardConfidence, boardCrisisWarned: false, economicWarningIssued: false, jobOffers: null, plannedSub: null, incomingOffers: [], loans: [], loanOffers: [], transferHistory: [], squadViewPrefs: { rowMode: "detaljerad", showAllBench: false },
+      staff: { assistant: null, physio: null, scout: null, gkCoach: null, analyst: null, fitnessCoach: null }, boardConfidence: startBoardConfidence, boardCrisisWarned: false, economicWarningIssued: false, eliteReputationSeasons: 0, eliteStreakHasTrophy: false, jobOffers: null, plannedSub: null, incomingOffers: [], loans: [], loanOffers: [], transferHistory: [], squadViewPrefs: { rowMode: "detaljerad", showAllBench: false },
       seasonIncomeTotal: 0, seasonWageTotal: 0, difficulty: "normal", savedScoutProfiles: [], clubRecords: {}, seasonStaffImpact: { physio: 0, assistant: 0, analyst: 0, gkCoach: 0, fitnessCoach: 0 },
       setPieceTakers: { penalties: [], freeKick: null, cornerLeft: null, cornerRight: null }, chemistryPairs: {}, newsFeed: [], captainId: null, clubGoodwill: {}, blacklistedPlayers: {}, staffCandidates: {}, recentMatchFinances: [],
       formationCode: "4-4-2", tacticalSettings: { ...DEFAULT_TACTICAL_SETTINGS }, lineupCells: null,
@@ -5807,7 +5809,7 @@ function setupCup(type, base) {
         lastMatchReport: null, view: "home", activeTab: "home", pendingAfterResult: "home",
         loans: [], transferInstallments: [], installmentMonthKey: monthKeyFor(prev.season, prev.round), economicWarningIssued: false,
         repHistory: [reputationForClub], fanHistory: [fanbase], incomingOffers: [], loanOffers: [],
-        formationFamiliarityMap: {}, teamTalk: "neutral", captainId: null, clubGoodwill: {}, blacklistedPlayers: {},
+        formationFamiliarityMap: {}, teamTalk: "neutral", captainId: null, clubGoodwill: {}, blacklistedPlayers: {}, eliteReputationSeasons: 0, eliteStreakHasTrophy: false,
         _toast: `Välkommen till ${targetClub.name}! Nytt uppdrag i ${LEAGUES.find(l => l.id === targetClub.league)?.name} Division ${division}.`,
       };
     });
@@ -6076,6 +6078,22 @@ function setupCup(type, base) {
       if (Math.abs(seasonRepDelta) >= 2) pushNews(seasonRepDelta > 0 ? `Klubbens rykte stärks efter säsongen (${Math.round(prev.reputation)} → ${Math.round(newReputation)}).` : `Klubbens rykte dalar efter säsongen (${Math.round(prev.reputation)} → ${Math.round(newReputation)}).`, "Styrelse");
       if (Math.abs(seasonFanDelta) >= 2) pushNews(seasonFanDelta > 0 ? `Fanbasen växer efter säsongen (${Math.round(prev.fanbase)} → ${Math.round(newFanbase)}).` : `Fanbasen krymper efter säsongen (${Math.round(prev.fanbase)} → ${Math.round(newFanbase)}).`, "Klubben");
 
+      // A club's archetype used to be fixed forever at creation, no matter how big it actually grew —
+      // an arbetarklubb that won everything for a decade still priced and boosted itself like one. Now a
+      // club that sustains genuinely elite reputation for several straight seasons AND has real silverware
+      // to show for it (not just a number creeping up) gets reclassified as a storklubb — hard to reach
+      // (years of top form, not one lucky cup run), but a real path from Division 2 obscurity to the top.
+      const STORKLUBB_PROMOTION_REP = 80;
+      const STORKLUBB_PROMOTION_SEASONS = 3;
+      const wasEliteThisSeason = newReputation >= STORKLUBB_PROMOTION_REP;
+      const newEliteReputationSeasons = wasEliteThisSeason ? (prev.eliteReputationSeasons || 0) + 1 : 0;
+      const newEliteStreakHasTrophy = wasEliteThisSeason ? ((prev.eliteStreakHasTrophy || false) || seasonTrophies.length > 0) : false;
+      const promotesToStorklubb = newClubs[prev.userClubId].archetype !== "storklubb" && newEliteReputationSeasons >= STORKLUBB_PROMOTION_SEASONS && newEliteStreakHasTrophy;
+      if (promotesToStorklubb) {
+        newClubs[prev.userClubId] = { ...newClubs[prev.userClubId], archetype: "storklubb" };
+        pushNews(`🏆 ${newClubs[prev.userClubId].name} klassas nu om till en storklubb! Flera raka säsonger av elitrykte och trofépoäng har cementerat klubbens status bland de allra största — högre intäkter och tyngre hemmaplansfördel följer med.`, "Klubben");
+      }
+
       // The board hands out an emergency loan as an "extra life" when the budget goes negative (see the
       // Lån section of Ekonomi-fliken), but that leniency has a deadline: if the loan is fully repaid and
       // the club still hasn't turned its finances around, that's an automatic sacking for financial
@@ -6280,6 +6298,7 @@ function setupCup(type, base) {
         jobOffers: gotSacked ? generateJobOffers(newManager.reputation, newClubs, prev.userClubId) : null,
         jobMarketMandatory: gotSacked,
         cups: { domestic: null, cup1: null, cup2: null }, activeCupType: null, qualifiedCupTypes: cupQueue, lastCup2ChampionId: newCup2ChampionId, outgoingLoans: [], formationFamiliarityMap: offSeasonFamiliarityMap, sillySeasonWeeksLeft: 4,
+        eliteReputationSeasons: newEliteReputationSeasons, eliteStreakHasTrophy: newEliteStreakHasTrophy,
         seasonIncomeTotal: 0, seasonWageTotal: 0, clubRecords,
         seasonStaffImpact: { physio: 0, assistant: 0, analyst: 0, gkCoach: 0, fitnessCoach: 0 }, lastSeasonStaffImpact: prev.seasonStaffImpact,
         lastSeasonSummary: s, seasonEndSnapshot: prev.seasonEndSnapshot, history,
