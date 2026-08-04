@@ -1545,7 +1545,9 @@ const SELL_THRESHOLD = { storklubb: 1.28, nyrik: 1.32, medelklubb: 1.05, arbetar
 // A lightweight neutral placeholder lets the whole existing negotiation flow work unchanged instead of
 // needing every club.field read in NegotiationView to be made defensive against a missing club.
 function syntheticFreeAgentClub(player) {
-  return { id: null, name: "Spelarens läger", short: "FRI", archetype: "medelklubb", strength: overallOf(player), league: player.region || player.nationality, goodwill: 50, color: "#5b6b63" };
+  // Övriga världen players carry their real August-2000 club (e.g. Henrik Larsson → Celtic) when the
+  // imported database has one — shown as "Nuvarande klubb" instead of the generic placeholder name.
+  return { id: null, name: player.club || "Spelarens läger", short: "FRI", archetype: "medelklubb", strength: overallOf(player), league: player.region || player.nationality, goodwill: 50, color: "#5b6b63" };
 }
 function sellerOpeningLine(club, player) {
   const first = player.name.split(" ")[0];
@@ -6862,7 +6864,7 @@ function worldPoolToExcelRows(worldPool) {
         Region: region, SpelarID: p.id, Namn: p.name, Ålder: p.age, Position: p.pos, SpecifikPosition: p.specificPosition,
         Overall: overallOf(p), Anfall: Math.round(p.attack), Försvar: Math.round(p.defense), Potential: Math.round(p.potential ?? p.attack),
         Värde: p.value, "Lön": p.wage, Nationalitet: p.nationality || "", Kontraktsår: p.contractYears ?? 2,
-        Uthållighet: endurance(p), Beslutsamhet: determination(p),
+        Uthållighet: endurance(p), Beslutsamhet: determination(p), Klubb: p.club || "",
       });
     });
   });
@@ -6887,6 +6889,7 @@ function excelRowsToWorldPool(rows) {
       value, wage: computeWage(value, attack ?? 50, defense ?? 50), nationality: String(row.Nationalitet || "").trim(),
       contractYears: row.Kontraktsår === "" || row.Kontraktsår === undefined ? 2 : num(row.Kontraktsår),
       endurance: num(row.Uthållighet), determination: num(row.Beslutsamhet),
+      club: (row.Klubb && String(row.Klubb).trim()) || undefined,
       region, injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, apps: 0, goals: 0, assists: 0, ratingSum: 0,
     });
   });
@@ -12478,7 +12481,7 @@ function ScoutListView({ scoutedPlayers, clubs, worldPool, onNegotiate, onBack }
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold text-xs truncate">{p.name}</div>
                     <div className="font-mono text-9 mt-0.5 truncate" style={{ color: C.inkSoft }}>{POS_LABEL[p.pos]} ({specificPositionLabel(p.specificPosition)}) · {p.age} år</div>
-                    <div className="font-mono text-9 truncate" style={{ color: C.inkSoft }}>{club ? club.name : "Fri agent"}</div>
+                    <div className="font-mono text-9 truncate" style={{ color: C.inkSoft }}>{club ? club.name : (p.club || "Fri agent")}</div>
                   </div>
                 </div>
                 <div className="flex items-center justify-between mt-1.5">
@@ -12592,6 +12595,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
           <div className="flex-1 min-w-0">
             <div className="font-semibold text-sm truncate">{p.name}</div>
             <div className="text-11" style={{ color: C.inkSoft }}>{POS_LABEL[p.pos]} ({specificPositionLabel(p.specificPosition)}) · {nationalityLabel(p.nationality)}, {p.age} år</div>
+            {p.club && <div className="text-10 truncate" style={{ color: C.inkSoft }}>{p.club}</div>}
             <div className="mt-1"><StarRating rating={overallToStars(overall)} size={9} /></div>
           </div>
         </div>
@@ -12815,7 +12819,7 @@ function PlayerSearchPanel({ clubs, squad, userClubId, worldPool, scoutedPlayerI
       (players || []).forEach(p => {
         if (!p.name.toLowerCase().includes(q)) return;
         if (!isPlayerScouted(p, scoutedPlayerIds, userClubId)) return;
-        out.push({ player: p, kind: "worldpool", region, clubName: REGION_LABELS[region] || "Övriga världen" });
+        out.push({ player: p, kind: "worldpool", region, clubName: p.club || REGION_LABELS[region] || "Övriga världen" });
       });
     });
     return out.slice(0, 30);
@@ -12989,7 +12993,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
                       <div className="flex-1 min-w-0">
                         <div className="font-semibold text-xs truncate">{p.name}</div>
                         <div className="font-mono text-9 mt-0.5 truncate" style={{ color: C.inkSoft }}>{POS_LABEL[p.pos]} ({specificPositionLabel(p.specificPosition)}) · {p.age} år</div>
-                        <div className="font-mono text-9 truncate" style={{ color: C.inkSoft }}>{owningClub ? owningClub.name : "Fri agent"}</div>
+                        <div className="font-mono text-9 truncate" style={{ color: C.inkSoft }}>{owningClub ? owningClub.name : (p.club || "Fri agent")}</div>
                         {rel && <div className="text-9 font-semibold truncate" style={{ color: rel.color }}>{isDerby ? "🔥 " : ""}{rel.text}</div>}
                         {p.rivalInterest && <div className="text-9 font-semibold truncate" style={{ color: C.loss }}>👀 {p.rivalInterest} bevakar också spelaren</div>}
                       </div>
