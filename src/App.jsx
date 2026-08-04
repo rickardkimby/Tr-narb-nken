@@ -6058,16 +6058,23 @@ function setupCup(type, base) {
         const age = p.age + 1;
         const seasonRecordForRecords = { season: prev.season, apps: p.apps, goals: p.goals, assists: p.assists || 0, avgRating: p.apps ? Math.round((p.ratingSum / p.apps) * 10) / 10 : null };
         checkClubRecords(p, seasonRecordForRecords);
-        if (age >= 36) {
+        // A player under contract plays it out no matter their age — retirement is only ever a choice
+        // made at contract expiry, never a forced removal while a deal still has years left on it.
+        let contractYears = p.contractYears - 1;
+        if (contractYears <= 0) {
           const careerAppsTotal = (p.seasonLog || []).reduce((s, r) => s + (r.apps || 0), 0) + (p.apps || 0);
           const careerGoalsTotal = (p.seasonLog || []).reduce((s, r) => s + (r.goals || 0), 0) + (p.goals || 0);
           const isNotable = careerAppsTotal >= 60 || careerGoalsTotal >= 25 || overallOf(p) >= 72;
-          if (isNotable) departures.push(`🏆 ${p.name} lägger av efter en lång karriär — ${careerAppsTotal} matcher och ${careerGoalsTotal} mål för klubben. Fansen hyllar en klubblegend på sin sista dag.`);
-          else departures.push(`${p.name} har avslutat sin karriär.`);
-          return;
+          const retireChance = age >= 36 ? 0.65 : age >= 34 ? 0.35 : age >= 32 ? 0.12 : 0;
+          if (retireChance > 0 && Math.random() < retireChance) {
+            if (isNotable) departures.push(`🏆 ${p.name} tackar nej till ett nytt avtal och lägger av efter en lång karriär — ${careerAppsTotal} matcher och ${careerGoalsTotal} mål för klubben. Fansen hyllar en klubblegend på sin sista dag.`);
+            else departures.push(`${p.name} tackar nej till ett nytt avtal och avslutar sin karriär.`);
+            return;
+          }
+          if (retireChance === 0) { departures.push(`${p.name} lämnade klubben som free agent.`); return; }
+          // A veteran who didn't retire signs a short new deal and stays rather than leaving as a free agent.
+          contractYears = age >= 36 ? 1 : rndInt(1, 2);
         }
-        const contractYears = p.contractYears - 1;
-        if (contractYears <= 0) { departures.push(`${p.name} lämnade klubben som free agent.`); return; }
         let attack = p.attack, defense = p.defense;
         const utveckling = prev.manager?.attributes?.utveckling ?? 50;
         const devMult = 1 + clamp(utveckling - 50, -30, 40) * 0.008;
