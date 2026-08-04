@@ -2460,6 +2460,9 @@ function chatOutcome(approach, currentMorale) {
 
 // ---------- Tactical familiarity ----------
 function familiarityBonus(familiarity) { return clamp((familiarity || 0) / 100, 0, 1) * 0.06; }
+// Familiarity is tracked per formation code so switching back to one you've already drilled keeps the
+// vana you earned with it, instead of a single scalar that gets wiped by every tactical tweak.
+function formationFamiliarityFor(map, code) { return (map && map[code]) || 0; }
 
 
 // ---------- Wages & fair play ----------
@@ -2623,7 +2626,7 @@ function generateManagerTips(g, userClub) {
     const count = g.squad.filter(p => p.pos === pos && !p.injuryWeeks && !p.suspendedMatches && !p.internationalDuty).length;
     if (count < 3) tips.push(`Tunt på ${POS_LABEL[pos].toLowerCase()} — bara ${count} tillgängliga spelare.`);
   });
-  if ((g.formationFamiliarity || 0) < 25) tips.push("Ni har bytt taktik ofta senaste tiden — den tar tid att sätta sig.");
+  if (formationFamiliarityFor(g.formationFamiliarityMap, g.formationCode) < 25) tips.push("Den här formationen är ni inte så vana vid än — det tar några matcher att sätta sig.");
   const expiringCount = g.squad.filter(p => p.contractYears <= 1).length;
   if (expiringCount > 0) tips.push(`${expiringCount} spelare har kontrakt som går ut inom ett år.`);
   if (g.boardConfidence <= 35) tips.push("Styrelsens förtroende är lågt — prioritera resultat i de kommande matcherna.");
@@ -3944,7 +3947,7 @@ function TranarbankenApp() {
       installmentMonthKey: parsed.installmentMonthKey ?? monthKeyFor(parsed.season, parsed.round),
       lastTourResult: parsed.lastTourResult || null,
       tourCompletedThisOffseason: parsed.tourCompletedThisOffseason || false,
-      formationFamiliarity: parsed.formationFamiliarity || 0,
+      formationFamiliarityMap: parsed.formationFamiliarityMap || (parsed.formationFamiliarity ? { [parsed.formationCode || "4-4-2"]: parsed.formationFamiliarity } : {}),
       teamTalk: parsed.teamTalk || "neutral",
       pendingLateGame: null,
       pendingMidGame: null,
@@ -4168,7 +4171,7 @@ function TranarbankenApp() {
       formationCode: "4-4-2", tacticalSettings: { ...DEFAULT_TACTICAL_SETTINGS }, lineupCells: null,
       owner: generateOwner(reputation), takeoverBid: null, tourOffers: null, tourCompletedThisOffseason: false, tourPrepBonus: 0, lastTourResult: null,
       transferInstallments: [], installmentMonthKey: monthKeyFor(1, 0), partnerClubId: null, loanRequests: [], customArenaName: null,
-      formationFamiliarity: 0, teamTalk: "neutral", pendingLateGame: null, pendingMidGame: null, restedForMatch: false,
+      formationFamiliarityMap: {}, teamTalk: "neutral", pendingLateGame: null, pendingMidGame: null, restedForMatch: false,
       repHistory: [reputation], fanHistory: [startFanbase],
       manager, assistantManager: null,
       youthSquad: (club.youthSquad && club.youthSquad.length ? club.youthSquad : Array.from({ length: academyProspectCountForLevel(dev.akademi) }, () => generateYouthProspect(dev.akademi, 1, countryId))).map(y => ({ ...y })),
@@ -4265,7 +4268,7 @@ function setupCup(type, base) {
     const analystImpactDelta = Math.max(0, attack - attackNoStaff);
     const gkCoachImpactDelta = Math.max(0, defense - defenseNoStaff);
     const fitnessImpactDelta = (g.staff.fitnessCoach ? g.staff.fitnessCoach.level : 0) * 1.2;
-    const famBonus = 1 + familiarityBonus(g.formationFamiliarity);
+    const famBonus = 1 + familiarityBonus(formationFamiliarityFor(g.formationFamiliarityMap, g.formationCode));
     const weather = weatherForMatch(`weather${g.round}${g.userClubId}`);
 
     setG(prev => ({
@@ -4538,7 +4541,7 @@ function setupCup(type, base) {
       });
     }
 
-    const newFamiliarity = clamp((g.formationFamiliarity || 0) + 8, 0, 100);
+    const newFamiliarity = clamp(formationFamiliarityFor(g.formationFamiliarityMap, g.formationCode) + 8, 0, 100);
 
     const eventResult = processRandomEvents(squadAfterBreak, g.youthSquad, g.sponsors, newIncomingOffers, updatedClubs, g.userClubId, g.reputation, transferWindowOpen(newRound));
     let finalSquad = eventResult.newSquad;
@@ -4796,7 +4799,7 @@ function setupCup(type, base) {
         reputation: newRep, fanbase: newFan, manager: newManagerRep !== undefined ? { ...prev.manager, reputation: newManagerRep } : prev.manager,
         repHistory: [...(prev.repHistory || []), newRep].slice(-12),
         fanHistory: [...(prev.fanHistory || []), newFan].slice(-12),
-        formationFamiliarity: newFamiliarity, restedForMatch: false,
+        formationFamiliarityMap: { ...(prev.formationFamiliarityMap || {}), [prev.formationCode]: newFamiliarity }, restedForMatch: false,
         lastMatchReport: matchReport, view: "result", pendingRound: null, pendingLateGame: null, pendingMidGame: null,
         pendingAfterResult: hasCupBusiness ? "cup" : "home",
         cups, activeCupType: nextActiveCupType, qualifiedCupTypes, lastSeasonSummary, seasonEndSnapshot, incomingOffers: finalIncomingOffers, scoutMission, loanOffers: newLoanOffers, loanRequests: newLoanRequests, chemistryPairs: newChemistryPairs,
@@ -5511,7 +5514,9 @@ function setupCup(type, base) {
     setG(prev => ({ ...prev, startingXI: has ? prev.startingXI.filter(x => x !== id) : [...prev.startingXI, id] }));
   }
   function saveFormation(code, ids, cells) {
-    setG(prev => ({ ...prev, formationCode: code, startingXI: ids, lineupCells: cells || null, formationFamiliarity: code === prev.formationCode ? prev.formationFamiliarity : Math.round((prev.formationFamiliarity || 0) * 0.3) }));
+    // Switching formation no longer wipes progress — vana is tracked per formation code, so going back to
+    // one you've already drilled picks up right where it left off instead of starting over every time.
+    setG(prev => ({ ...prev, formationCode: code, startingXI: ids, lineupCells: cells || null }));
     showToast(`Startelva sparad (${code}).`);
   }
   function setSquadViewPrefs(prefs) {
@@ -5747,7 +5752,7 @@ function setupCup(type, base) {
         lastMatchReport: null, view: "home", activeTab: "home", pendingAfterResult: "home",
         loans: [], transferInstallments: [], installmentMonthKey: monthKeyFor(prev.season, prev.round), economicWarningIssued: false,
         repHistory: [reputationForClub], fanHistory: [fanbase], incomingOffers: [], loanOffers: [],
-        formationFamiliarity: 0, teamTalk: "neutral", captainId: null, clubGoodwill: {}, blacklistedPlayers: {},
+        formationFamiliarityMap: {}, teamTalk: "neutral", captainId: null, clubGoodwill: {}, blacklistedPlayers: {},
         _toast: `Välkommen till ${targetClub.name}! Nytt uppdrag i ${LEAGUES.find(l => l.id === targetClub.league)?.name} Division ${division}.`,
       };
     });
@@ -6103,7 +6108,7 @@ function setupCup(type, base) {
       // AI-aging pass) — other clubs' scouting/transfer logic reads strength off `clubs[userClubId]`.
       newClubs[prev.userClubId] = { ...newClubs[prev.userClubId], squad: newSquad, strength: deriveClubStrength(newSquad, 3) };
       const departedIds = new Set(prev.squad.filter(p => !newSquad.some(q => q.id === p.id)).map(p => p.id));
-      const offSeasonFamiliarity = clamp((prev.formationFamiliarity || 0) * 0.25, 0, 100);
+      const offSeasonFamiliarityMap = Object.fromEntries(Object.entries(prev.formationFamiliarityMap || {}).map(([code, v]) => [code, clamp(v * 0.25, 0, 100)]));
 
       newYouth = newYouth.map(y => ({ ...y, age: y.age + 1 }));
       const history = [...(prev.history || []), { season: prev.season, division: oldDivision, leagueName: s.leagueName, pos: s.pos, domesticCupResult: s.domesticCupResult, cup1Result: s.cup1Result, cup2Result: s.cup2Result, prizeTotal: s.prizeTotal, incomeTotal: prev.seasonIncomeTotal || 0, wageTotal: prev.seasonWageTotal || 0 }];
@@ -6219,7 +6224,7 @@ function setupCup(type, base) {
         lastMatchReport: null, view: gotSacked ? "sacked" : boardCrisis ? "boardcrisis" : newManager.contractYears <= 0 ? "managercontract" : "seasonawards", activeTab: "home", pendingAfterResult: "home",
         jobOffers: gotSacked ? generateJobOffers(newManager.reputation, newClubs, prev.userClubId) : null,
         jobMarketMandatory: gotSacked,
-        cups: { domestic: null, cup1: null, cup2: null }, activeCupType: null, qualifiedCupTypes: cupQueue, lastCup2ChampionId: newCup2ChampionId, outgoingLoans: [], formationFamiliarity: offSeasonFamiliarity, sillySeasonWeeksLeft: 4,
+        cups: { domestic: null, cup1: null, cup2: null }, activeCupType: null, qualifiedCupTypes: cupQueue, lastCup2ChampionId: newCup2ChampionId, outgoingLoans: [], formationFamiliarityMap: offSeasonFamiliarityMap, sillySeasonWeeksLeft: 4,
         seasonIncomeTotal: 0, seasonWageTotal: 0, clubRecords,
         seasonStaffImpact: { physio: 0, assistant: 0, analyst: 0, gkCoach: 0, fitnessCoach: 0 }, lastSeasonStaffImpact: prev.seasonStaffImpact,
         lastSeasonSummary: s, seasonEndSnapshot: prev.seasonEndSnapshot, history,
@@ -6283,9 +6288,9 @@ function setupCup(type, base) {
           return { ...p, attack: clamp(p.attack + boost, 15, 99), defense: clamp(p.defense + boost * 0.7, 15, 99) };
         });
       }
-      const preSeasonFamiliarity = clamp((prev.formationFamiliarity || 0) + 4 * (9 + (prev.tourCompletedThisOffseason ? (prev.tourPrepBonus || 3) : 0)), 0, 100);
+      const preSeasonFamiliarity = clamp(formationFamiliarityFor(prev.formationFamiliarityMap, prev.formationCode) + 4 * (9 + (prev.tourCompletedThisOffseason ? (prev.tourPrepBonus || 3) : 0)), 0, 100);
       const preSeasonMsg = friendlyXI.size >= 7 ? `Försäsongen (4 träningsmatcher) är avklarad — laget går in i säsongen med ${Math.round(preSeasonFamiliarity)}% taktisk vana${developedNames.length ? `, och ${developedNames.slice(0, 3).join(", ")}${developedNames.length > 3 ? " m.fl." : ""} utvecklades av speltiden ihop` : ""}.` : null;
-      return { ...prev, squad: newSquad, formationFamiliarity: preSeasonFamiliarity, sillySeasonWeeksLeft: 0, tourCompletedThisOffseason: false, tourPrepBonus: 0, _toast: preSeasonMsg };
+      return { ...prev, squad: newSquad, formationFamiliarityMap: { ...(prev.formationFamiliarityMap || {}), [prev.formationCode]: preSeasonFamiliarity }, sillySeasonWeeksLeft: 0, tourCompletedThisOffseason: false, tourPrepBonus: 0, _toast: preSeasonMsg };
     });
   }
 
@@ -6467,7 +6472,7 @@ function setupCup(type, base) {
               ) : g.view === "livematch" && g.pendingRound ? (
                 <LiveMatchView pending={g.pendingRound} userClub={userClub} oppClub={g.clubs[g.pendingRound.oppId]} squad={g.squad}
                   tactic={g.tactic} spelide={g.spelide} tacticalSettings={g.tacticalSettings} lineupCells={g.lineupCells} staff={g.staff}
-                  formationFamiliarity={g.formationFamiliarity} teamTalk={g.teamTalk}
+                  formationFamiliarity={formationFamiliarityFor(g.formationFamiliarityMap, g.formationCode)} teamTalk={g.teamTalk}
                   onFinalize={(secondHalfXiIds, subText, userGoals, oppGoals, note, scoredByIds, sentOffIds, refereeStrictness) => {
                     const ctxType = g.pendingCupContext?.type;
                     if (ctxType === "domesticRound") finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds, refereeStrictness);
@@ -8049,8 +8054,8 @@ function MatchPrepView({ g, userClub, oppClub, countryName, isHome, onBack, onSe
           <span className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Startelva</span>
           <span className="font-mono text-sm font-semibold" style={{ color: xiReady ? C.win : C.loss }}>{g.startingXI.length}/11</span>
         </div>
-        <div className="text-11 mt-1" style={{ color: C.inkSoft }}>Formation {g.formationCode} · Taktisk vana {g.formationFamiliarity || 0}%</div>
-        <div className="h-1.5 rounded-full mt-1.5" style={{ background: "rgba(255,255,255,0.1)" }}><div className="h-full rounded-full" style={{ width: `${clamp(g.formationFamiliarity || 0, 0, 100)}%`, background: C.gold, transition: "width .5s ease" }} /></div>
+        <div className="text-11 mt-1" style={{ color: C.inkSoft }}>Formation {g.formationCode} · Taktisk vana {formationFamiliarityFor(g.formationFamiliarityMap, g.formationCode)}%</div>
+        <div className="h-1.5 rounded-full mt-1.5" style={{ background: "rgba(255,255,255,0.1)" }}><div className="h-full rounded-full" style={{ width: `${clamp(formationFamiliarityFor(g.formationFamiliarityMap, g.formationCode), 0, 100)}%`, background: C.gold, transition: "width .5s ease" }} /></div>
         <button onClick={onGotoSquad} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Ställ upp laget i Trupp</button>
         <div className="text-xs uppercase tracking-wide font-semibold mb-1.5 mt-3 pt-3" style={{ color: C.inkSoft, borderTop: `1px solid rgba(30,42,34,0.1)` }}>Lagtal</div>
         <div className="grid grid-cols-3 gap-2">
