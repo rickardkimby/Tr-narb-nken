@@ -845,16 +845,54 @@ function generateWorld() {
   assignRivals(clubs);
   return clubs;
 }
+// Real 2000/01 rivalries, keyed by KlubbID. These IDs (eng1..eng20, eng_d2_xxx, eng_d3_xxx, etc.) match
+// the real-world custom database's Klubbar sheet (Manchester United=eng1, Manchester City=eng18, ...),
+// so every pair below is a genuine, verifiable derby rather than an arbitrary ID match. Cross-division
+// pairs (a club's real rival sitting in Division 2/3) are intentional — assignRivals() sets rivalId
+// directly regardless of division. Pairs referencing an ID the fictional default database doesn't have
+// simply no-op there (assignRivals already guards with `clubs[a] && clubs[b]`), so this only changes
+// behavior for a custom import.
 const FORCED_RIVALRIES = [
-  ["eng3", "eng5"], // Thames Ironworks F.C. vs Millwall Rovers
-  ["eng1", "eng9"], // Liverpool Athletic vs Merseyside Toffees — Merseyside Derby
-  ["eng4", "eng10"], // North London Gunners vs White Hart Wanderers — North London Derby
-  ["eng2", "eng7"], // Manchester Rovers vs Trafford United — Manchester Derby
-  ["eng20", "eng12"], // Wearside Sunderland vs Tyneside Magpies — Tyne-Wear Derby
-  ["ita2", "ita3"], // Milano 1899 vs Milano Nerazzurri — Derby della Madonnina
-  ["esp1", "esp2"], // CF Madrid vs Deportivo Barcelona — El Clásico
-  ["ger1", "ger2"], // München 1900 vs Dortmund 1909 — Der Klassiker
-  ["fra1", "fra2"], // FC Paris vs Racing Marseille — Le Classique
+  // England
+  ["eng1", "eng18"], // Manchester United vs Manchester City — Manchester Derby
+  ["eng3", "eng16"], // Liverpool vs Everton — Merseyside Derby
+  ["eng2", "eng12"], // Arsenal vs Tottenham Hotspur — North London Derby
+  ["eng7", "eng11"], // Sunderland vs Newcastle United — Tyne-Wear Derby
+  ["eng17", "eng_d2_nott"], // Derby County vs Nottingham Forest — East Midlands Derby
+  ["eng20", "eng4"], // Bradford City vs Leeds United — West Yorkshire Derby
+  ["eng6", "eng_d2_fulh"], // Chelsea vs Fulham — West London Derby
+  ["eng8", "eng_d2_birm"], // Aston Villa vs Birmingham City — Second City Derby
+  ["eng10", "eng_d2_port"], // Southampton vs Portsmouth — South Coast Derby
+  ["eng5", "eng_d2_norw"], // Ipswich Town vs Norwich City — East Anglian Derby
+  ["eng_d2_shef", "eng_d2_shef2"], // Sheffield United vs Sheffield Wednesday — Steel City Derby
+  ["eng_d2_blac", "eng_d2_burn"], // Blackburn Rovers vs Burnley — East Lancashire Derby
+  ["eng_d3_card", "eng_d3_swan"], // Cardiff City vs Swansea City — South Wales Derby
+  ["eng_d3_stok", "eng_d3_port"], // Stoke City vs Port Vale — Potteries Derby
+  ["eng15", "eng_d3_mill"], // West Ham United vs Millwall — London Derby
+  // Italy
+  ["ita5", "ita6"], // Inter Milan vs AC Milan — Derby della Madonnina
+  ["ita1", "ita3"], // Roma vs Lazio — Derby della Capitale
+  ["ita2", "ita_d2_tori"], // Juventus vs Torino — Derby della Mole
+  ["ita_d2_geno", "ita_d2_samp"], // Genoa vs Sampdoria — Derby della Lanterna
+  ["ita7", "ita8"], // Atalanta vs Brescia — Derby di Lombardia
+  ["ita14", "ita_d2_chie"], // Hellas Verona vs Chievo — Derby della Scala
+  // Spain
+  ["esp1", "esp4"], // Real Madrid vs Barcelona — El Clásico
+  ["esp12", "esp13"], // Athletic Bilbao vs Real Sociedad — Derbi Vasco (Basque derby)
+  ["esp2", "esp6"], // Deportivo La Coruña vs Celta Vigo — Derbi Galego
+  ["esp_d2_sevi", "esp_d2_beti"], // Sevilla vs Real Betis — Derbi Sevillano
+  // Germany
+  ["ger2", "ger3"], // Schalke 04 vs Borussia Dortmund — Revierderby
+  ["ger1", "ger11"], // Bayern Munich vs 1860 Munich — Münchner Stadtderby
+  ["ger13", "ger_d2_stpa"], // Hamburger SV vs FC St. Pauli — Hamburger Stadtderby
+  ["ger10", "ger_d2_boru"], // 1. FC Köln vs Borussia Mönchengladbach — Rheinderby
+  ["ger5", "ger_d3_1ber"], // Hertha BSC vs 1. FC Union Berlin — Berliner Stadtderby
+  // France
+  ["fra9", "fra15"], // Paris Saint-Germain vs Marseille — Le Classique
+  ["fra2", "fra17"], // Lyon vs Saint-Étienne — Derby Rhône-Alpes
+  ["fra1", "fra6"], // Nantes vs Rennes — Derby Breton
+  ["fra11", "fra_d2_nice"], // Monaco vs Nice — Derby de la Côte d'Azur
+  ["fra3", "fra14"], // Lille vs Lens — Derby du Nord
 ];
 function assignRivals(clubs) {
   const forcedIds = new Set();
