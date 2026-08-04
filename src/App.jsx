@@ -1337,6 +1337,16 @@ function isPlayerScouted(player, scoutedPlayerIds, userClubId) {
   if (player.clubId === userClubId || (!player.clubId && player.ownSquad)) return true; // your own players are always known
   return (scoutedPlayerIds || []).includes(player.id);
 }
+// Permanent record of every player you've ever scouted — a scout mission's candidates (including
+// synthetic ones that exist nowhere else in game state) and individually-scouted players both land
+// here, and they stay here even after a mission is dismissed. This is what the scout list reads from.
+function mergeScoutedPlayers(existing, additions) {
+  if (!additions || !additions.length) return existing || [];
+  const list = existing ? [...existing] : [];
+  const seen = new Set(list.map(p => p.id));
+  additions.forEach(p => { if (p && !seen.has(p.id)) { seen.add(p.id); list.push({ ...p, scoutedAt: Date.now() }); } });
+  return list.slice(-200); // keep the most recent 200 so this can't grow unbounded over a long career
+}
 function scoutMissionCeiling(scoutLevel, division) {
   const divAdj = division === 1 ? 0 : division === 2 ? -8 : division === 3 ? -16 : 0;
   const base = scoutLevel ? clamp(58 + scoutLevel * 7, 58, 95) : 62;
@@ -4159,7 +4169,7 @@ function TranarbankenApp() {
       youthMarket: Array.from({ length: 6 }, () => generateYouthProspect(clamp(dev.scouting, 1, 5), 1)),
       lastMatchReport: null, view: "home", activeTab: "home", pendingAfterResult: "home",
       cups: { domestic: null, cup1: null, cup2: null }, activeCupType: null, qualifiedCupTypes: initialCupQueue, season1Qualifiers: activeSeason1Qualifiers, lastSeasonSummary: null, seasonEndSnapshot: null, history: [], scoutMission: null, ticketPrice: "t3", merchandisePricing: "standard", arenaConstruction: null, outgoingLoans: [], sillySeasonWeeksLeft: 4,
-      scoutedPlayerIds: [], pendingPlayerScouts: [],
+      scoutedPlayerIds: [], pendingPlayerScouts: [], scoutedPlayers: [],
     };
     const id = uid();
     const entry = { id, ...saveSummary(initial) };
@@ -4679,6 +4689,7 @@ function setupCup(type, base) {
 
     let scoutMission = g.scoutMission;
     let scoutToast = null;
+    let newlyScoutedFromMission = [];
     if (scoutMission && scoutMission.cancelling) {
       scoutMission = null;
       scoutToast = "Scouten är hemma igen.";
@@ -4687,6 +4698,7 @@ function setupCup(type, base) {
       if (roundsElapsed >= scoutMission.roundsTotal) {
         const candidates = generateScoutCandidates(scoutMission, g.staff.scout?.level || 0, updatedClubs, userClub.division, g.userClubId, g.reputation, null, g.worldPool);
         scoutMission = { ...scoutMission, roundsElapsed, complete: true, results: candidates };
+        newlyScoutedFromMission = candidates;
         scoutToast = candidates.length ? `Scoutuppdraget är klart — ${candidates.length > 1 ? candidates.length + " spelare hittades" : candidates[0].name + " har hittats"}.` : "Scoutuppdraget är klart, men ingen spelare matchade kriterierna. Försök med bredare filter.";
       } else {
         scoutMission = { ...scoutMission, roundsElapsed };
@@ -4720,6 +4732,12 @@ function setupCup(type, base) {
       const dueScouts = (prev.pendingPlayerScouts || []).filter(s => s.dueRound <= newRound);
       const stillPendingScouts = (prev.pendingPlayerScouts || []).filter(s => s.dueRound > newRound);
       const newScoutedIds = dueScouts.length ? [...(prev.scoutedPlayerIds || []), ...dueScouts.map(s => s.playerId)] : (prev.scoutedPlayerIds || []);
+      const dueScoutPlayers = dueScouts.map(s => {
+        const src = s.clubId ? ((prev.clubs[s.clubId]?.squad || []).find(pl => pl.id === s.playerId) || (prev.clubs[s.clubId]?.youthSquad || []).find(pl => pl.id === s.playerId))
+          : Object.values(prev.worldPool || {}).flat().find(pl => pl.id === s.playerId);
+        return src ? { ...src, clubId: s.clubId || src.clubId || null, region: s.region || src.region || null } : null;
+      }).filter(Boolean);
+      const newScoutedPlayers = mergeScoutedPlayers(prev.scoutedPlayers, [...newlyScoutedFromMission, ...dueScoutPlayers]);
       const rotatedMarket = {
         europa: sampleFromWorldPool(pool.europa, scoutRating, 4),
         sydamerika: sampleFromWorldPool(pool.sydamerika, scoutRating, 2),
@@ -4739,7 +4757,7 @@ function setupCup(type, base) {
         ...prev, clubs: { ...listingClubs, [g.userClubId]: { ...listingClubs[g.userClubId], squad: finalSquad, youthSquad: finalYouthSquad } }, schedule: finalSchedule, squad: finalSquad,
         startingXI: prev.startingXI.filter(id => finalSquad.some(p => p.id === id)),
         youthSquad: finalYouthSquad, sponsors: finalSponsors, market: rotatedMarket,
-        pendingPlayerScouts: stillPendingScouts, scoutedPlayerIds: newScoutedIds,
+        pendingPlayerScouts: stillPendingScouts, scoutedPlayerIds: newScoutedIds, scoutedPlayers: newScoutedPlayers,
         budget: prev.budget + delta + eventBudgetDelta + installmentBudgetDelta + leaguePrizeThisRound, lastDelta: delta, round: newRound,
         transferHistory: (aiTransferResult?.records?.length || releaseClauseRecords.length) ? [...releaseClauseRecords, ...(aiTransferResult?.records || []), ...(prev.transferHistory || [])].slice(0, 1000) : prev.transferHistory,
         transferInstallments: installmentsAfter, installmentMonthKey: newMonthKey,
@@ -4767,7 +4785,7 @@ function setupCup(type, base) {
       };
     });
     (g.pendingPlayerScouts || []).filter(s => s.dueRound <= newRound).forEach(s => {
-      const scoutedPlayer = s.clubId ? g.clubs[s.clubId]?.squad?.find(pl => pl.id === s.playerId)
+      const scoutedPlayer = s.clubId ? (g.clubs[s.clubId]?.squad?.find(pl => pl.id === s.playerId) || g.clubs[s.clubId]?.youthSquad?.find(pl => pl.id === s.playerId))
         : Object.values(g.worldPool || {}).flat().find(pl => pl.id === s.playerId);
       const name = scoutedPlayer?.name || "Spelaren";
       pushNews(`Scoutingen av ${name} är klar — full rapport tillgänglig.`, "Scouting", { action: { type: "scoutedPlayer", playerId: s.playerId, clubId: s.clubId, region: s.region } });
@@ -6176,6 +6194,7 @@ function setupCup(type, base) {
     setG(prev => {
       let scoutMission = prev.scoutMission;
       let scoutToast = null;
+      let scoutedPlayers = prev.scoutedPlayers;
       if (scoutMission && scoutMission.cancelling) {
         scoutMission = null;
         scoutToast = "Scouten är hemma igen.";
@@ -6184,6 +6203,7 @@ function setupCup(type, base) {
         if (roundsElapsed >= scoutMission.roundsTotal) {
           const candidates = generateScoutCandidates(scoutMission, prev.staff.scout?.level || 0, prev.clubs, prev.clubs[prev.userClubId].division, prev.userClubId, prev.reputation, null, prev.worldPool);
           scoutMission = { ...scoutMission, roundsElapsed, complete: true, results: candidates };
+          scoutedPlayers = mergeScoutedPlayers(prev.scoutedPlayers, candidates);
           scoutToast = candidates.length ? `Scoutuppdraget är klart — ${candidates.length > 1 ? candidates.length + " spelare hittades" : candidates[0].name + " har hittats"}.` : "Scoutuppdraget är klart, men ingen spelare matchade kriterierna.";
         } else {
           scoutMission = { ...scoutMission, roundsElapsed };
@@ -6205,7 +6225,7 @@ function setupCup(type, base) {
       }
       const weeksLeft = prev.sillySeasonWeeksLeft - 1;
       return {
-        ...prev, sillySeasonWeeksLeft: weeksLeft, scoutMission, arenaConstruction, arenaStands, dev: { ...prev.dev, arena: devArena },
+        ...prev, sillySeasonWeeksLeft: weeksLeft, scoutMission, scoutedPlayers, arenaConstruction, arenaStands, dev: { ...prev.dev, arena: devArena },
         _toast: [scoutToast, constructionToast].filter(Boolean).join(" ") || null,
       };
     });
@@ -6511,7 +6531,7 @@ function setupCup(type, base) {
                   squad={g.squad} savedScoutProfiles={g.savedScoutProfiles} onSaveScoutProfile={saveScoutProfile} onDeleteScoutProfile={deleteScoutProfile}
                   userClubId={g.userClubId} leagueId={g.leagueId} onFinalizeClubBrowseTransfer={finalizeClubBrowseTransfer} onSubViewChange={setSubViewOpen}
                   partnerClubId={g.partnerClubId} onInstantLoanFromPartner={instantLoanFromPartner} loanRequests={g.loanRequests} onRespondLoanRequest={respondLoanRequest} transferHistory={g.transferHistory}
-                  scoutedPlayerIds={g.scoutedPlayerIds} pendingPlayerScouts={g.pendingPlayerScouts} onScoutPlayer={scoutSpecificPlayer} pendingScoutReveal={g.pendingScoutReveal} onClearScoutReveal={() => setG(prev => ({ ...prev, pendingScoutReveal: null }))} worldPool={g.worldPool} />
+                  scoutedPlayerIds={g.scoutedPlayerIds} pendingPlayerScouts={g.pendingPlayerScouts} onScoutPlayer={scoutSpecificPlayer} pendingScoutReveal={g.pendingScoutReveal} onClearScoutReveal={() => setG(prev => ({ ...prev, pendingScoutReveal: null }))} worldPool={g.worldPool} scoutedPlayers={g.scoutedPlayers} />
               )}
             </div>
           </div>
@@ -9449,7 +9469,7 @@ function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputat
 
   if (negotiatingPlayer) {
     const sellClub = clubs[negotiatingPlayer.clubId];
-    return <NegotiationView player={negotiatingPlayer} club={sellClub ? { ...sellClub, goodwill: clubGoodwill?.[sellClub.id] ?? 50 } : syntheticFreeAgentClub(negotiatingPlayer)} region="browse" budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs} scoutedPlayerIds={scoutedPlayerIds}
+    return <NegotiationView player={negotiatingPlayer} club={sellClub ? { ...sellClub, goodwill: clubGoodwill?.[sellClub.id] ?? 50 } : syntheticFreeAgentClub(negotiatingPlayer)} region="browse" budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs} scoutedPlayerIds={scoutedPlayerIds} pendingPlayerScouts={pendingPlayerScouts} onScoutPlayer={onScoutPlayer} round={round}
       onNegotiationFailed={onNegotiationFailed}
       onBack={() => setNegotiatingPlayer(null)} onFinalize={(r, p, price, wage, details) => { onFinalize(p, price, wage, details); setNegotiatingPlayer(null); }} />;
   }
@@ -11988,7 +12008,7 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
   );
 }
 
-function NegotiationView({ player, club, region, budget, reputation, onBack, onFinalize, difficulty, onNegotiationFailed, userClubId, clubs, scoutedPlayerIds }) {
+function NegotiationView({ player, club, region, budget, reputation, onBack, onFinalize, difficulty, onNegotiationFailed, userClubId, clubs, scoutedPlayerIds, pendingPlayerScouts, onScoutPlayer, round }) {
   const [agreedPrice, setAgreedPrice] = useState(null);
   // Locked in once, at the moment negotiation starts — the player's base wage ask shouldn't silently
   // drift mid-negotiation just because the club's budget or reputation happens to shift elsewhere in the
@@ -12308,6 +12328,14 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
         </div>
         <div className="flex gap-3 mt-3"><StatBar label="Anfall" value={scouted ? player.attack : (atkLo + atkHi) / 2} displayText={scouted ? undefined : `${atkLo}–${atkHi}`} color={C.gold} /><StatBar label="Försvar" value={scouted ? player.defense : (defLo + defHi) / 2} displayText={scouted ? undefined : `${defLo}–${defHi}`} color={C.turf} /></div>
         {!scouted && <div className="text-9 mt-1" style={{ color: C.inkSoft }}>Ej scoutad — siffrorna ovan är ett uppskattat spann, inte exakta värden.</div>}
+        {!scouted && onScoutPlayer && (() => {
+          const pending = (pendingPlayerScouts || []).find(s => s.playerId === player.id);
+          return pending ? (
+            <div className="mt-2 w-full py-1.5 rounded-xl text-9 font-semibold text-center" style={{ background: C.paperDim, color: C.inkSoft }}>🔍 Scoutas — {Math.max(1, pending.dueRound - (round || 0))} omg kvar</div>
+          ) : (
+            <button onClick={() => onScoutPlayer(player.id, isWorldPoolOrigin ? player.region : null, player.clubId || null)} className="mt-2 w-full py-1.5 rounded-xl text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>🔍 Scouta spelaren</button>
+          );
+        })()}
       </PaperCard>
 
       {isDerbyClub && (
@@ -12376,6 +12404,63 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
           </>
         )}
       </PaperCard>
+    </div>
+  );
+}
+
+// Permanent list of every player you've scouted, sourced from g.scoutedPlayers — survives dismissing a
+// scout mission or the scout report screen. Tries to show live, up-to-date stats for players who still
+// exist in a club squad or the world pool; falls back to the stored snapshot for synthetic scout-mission
+// finds (which exist nowhere else) or players who've since moved on.
+function ScoutListView({ scoutedPlayers, clubs, worldPool, onNegotiate, onBack }) {
+  const rows = [...(scoutedPlayers || [])].reverse().map(snap => {
+    let live = null;
+    if (snap.clubId && clubs[snap.clubId]) {
+      live = (clubs[snap.clubId].squad || []).find(p => p.id === snap.id) || (clubs[snap.clubId].youthSquad || []).find(p => p.id === snap.id);
+    }
+    if (!live && snap.region && worldPool && worldPool[snap.region]) {
+      live = worldPool[snap.region].find(p => p.id === snap.id);
+    }
+    const player = live ? { ...live, clubId: live.clubId ?? snap.clubId ?? null, region: live.region ?? snap.region ?? null } : snap;
+    return { player, club: player.clubId ? clubs[player.clubId] : null };
+  });
+  return (
+    <div className="rise-in space-y-3">
+      <button onClick={onBack} className="text-sm mb-1" style={{ color: C.goldSoft }}>← Tillbaka</button>
+      <div className="text-sm font-semibold px-1">Scoutlista — alla scoutade spelare ({rows.length})</div>
+      {!rows.length ? (
+        <PaperCard><div className="text-sm text-center py-3" style={{ color: C.inkSoft }}>Inga spelare scoutade än. Starta ett scoutuppdrag eller scouta en spelare direkt från deras profil.</div></PaperCard>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          {rows.map(({ player: p, club }) => {
+            const pOverall = overallOf(p);
+            return (
+              <PaperCard key={p.id} style={{ padding: 10 }}>
+                <div className="flex items-center gap-2.5">
+                  <div style={{ position: "relative", width: 30, height: 30, flexShrink: 0 }}>
+                    <PlayerAvatar player={p} size={30} />
+                    <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={pOverall} size={16} /></div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-xs truncate">{p.name}</div>
+                    <div className="font-mono text-9 mt-0.5 truncate" style={{ color: C.inkSoft }}>{POS_LABEL[p.pos]} ({specificPositionLabel(p.specificPosition)}) · {p.age} år</div>
+                    <div className="font-mono text-9 truncate" style={{ color: C.inkSoft }}>{club ? club.name : "Fri agent"}</div>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between mt-1.5">
+                  <StarRating rating={overallToStars(pOverall)} size={7} />
+                  <div className="font-mono text-11 font-semibold shrink-0">{formatMoney(p.value)}</div>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5 mt-1.5">
+                  <AttributeGridCard attrKey="shooting" label="Anfall" value={p.attack} icon="🎯" />
+                  <AttributeGridCard attrKey="defending" label="Försvar" value={p.defense} icon="🛡️" />
+                </div>
+                <button onClick={() => onNegotiate(p, club)} className="mt-1.5 w-full py-1.5 rounded-xl text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Förhandla</button>
+              </PaperCard>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -12735,28 +12820,44 @@ function PlayerSearchPanel({ clubs, squad, userClubId, worldPool, scoutedPlayerI
     </div>
   );
 }
-function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSquad, youthMarket, round, season, clubs, reputation, incomingOffers, clubGoodwill, blacklistedPlayers, onNegotiationFailed, onFinalizeTransfer, onBuyYouth, onRespondOffer, scoutMission, scoutLevel, onStartScoutMission, onDismissScoutMission, onCancelScoutMission, onFinalizeScoutSignee, loanOffers, onAcceptLoan, onDeclineLoan, difficulty, squad, savedScoutProfiles, onSaveScoutProfile, onDeleteScoutProfile, userClubId, leagueId, onFinalizeClubBrowseTransfer, onSubViewChange, partnerClubId, onInstantLoanFromPartner, loanRequests, onRespondLoanRequest, transferHistory, scoutedPlayerIds, pendingPlayerScouts, onScoutPlayer, pendingScoutReveal, onClearScoutReveal, worldPool }) {
+function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSquad, youthMarket, round, season, clubs, reputation, incomingOffers, clubGoodwill, blacklistedPlayers, onNegotiationFailed, onFinalizeTransfer, onBuyYouth, onRespondOffer, scoutMission, scoutLevel, onStartScoutMission, onDismissScoutMission, onCancelScoutMission, onFinalizeScoutSignee, loanOffers, onAcceptLoan, onDeclineLoan, difficulty, squad, savedScoutProfiles, onSaveScoutProfile, onDeleteScoutProfile, userClubId, leagueId, onFinalizeClubBrowseTransfer, onSubViewChange, partnerClubId, onInstantLoanFromPartner, loanRequests, onRespondLoanRequest, transferHistory, scoutedPlayerIds, pendingPlayerScouts, onScoutPlayer, pendingScoutReveal, onClearScoutReveal, worldPool, scoutedPlayers }) {
   const [showClubBrowser, setShowClubBrowser] = useState(false);
   const [showOwnHistory, setShowOwnHistory] = useState(false);
   const [showGlobalTransfers, setShowGlobalTransfers] = useState(false);
+  const [showScoutList, setShowScoutList] = useState(false);
   const [subView, setSubView] = useState("spelare");
   const [region, setRegion] = useState("europa");
   const [negotiatingId, setNegotiatingId] = useState(null);
   const [negotiatingScout, setNegotiatingScout] = useState(null);
+  const [negotiatingListedPlayer, setNegotiatingListedPlayer] = useState(null);
   const [browseTargetClubId, setBrowseTargetClubId] = useState(null);
   useEffect(() => {
     if (!pendingScoutReveal) return;
-    setSubView("spelare");
-    if (pendingScoutReveal.region) {
+    // Clicking through from a "scouting complete" news item should drop you straight onto that
+    // player's own profile/negotiation screen, not just into the general area they're found in.
+    const snap = (scoutedPlayers || []).find(p => p.id === pendingScoutReveal.playerId);
+    if (snap) {
+      let live = null;
+      if (snap.clubId && clubs[snap.clubId]) {
+        live = (clubs[snap.clubId].squad || []).find(p => p.id === snap.id) || (clubs[snap.clubId].youthSquad || []).find(p => p.id === snap.id);
+      }
+      if (!live && snap.region && worldPool && worldPool[snap.region]) {
+        live = worldPool[snap.region].find(p => p.id === snap.id);
+      }
+      const player = live ? { ...live, clubId: live.clubId ?? snap.clubId ?? null, region: live.region ?? snap.region ?? null } : snap;
+      setNegotiatingListedPlayer({ player, club: player.clubId ? clubs[player.clubId] : null });
+    } else if (pendingScoutReveal.region) {
+      setSubView("spelare");
       setRegion(pendingScoutReveal.region);
       setShowClubBrowser(false);
     } else if (pendingScoutReveal.clubId) {
+      setSubView("spelare");
       setShowClubBrowser(true);
       setBrowseTargetClubId(pendingScoutReveal.clubId);
     }
     onClearScoutReveal?.();
   }, [pendingScoutReveal]);
-  useEffect(() => { onSubViewChange?.(showClubBrowser || showOwnHistory || showGlobalTransfers || !!negotiatingId || !!negotiatingScout); }, [showClubBrowser, showOwnHistory, showGlobalTransfers, negotiatingId, negotiatingScout]);
+  useEffect(() => { onSubViewChange?.(showClubBrowser || showOwnHistory || showGlobalTransfers || showScoutList || !!negotiatingId || !!negotiatingScout || !!negotiatingListedPlayer); }, [showClubBrowser, showOwnHistory, showGlobalTransfers, showScoutList, negotiatingId, negotiatingScout, negotiatingListedPlayer]);
   const currentTurn = season * 38 + round;
   const list = market[region].filter(p => !blacklistedPlayers?.[p.id] || blacklistedPlayers[p.id] <= currentTurn);
   const locked = scoutingLevel < REGION_UNLOCK[region];
@@ -12768,6 +12869,14 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
   if (showOwnHistory) return <OwnTransferHistoryView transferHistory={transferHistory} userClubId={userClubId} currentSeason={season} onBack={() => setShowOwnHistory(false)} />;
   if (showGlobalTransfers) return <GlobalTransfersView transferHistory={transferHistory} userClubId={userClubId} onBack={() => setShowGlobalTransfers(false)} />;
   if (showClubBrowser) return <ClubSquadBrowserView clubs={clubs} userClubId={userClubId} homeLeagueId={leagueId} budget={budget} reputation={reputation} difficulty={difficulty} clubGoodwill={clubGoodwill} partnerClubId={partnerClubId} onNegotiationFailed={onNegotiationFailed} onFinalize={onFinalizeClubBrowseTransfer} onInstantLoanFromPartner={onInstantLoanFromPartner} onBack={() => setShowClubBrowser(false)} scoutedPlayerIds={scoutedPlayerIds} pendingPlayerScouts={pendingPlayerScouts} onScoutPlayer={onScoutPlayer} round={round} initialClubId={browseTargetClubId} transferHistory={transferHistory} />;
+  if (showScoutList) return <ScoutListView scoutedPlayers={scoutedPlayers} clubs={clubs} worldPool={worldPool} onBack={() => setShowScoutList(false)} onNegotiate={(player, club) => setNegotiatingListedPlayer({ player, club })} />;
+
+  if (negotiatingListedPlayer) {
+    const { player: lp, club: lc } = negotiatingListedPlayer;
+    return <NegotiationView player={lp} club={lc ? { ...lc, goodwill: clubGoodwill?.[lc.id] ?? 50 } : syntheticFreeAgentClub(lp)} region={lp.region || "scout"} budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs} scoutedPlayerIds={scoutedPlayerIds} pendingPlayerScouts={pendingPlayerScouts} onScoutPlayer={onScoutPlayer} round={round}
+      onNegotiationFailed={onNegotiationFailed}
+      onBack={() => setNegotiatingListedPlayer(null)} onFinalize={(r, p, price, wage, details) => { onFinalizeScoutSignee(p, price, wage, details); setNegotiatingListedPlayer(null); }} />;
+  }
 
   if (negotiatingScout && scoutMission?.complete) {
     const scoutResults = scoutMission.results || (scoutMission.result ? [scoutMission.result] : []);
@@ -12783,7 +12892,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
   const negotiatingPlayer = negotiatingId ? list.find(p => p.id === negotiatingId) : null;
   if (negotiatingPlayer) {
     const negoClub = clubs[negotiatingPlayer.clubId];
-    return <NegotiationView player={negotiatingPlayer} club={negoClub ? { ...negoClub, goodwill: clubGoodwill?.[negoClub.id] ?? 50 } : syntheticFreeAgentClub(negotiatingPlayer)} region={region} budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs} scoutedPlayerIds={scoutedPlayerIds}
+    return <NegotiationView player={negotiatingPlayer} club={negoClub ? { ...negoClub, goodwill: clubGoodwill?.[negoClub.id] ?? 50 } : syntheticFreeAgentClub(negotiatingPlayer)} region={region} budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs} scoutedPlayerIds={scoutedPlayerIds} pendingPlayerScouts={pendingPlayerScouts} onScoutPlayer={onScoutPlayer} round={round}
       onNegotiationFailed={onNegotiationFailed}
       onBack={() => setNegotiatingId(null)} onFinalize={(r, p, price, wage, details) => { onFinalizeTransfer(r, p, price, wage, details); setNegotiatingId(null); }} />;
   }
@@ -12799,9 +12908,10 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
           <div className="text-sm font-semibold" style={{ color: C.paperDim }}>Transferfönstret är stängt. Öppnar igen om {opensIn} omgångar.</div>
         )}
       </PaperCard>
-      <div className="grid grid-cols-2 gap-2">
-        <button onClick={() => setShowOwnHistory(true)} className="py-2 rounded-xl text-11 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim }}>📋 Vår transferhistorik</button>
+      <div className="grid grid-cols-3 gap-2">
+        <button onClick={() => setShowOwnHistory(true)} className="py-2 rounded-xl text-11 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim }}>📋 Vår historik</button>
         <button onClick={() => setShowGlobalTransfers(true)} className="py-2 rounded-xl text-11 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim }}>🌍 Alla transfers</button>
+        <button onClick={() => setShowScoutList(true)} className="py-2 rounded-xl text-11 font-semibold" style={{ background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>🔍 Scoutlista{(scoutedPlayers?.length) ? ` (${scoutedPlayers.length})` : ""}</button>
       </div>
       <div className="flex gap-2 overflow-x-auto pb-0.5">
         {[["spelare", "Spelare"], ["ungdom", "Ungdom"], ["scout", "Scout"], ["sok", "🔍 Sök"], ["bud", `Bud${(incomingOffers.length + (loanOffers?.length || 0) + (loanRequests?.length || 0)) ? ` (${incomingOffers.length + (loanOffers?.length || 0) + (loanRequests?.length || 0)})` : ""}`]].map(([key, label]) => (
