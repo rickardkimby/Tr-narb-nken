@@ -6930,6 +6930,19 @@ function excelRowsToWorld(clubRows, playerRows, youthRows) {
       endurance: num(row.Uthållighet), determination: num(row.Beslutsamhet),
     });
   });
+  // A club with no rows in the youth sheet used to stay with a permanently empty academy for the rest of
+  // the game — the only fallback that ever generated one was for the user's own club specifically (see
+  // the "new career"/"new job" flow), never for the other 299 AI clubs. Give any club still missing an
+  // academy after import the same procedural one a freshly generated world would have gotten, sized off
+  // its archetype and division exactly like generateWorld() already does.
+  Object.values(world).forEach(club => {
+    if (club.youthSquad.length) return;
+    const arche = ARCHETYPES[club.archetype];
+    if (!arche) return;
+    const divPenalty = club.division === 2 ? 1 : club.division === 3 ? 2 : 0;
+    const akademiLevel = Math.max(1, arche.startDev.akademi - divPenalty);
+    club.youthSquad = Array.from({ length: academyProspectCountForLevel(akademiLevel) }, () => generateYouthProspect(akademiLevel, 0, club.league));
+  });
   // Potential is a ceiling — a player already rated above it on their actual position-weighted attributes
   // is a contradiction the sheet can introduce (seen in an imported database: ~26% of players had this),
   // and it would otherwise quietly break development math downstream that assumes potential is the cap.
