@@ -2363,11 +2363,14 @@ function generateStaffOffers(role, homeCountry) {
   return Array.from({ length: 3 }, () => {
     const nationality = Math.random() < 0.6 ? homeCountry : pick(NATIONALITY_KEYS);
     const level = rndInt(1, 5);
-    const wage = Math.round((20 + level * 22) * rnd(0.85, 1.2));
+    const wage = Math.round(staffFairWage(level) * rnd(0.85, 1.2));
     return { id: uid(), name: nameForNationality(nationality), nationality, level, wage };
   });
 }
-function staffFairWage(level) { return Math.round(20 + level * 22); }
+// Scaled to match player wages (computeWage) rather than a standalone formula: level 1 ≈ £18k/omg
+// (a fringe first-team player), level 5 ≈ £58k/omg (a strong squad player) — previously ran £42k-£130k,
+// well above what most player wages ever reach.
+function staffFairWage(level) { return Math.round(8 + level * 10); }
 
 // ---------- Board confidence ----------
 function boardTargetLabel(archetype, division) {
@@ -6846,11 +6849,17 @@ function excelRowsToWorldPool(rows) {
   (rows || []).forEach(row => {
     const region = String(row.Region || "").trim();
     if (!pool[region]) return;
+    const attack = num(row.Anfall), defense = num(row.Försvar);
+    // Same drift risk as the league sheets (see excelRowsToWorld): a sheet's Värde/Lön can end up on a
+    // completely different scale than the rest of the game (seen in an imported database: Övriga världen
+    // players priced at 100-200M vs. an 11M storklubb budget). Derive both from attack/defense the same
+    // way a freshly generated world-pool player's are — the sheet's own numbers only survive as a fallback.
+    const value = (attack !== undefined && defense !== undefined) ? Math.max(40, Math.round(((attack + defense) / 2) * 8.8)) : num(row.Värde);
     pool[region].push({
       id: String(row.SpelarID || "").trim() || uid(), name: String(row.Namn || "").trim(),
       age: num(row.Ålder), pos: String(row.Position || "").trim(), specificPosition: String(row.SpecifikPosition || "").trim(),
-      attack: num(row.Anfall), defense: num(row.Försvar), potential: num(row.Potential),
-      value: num(row.Värde), wage: num(row["Lön"]), nationality: String(row.Nationalitet || "").trim(),
+      attack, defense, potential: num(row.Potential),
+      value, wage: computeWage(value, attack ?? 50, defense ?? 50), nationality: String(row.Nationalitet || "").trim(),
       contractYears: row.Kontraktsår === "" || row.Kontraktsår === undefined ? 2 : num(row.Kontraktsår),
       endurance: num(row.Uthållighet), determination: num(row.Beslutsamhet),
       region, injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, apps: 0, goals: 0, assists: 0, ratingSum: 0,
@@ -13559,9 +13568,9 @@ function StaffDetail({ budget, staff, reputation, homeCountry, staffCandidates, 
                             <NegotiationThread messages={negoMessages} />
                             {!negoOutcome ? (
                               <div className="grid grid-cols-3 gap-1 mt-2">
-                                <button onClick={() => tryStaffWage(o, 0.85)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.paper, color: C.ink }}>Lågt<br />{formatMoney(Math.round(o.wage * 0.85))}</button>
-                                <button onClick={() => tryStaffWage(o, 1.0)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Marknad<br />{formatMoney(o.wage)}</button>
-                                <button onClick={() => tryStaffWage(o, 1.15)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Generöst<br />{formatMoney(Math.round(o.wage * 1.15))}</button>
+                                <button onClick={() => tryStaffWage(o, 0.85)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.paper, color: C.ink }}>Lågt<br />{formatMoney(Math.round(negotiationDrift(o.wage, negoAttempts) * (1 + (o.level - 1) * 0.02) * 0.85))}</button>
+                                <button onClick={() => tryStaffWage(o, 1.0)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Marknad<br />{formatMoney(Math.round(negotiationDrift(o.wage, negoAttempts) * (1 + (o.level - 1) * 0.02)))}</button>
+                                <button onClick={() => tryStaffWage(o, 1.15)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Generöst<br />{formatMoney(Math.round(negotiationDrift(o.wage, negoAttempts) * (1 + (o.level - 1) * 0.02) * 1.15))}</button>
                               </div>
                             ) : negoOutcome.result === "accept" ? (
                               <button onClick={() => { onHire(role, { ...o, wage: negoOutcome.offerWage }); setOffersFor(null); setNegotiatingId(null); }} className="mt-2 w-full py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Anställ för {formatMoney(negoOutcome.offerWage)}/omg</button>
