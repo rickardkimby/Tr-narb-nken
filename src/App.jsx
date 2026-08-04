@@ -2815,13 +2815,18 @@ function processRandomEvents(squad, youthSquad, sponsors, incomingOffers, clubs,
     messages.push(`${youthSquad[idx].name} gör ett genombrott på träningen!`);
   }
 
+  // Every negotiation goes through the manager — an underpaid player's agent flags it via a clickable
+  // news item instead of the wage just quietly bumping itself with no input from you.
   const clubBudgetForWages = clubs[userClubId]?.budget;
-  const underpaid = squad.filter(p => p.wage < wageDemand(p, reputation, clubBudgetForWages) * 0.8 && overallOf(p) >= 68);
+  const underpaid = squad.filter(p => p.wage < wageDemand(p, reputation, clubBudgetForWages) * 0.8 && overallOf(p) >= 68 && !p.agentContactedThisSeason);
   if (underpaid.length && Math.random() < 0.08) {
     const p = pick(underpaid);
-    const newWage = Math.round(wageDemand(p, reputation, clubBudgetForWages) * rnd(0.9, 1.05));
-    newSquad = squad.map(pl => pl.id === p.id ? { ...pl, wage: newWage } : pl);
-    messages.push(`${p.name}s agent förhandlar fram en löneförhöjning till ${formatMoney(newWage)}/omg.`);
+    importantEvents.push({
+      text: `${p.name}s agent hör av sig — missnöjd med lönen och vill omförhandla kontraktet.`,
+      category: "Kontrakt",
+      detail: { action: { type: "contractRenewal", playerId: p.id, label: "Förhandla nu" }, note: `${p.name} anser sig underbetald jämfört med sin nivå i truppen. Agenten vill se en lösning.` },
+    });
+    newSquad = squad.map(pl => pl.id === p.id ? { ...pl, agentContactedThisSeason: true } : pl);
   }
 
   const clausedPlayers = newSquad.filter(p => p.releaseClause);
@@ -5709,7 +5714,7 @@ function setupCup(type, base) {
       const demand = contractDemand(player);
       const newWage = negotiatedWage || wageDemand(player, prev.reputation, prev.budget);
       const releaseClause = includeClause ? Math.round(demand.newValue * 1.6) : null;
-      return { ...prev, squad: prev.squad.map(p => p.id === playerId ? { ...p, contractYears: demand.years, value: demand.newValue, wage: newWage, releaseClause } : p) };
+      return { ...prev, squad: prev.squad.map(p => p.id === playerId ? { ...p, contractYears: demand.years, value: demand.newValue, wage: newWage, releaseClause, needsContractRenewal: false } : p) };
     });
     showToast(includeClause ? "Nytt kontrakt med utköpsklausul signerat!" : "Nytt kontrakt signerat!");
   }
@@ -6177,6 +6182,7 @@ function setupCup(type, base) {
         // A player under contract plays it out no matter their age — retirement is only ever a choice
         // made at contract expiry, never a forced removal while a deal still has years left on it.
         let contractYears = p.contractYears - 1;
+        let needsContractRenewal = false;
         if (contractYears <= 0) {
           const careerAppsTotal = (p.seasonLog || []).reduce((s, r) => s + (r.apps || 0), 0) + (p.apps || 0);
           const careerGoalsTotal = (p.seasonLog || []).reduce((s, r) => s + (r.goals || 0), 0) + (p.goals || 0);
@@ -6187,9 +6193,15 @@ function setupCup(type, base) {
             else departures.push(`${p.name} tackar nej till ett nytt avtal och avslutar sin karriär.`);
             return;
           }
-          if (retireChance === 0) { departures.push(`${p.name} lämnade klubben som free agent.`); return; }
-          // A veteran who didn't retire signs a short new deal and stays rather than leaving as a free agent.
-          contractYears = age >= 36 ? 1 : rndInt(1, 2);
+          // No auto-renewal and no automatic departure — the contract sits expired (0 år) and the player
+          // stays exactly where they are until the manager actually negotiates a new deal via their agent's
+          // news item, same as every other renewal in the game.
+          contractYears = 0;
+          needsContractRenewal = true;
+          pushNews(`${p.name}s kontrakt har gått ut — agenten vill omförhandla omgående.`, "Kontrakt", {
+            action: { type: "contractRenewal", playerId: p.id, label: "Förhandla nu" },
+            note: `${p.name}s kontrakt löpte ut vid säsongsskiftet. Ingen ny överenskommelse är på plats — spelaren stannar i truppen, men bör omförhandlas snarast.`,
+          });
         }
         let attack = p.attack, defense = p.defense;
         const utveckling = prev.manager?.attributes?.utveckling ?? 50;
@@ -6203,7 +6215,7 @@ function setupCup(type, base) {
         const morale = clamp((p.morale ?? 70) + (moraleTarget - (p.morale ?? 70)) * 0.35, 5, 95);
         const seasonRecord = { season: prev.season, apps: p.apps, goals: p.goals, assists: p.assists || 0, avgRating: p.apps ? Math.round((p.ratingSum / p.apps) * 10) / 10 : null, attack: Math.round(p.attack), defense: Math.round(p.defense), wage: p.wage, value: p.value };
         const seasonLog = [...(p.seasonLog || []), seasonRecord];
-        aged.push({ ...p, age, attack, defense, contractYears, morale, yellowCards: 0, apps: 0, goals: 0, assists: 0, seasonYellowCards: 0, seasonRedCards: 0, agentContactedThisSeason: false, outOfPositionApps: 0, ratingSum: 0, seasonLog });
+        aged.push({ ...p, age, attack, defense, contractYears, morale, needsContractRenewal, yellowCards: 0, apps: 0, goals: 0, assists: 0, seasonYellowCards: 0, seasonRedCards: 0, agentContactedThisSeason: needsContractRenewal, outOfPositionApps: 0, ratingSum: 0, seasonLog });
       });
       let newSquad = aged;
       const returningLoanees = [];
