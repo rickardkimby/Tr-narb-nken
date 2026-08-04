@@ -157,9 +157,44 @@ function poisson(lambda) {
   do { k++; p *= Math.random(); } while (p > L);
   return k - 1;
 }
-function expectedGoals(attack, defense, atHome) {
+// A flat home-advantage constant makes every club's home ground feel identical. Real fortresses vary —
+// a big, well-supported club gets a bigger lift from its own crowd than a small one. Derived from what
+// every club object already carries (archetype's fan pull, strength as a reputation proxy) rather than
+// a new field, so it works uniformly for AI clubs and the user's own club alike.
+function homeAdvantageMult(club) {
+  if (!club) return 1;
+  const fanAdj = ARCHETYPES[club.archetype]?.fanAdj ?? 0; // roughly -16..+16
+  const strengthSignal = (club.strength ?? 60) - 60; // roughly -40..+37
+  return clamp(1 + fanAdj * 0.02 + strengthSignal * 0.006, 0.7, 1.4);
+}
+// Base home/away constants tuned via Monte Carlo benchmark against realistic same-division fixture
+// pairings (see /scratchpad/benchmark_sim.js): 0.2/-0.05 landed home wins ~45% (fine) but draws only
+// ~20% and away wins ~35% against real top-league benchmarks of ~45/25-26/28-30 — a mild-but-real gap
+// this closes without needing to touch diff sensitivity (which was already well calibrated).
+function expectedGoals(attack, defense, atHome, homeAdvMult = 1) {
   const diff = (attack - defense) / 12;
-  return clamp(1.25 + diff * 0.6 + (atHome ? 0.2 : -0.05), 0.25, 4.5);
+  return clamp(1.25 + diff * 0.6 + (atHome ? 0.28 : -0.075) * homeAdvMult, 0.25, 4.5);
+}
+// Dixon-Coles (1997) low-score correction: sampling home/away goals as fully independent Poisson
+// variables slightly underrates how often real football stays tight on both ends at once — 0-0 and 1-1
+// happen a bit more than independence predicts, 1-0/0-1 a bit less. rho is the standard small negative
+// correlation parameter from the literature; the rejection sampler below applies it without needing a
+// full bivariate-Poisson implementation.
+const DIXON_COLES_RHO = -0.09;
+function dixonColesTau(x, y, lambdaHome, lambdaAway, rho) {
+  if (x === 0 && y === 0) return 1 - lambdaHome * lambdaAway * rho;
+  if (x === 0 && y === 1) return 1 + lambdaHome * rho;
+  if (x === 1 && y === 0) return 1 + lambdaAway * rho;
+  if (x === 1 && y === 1) return 1 - rho;
+  return 1;
+}
+function poissonScorePair(lambdaHome, lambdaAway) {
+  const M = 3; // safe majorizing bound for tau across this game's realistic expected-goal range
+  for (let i = 0; i < 6; i++) {
+    const x = poisson(lambdaHome), y = poisson(lambdaAway);
+    if (Math.random() * M < dixonColesTau(x, y, lambdaHome, lambdaAway, DIXON_COLES_RHO)) return [x, y];
+  }
+  return [poisson(lambdaHome), poisson(lambdaAway)];
 }
 // How well a squad's actual sub-attributes back up its raw attack/defense numbers — usable for ANY
 // club's squad, not just the user's. A squad genuinely playing to its numbers (or better) gets a small
@@ -502,6 +537,24 @@ function combinedTacticalMods(settings) {
     defMult: (p.defMult ?? 1) * (po.defMult ?? 1) * (pa.defMult ?? 1) * (t.defMult ?? 1) * (r.defMult ?? 1),
     cardMult: (p.cardMult ?? 1) * (r.cardMult ?? 1),
     possBias: pa.possBias ?? 0,
+  };
+}
+// A stable, deterministic tactical identity for AI opponents — seeded purely by club id, so a given
+// club always plays the same way across matches instead of being reduced to one flat strength number
+// with no style of its own. Light prestige bias: bigger/stronger clubs lean toward the assertive end
+// of each dial (higher press, more possession, more risk), smaller ones sit deeper and play it safer —
+// same tendency real squad depth and confidence produce, without claiming to model it precisely.
+function oppTacticalStyle(club) {
+  const rng = seededRandom(String(club?.id || "unknown") + "tacticalstyle");
+  const tier = ARCHETYPES[club?.archetype]?.tierMin ?? 60;
+  const bias = clamp((tier - 60) / 60, -0.5, 0.5);
+  const pick3 = keys => keys[clamp(Math.floor((rng() + bias) * keys.length), 0, keys.length - 1)];
+  return {
+    press: pick3(["lagt", "medel", "hogt"]),
+    possession: pick3(["direkt", "balanserat", "kort"]),
+    possessionApproach: pick3(["mer", "balanserat", "mindre"]),
+    tempo: pick3(["kontrollerat", "balanserat", "snabbt"]),
+    risk: pick3(["forsiktigt", "balanserat", "risktagande"]),
   };
 }
 
@@ -2888,8 +2941,8 @@ function seededResolveGroup(teamIds, clubs, seed, revealedMatchdays) {
       const home = clubs[f.home], away = clubs[f.away];
       if (!home || !away) return f;
       if (revealedMatchdays !== undefined && ri >= revealedMatchdays) return f; // not played yet
-      const hg = poisson(expectedGoals(home.strength, away.strength, true));
-      const ag = poisson(expectedGoals(away.strength, home.strength, false));
+      const hAdv = homeAdvantageMult(home);
+      const [hg, ag] = poissonScorePair(expectedGoals(home.strength, away.strength, true, hAdv), expectedGoals(away.strength, home.strength, false, hAdv));
       return { ...f, homeGoals: hg, awayGoals: ag };
     }));
     return { schedule: sched, standings: computeStandings(sched, teamIds) };
@@ -2980,8 +3033,8 @@ function simulateOtherDivisionsRound(allSchedules, clubs, round, skipKey) {
         // strength number a little, so two same-archetype clubs don't play as pure statistical twins.
         const homeEff = home.strength * squadQualityIndex(home.squad) * teamFormMult(recentForm(schedule, round, f.home));
         const awayEff = away.strength * squadQualityIndex(away.squad) * teamFormMult(recentForm(schedule, round, f.away));
-        const hg = poisson(expectedGoals(homeEff, awayEff, true));
-        const ag = poisson(expectedGoals(awayEff, homeEff, false));
+        const hAdv = homeAdvantageMult(home);
+        const [hg, ag] = poissonScorePair(expectedGoals(homeEff, awayEff, true, hAdv), expectedGoals(awayEff, homeEff, false, hAdv));
         return { ...f, homeGoals: hg, awayGoals: ag };
       });
     });
@@ -3043,8 +3096,8 @@ function instantSeasonTable(clubIds, clubs) {
     for (let j = 0; j < clubIds.length; j++) {
       if (i === j) continue;
       const home = clubs[clubIds[i]], away = clubs[clubIds[j]];
-      const lh = expectedGoals(home.strength, away.strength, true), la = expectedGoals(away.strength, home.strength, false);
-      const hg = poisson(lh), ag = poisson(la);
+      const hAdv = homeAdvantageMult(home);
+      const [hg, ag] = poissonScorePair(expectedGoals(home.strength, away.strength, true, hAdv), expectedGoals(away.strength, home.strength, false, hAdv));
       const h = table[clubIds[i]], a = table[clubIds[j]];
       h.played++; a.played++; h.gf += hg; h.ga += ag; a.gf += ag; a.ga += hg;
       if (hg > ag) { h.won++; h.pts += 3; a.lost++; } else if (hg < ag) { a.won++; a.pts += 3; h.lost++; } else { h.drawn++; a.drawn++; h.pts++; a.pts++; }
@@ -3519,7 +3572,7 @@ function processDomesticCupRound(teams, clubs, userClubId, squad, tactic, spelid
       const oppId = a === userClubId ? b : a;
       const opp = clubs[oppId];
       const { attack, defense } = userStrength(xi, tactic, spelide, tacticalSettings);
-      const userGoals = poisson(expectedGoals(attack, opp.strength, false)), oppGoals = poisson(expectedGoals(opp.strength, defense, false));
+      const [userGoals, oppGoals] = poissonScorePair(expectedGoals(attack, opp.strength, false), expectedGoals(opp.strength, defense, false));
       let penalties = null, userWon;
       if (userGoals === oppGoals) {
         const winProb = clamp(0.5 + (attack - opp.strength) / 200, 0.3, 0.7);
@@ -3533,7 +3586,7 @@ function processDomesticCupRound(teams, clubs, userClubId, squad, tactic, spelid
       userReport = { oppName: opp.name, oppColor: opp.color, userColor: clubs[userClubId]?.color, userGoals, oppGoals, penalties, result: userWon ? "win" : "loss", ratings };
     } else {
       const A = clubs[a], B = clubs[b];
-      const ag = poisson(expectedGoals(A.strength, B.strength, false)), bg = poisson(expectedGoals(B.strength, A.strength, false));
+      const [ag, bg] = poissonScorePair(expectedGoals(A.strength, B.strength, false), expectedGoals(B.strength, A.strength, false));
       winners.push(ag === bg ? pick([a, b]) : (ag > bg ? a : b));
     }
   }
@@ -3547,7 +3600,7 @@ function instantResolveKnockout(teamIds, clubs) {
     if (round.length % 2 === 1) { const idx = rndInt(0, round.length - 1); next.push(round[idx]); round.splice(idx, 1); }
     for (let i = 0; i < round.length; i += 2) {
       const A = clubs[round[i]], B = clubs[round[i + 1]];
-      const ag = poisson(expectedGoals(A.strength, B.strength, false)), bg = poisson(expectedGoals(B.strength, A.strength, false));
+      const [ag, bg] = poissonScorePair(expectedGoals(A.strength, B.strength, false), expectedGoals(B.strength, A.strength, false));
       next.push(ag === bg ? pick([round[i], round[i + 1]]) : (ag > bg ? round[i] : round[i + 1]));
     }
     list = next;
@@ -3573,9 +3626,9 @@ function resolveDomesticPairing(teams, seed) {
 }
 
 // ---------- Continental cup engine (groups + two-legged knockout) ----------
-function simulateDecisiveMatch(strengthA, strengthB, aHome) {
-  let ga = poisson(expectedGoals(strengthA, strengthB, aHome));
-  let gb = poisson(expectedGoals(strengthB, strengthA, !aHome));
+function simulateDecisiveMatch(strengthA, strengthB, aHome, homeAdvMult = 1) {
+  const [ga0, gb0] = poissonScorePair(expectedGoals(strengthA, strengthB, aHome, homeAdvMult), expectedGoals(strengthB, strengthA, !aHome, homeAdvMult));
+  let ga = ga0, gb = gb0;
   if (ga === gb) { ga += Math.random() < 0.25 ? 1 : 0; gb += Math.random() < 0.25 ? 1 : 0; }
   let winner;
   if (ga > gb) winner = "A"; else if (gb > ga) winner = "B";
@@ -3584,8 +3637,8 @@ function simulateDecisiveMatch(strengthA, strengthB, aHome) {
 }
 function resolveTie(x, y, clubs) {
   const X = clubs[x], Y = clubs[y];
-  const leg1 = simulateDecisiveMatch(X.strength, Y.strength, true);
-  const leg2 = simulateDecisiveMatch(Y.strength, X.strength, true);
+  const leg1 = simulateDecisiveMatch(X.strength, Y.strength, true, homeAdvantageMult(X));
+  const leg2 = simulateDecisiveMatch(Y.strength, X.strength, true, homeAdvantageMult(Y));
   const xGoals = leg1.goalsA + leg2.goalsB, yGoals = leg1.goalsB + leg2.goalsA;
   const xLegWins = (leg1.winner === "A" ? 1 : 0) + (leg2.winner === "B" ? 1 : 0);
   if (xLegWins === 2) return x;
@@ -3612,8 +3665,7 @@ function setupKnockoutRound(teams, clubs, userClubId) {
 function simulateUserDecisiveLeg(oppStrength, squad, tactic, spelide, userIsHome, startingXI, tacticalSettings) {
   const xi = getXI(squad, startingXI);
   const { attack, defense } = userStrength(xi, tactic, spelide, tacticalSettings);
-  let userGoals = poisson(expectedGoals(attack, oppStrength, userIsHome));
-  let oppGoals = poisson(expectedGoals(oppStrength, defense, !userIsHome));
+  let [userGoals, oppGoals] = poissonScorePair(expectedGoals(attack, oppStrength, userIsHome), expectedGoals(oppStrength, defense, !userIsHome));
   if (userGoals === oppGoals) { userGoals += Math.random() < 0.25 ? 1 : 0; oppGoals += Math.random() < 0.25 ? 1 : 0; }
   let penalties = null, userWon;
   if (userGoals === oppGoals) {
@@ -4245,7 +4297,8 @@ function setupCup(type, base) {
         const isUser = f.home === g.userClubId || f.away === g.userClubId;
         if (isUser) return f; // resolved later in resolveSecondHalf
         const home = newClubs[f.home], away = newClubs[f.away];
-        const hg = poisson(expectedGoals(home.strength, away.strength, true)), ag = poisson(expectedGoals(away.strength, home.strength, false));
+        const hAdv = homeAdvantageMult(home);
+        const [hg, ag] = poissonScorePair(expectedGoals(home.strength, away.strength, true, hAdv), expectedGoals(away.strength, home.strength, false, hAdv));
         const drift = (id, res) => {
           const c = newClubs[id];
           const strength = clamp(c.strength + (res === "win" ? rnd(0.1, 0.35) : res === "loss" ? -rnd(0.1, 0.3) : rnd(-0.06, 0.06)) + rnd(-0.08, 0.08), 20, 97);
@@ -4829,7 +4882,7 @@ function setupCup(type, base) {
     for (const [a, b] of pairs) {
       if (a === g.userClubId || b === g.userClubId) { userOppId = a === g.userClubId ? b : a; continue; }
       const A = g.clubs[a], B = g.clubs[b];
-      const ag = poisson(expectedGoals(A.strength, B.strength, false)), bg = poisson(expectedGoals(B.strength, A.strength, false));
+      const [ag, bg] = poissonScorePair(expectedGoals(A.strength, B.strength, false), expectedGoals(B.strength, A.strength, false));
       winners.push(ag === bg ? pick([a, b]) : (ag > bg ? a : b));
     }
     const opp = g.clubs[userOppId];
@@ -4898,7 +4951,9 @@ function setupCup(type, base) {
       const isUser = f.home === g.userClubId || f.away === g.userClubId;
       if (isUser) { userIsHome = f.home === g.userClubId; oppId2 = userIsHome ? f.away : f.home; return f; }
       const home = g.clubs[f.home], away = g.clubs[f.away];
-      return { ...f, homeGoals: poisson(expectedGoals(home.strength, away.strength, true)), awayGoals: poisson(expectedGoals(away.strength, home.strength, false)) };
+      const hAdv = homeAdvantageMult(home);
+      const [hgOther, agOther] = poissonScorePair(expectedGoals(home.strength, away.strength, true, hAdv), expectedGoals(away.strength, home.strength, false, hAdv));
+      return { ...f, homeGoals: hgOther, awayGoals: agOther };
     });
     const opp = g.clubs[oppId2];
     const xi = getXI(g.squad, g.startingXI);
@@ -8850,15 +8905,23 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
     const manDownMult = Math.pow(0.9, menOut);
     const oppManDownMult = Math.pow(0.9, effectiveOppRedCards);
     const attackMomentum = attack * momentumAtk * manDownMult, defenseMomentum = defense * momentumDef * manDownMult;
-    const oppEffAtk = pending.oppStrength * oppMomentumAtk * oppManDownMult, oppEffDef = pending.oppStrength * oppMomentumDef * oppManDownMult;
+    // Opponents used to be a single flat strength number with no playing identity of their own — every
+    // AI side "felt" the same to play against. oppStyleMods gives them the same press/possession/tempo/risk
+    // treatment the user's own tactical dials get (see combinedTacticalMods), stable per club so a given
+    // opponent consistently plays like itself from match to match instead of rerolling every time.
+    const oppStyleMods = combinedTacticalMods(oppClub.tacticalStyle || oppTacticalStyle(oppClub));
+    const oppEffAtk = pending.oppStrength * oppStyleMods.atkMult * oppMomentumAtk * oppManDownMult, oppEffDef = pending.oppStrength * oppStyleMods.defMult * oppMomentumDef * oppManDownMult;
     const weatherStyleMult = weatherTeamMult(xi, pending.weather.mult);
-    const lambdaUser = expectedGoals(attackMomentum * talk.atkMult * famBonus, oppEffDef, pending.userIsHome) * pending.weather.mult * weatherStyleMult * (segLen / 90);
-    const lambdaOpp = expectedGoals(oppEffAtk, defenseMomentum * talk.defMult * famBonus, !pending.userIsHome) * pending.weather.mult * weatherStyleMult * (segLen / 90);
-    const segUser = poisson(lambdaUser), segOpp = poisson(lambdaOpp);
+    const homeClub = pending.userIsHome ? userClub : oppClub;
+    const hAdv = homeAdvantageMult(homeClub);
+    const lambdaUser = expectedGoals(attackMomentum * talk.atkMult * famBonus, oppEffDef, pending.userIsHome, hAdv) * pending.weather.mult * weatherStyleMult * (segLen / 90);
+    const lambdaOpp = expectedGoals(oppEffAtk, defenseMomentum * talk.defMult * famBonus, !pending.userIsHome, hAdv) * pending.weather.mult * weatherStyleMult * (segLen / 90);
+    const [segUser, segOpp] = poissonScorePair(lambdaUser, lambdaOpp);
     const attackers = xi.filter(p => p.pos !== "MV");
+    const oppAttackers = (oppClub.squad || []).filter(p => p.pos !== "MV");
     const scorerIds = [];
     for (let i = 0; i < segUser; i++) { const scorer = pick(attackers) || xi[0]; if (scorer) scorerIds.push(scorer.id); entries.push({ minute: rndInt(start + 1, end), text: `⚽ MÅL! ${scorer?.name || userClub.name} sätter dit den för ${userClub.name}!`, goal: true, isUser: true }); }
-    for (let i = 0; i < segOpp; i++) entries.push({ minute: rndInt(start + 1, end), text: `⚽ Mål för ${oppClub.name}.`, goal: true, isUser: false });
+    for (let i = 0; i < segOpp; i++) { const oppScorer = pick(oppAttackers); entries.push({ minute: rndInt(start + 1, end), text: oppScorer ? `⚽ Mål för ${oppClub.name} — ${oppScorer.name} gör mål.` : `⚽ Mål för ${oppClub.name}.`, goal: true, isUser: false }); }
     if (!entries.length) {
       const flavor = pick(["Jämnt spel i mittfältet.", "Inget att notera just nu — bollen cirkulerar.", `${Math.random() < 0.5 ? userClub.name : oppClub.name} testar från distans, utan framgång.`, "Ett par avbrutna anfall, men ingenting farligt."]);
       entries.push({ minute: rndInt(start + 1, end), text: flavor, goal: false });
