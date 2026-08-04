@@ -2625,7 +2625,7 @@ function generateManagerTips(g, userClub) {
   const expiringCount = g.squad.filter(p => p.contractYears <= 1).length;
   if (expiringCount > 0) tips.push(`${expiringCount} spelare har kontrakt som går ut inom ett år.`);
   if (g.boardConfidence <= 35) tips.push("Styrelsens förtroende är lågt — prioritera resultat i de kommande matcherna.");
-  if (g.budget < 0) tips.push("Budgeten är i minus — se över löner eller sälj en spelare.");
+  if (g.budget < 0) tips.push("Budgeten är i minus — se över löner, sälj en spelare eller ta ett lån under Ekonomi för att köpa er tid.");
   if (!tips.length) tips.push("Allt ser stabilt ut just nu. Fortsätt som vanligt.");
   return tips.slice(0, 5);
 }
@@ -3917,6 +3917,7 @@ function TranarbankenApp() {
       boardConfidence: parsed.boardConfidence === undefined ? 60 : parsed.boardConfidence,
       boardCrisisWarned: parsed.boardCrisisWarned || false,
       lastCrisisWasFinancial: parsed.lastCrisisWasFinancial || false,
+      economicWarningIssued: parsed.economicWarningIssued || false,
       customArenaName: parsed.customArenaName || null,
       pendingSelectedPlayerId: null,
       pendingScoutReveal: parsed.pendingScoutReveal || null,
@@ -4159,7 +4160,7 @@ function TranarbankenApp() {
       arenaStands: startArenaStands(club, division), arenaFacilities: { restaurant: startPartLevel(3), shop: startPartLevel(3) },
       akademiParts: { tranare: startPartLevel(3), intag: startPartLevel(3) }, scoutingParts: { analys: startPartLevel(3), kontakter: startPartLevel(3) },
       sponsors: { main: null, stadium: null, local: null },
-      staff: { assistant: null, physio: null, scout: null, gkCoach: null, analyst: null, fitnessCoach: null }, boardConfidence: startBoardConfidence, boardCrisisWarned: false, jobOffers: null, plannedSub: null, incomingOffers: [], loans: [], loanOffers: [], transferHistory: [], squadViewPrefs: { rowMode: "detaljerad", showAllBench: false },
+      staff: { assistant: null, physio: null, scout: null, gkCoach: null, analyst: null, fitnessCoach: null }, boardConfidence: startBoardConfidence, boardCrisisWarned: false, economicWarningIssued: false, jobOffers: null, plannedSub: null, incomingOffers: [], loans: [], loanOffers: [], transferHistory: [], squadViewPrefs: { rowMode: "detaljerad", showAllBench: false },
       seasonIncomeTotal: 0, seasonWageTotal: 0, difficulty: "normal", savedScoutProfiles: [], clubRecords: {}, seasonStaffImpact: { physio: 0, assistant: 0, analyst: 0, gkCoach: 0, fitnessCoach: 0 },
       setPieceTakers: { penalties: [], freeKick: null, cornerLeft: null, cornerRight: null }, chemistryPairs: {}, newsFeed: [], captainId: null, clubGoodwill: {}, blacklistedPlayers: {}, staffCandidates: {}, recentMatchFinances: [],
       formationCode: "4-4-2", tacticalSettings: { ...DEFAULT_TACTICAL_SETTINGS }, lineupCells: null,
@@ -4723,6 +4724,19 @@ function setupCup(type, base) {
       }
     }
 
+    // Early economic warning: project the current income/wage trend forward and flag it the moment the
+    // budget looks set to go negative within a season's worth of rounds (38) — instead of only reacting
+    // once it's already happened, when there's no runway left to fix it.
+    const projBudget = g.budget + delta + eventBudgetDelta + installmentBudgetDelta + leaguePrizeThisRound;
+    const projRoundsPlayed = Math.max(1, newRound);
+    const projAvgNetPerRound = ((g.seasonIncomeTotal || 0) + income - ((g.seasonWageTotal || 0) + wageBill)) / projRoundsPlayed;
+    const projRoundsUntilNegative = projAvgNetPerRound < 0 ? projBudget / -projAvgNetPerRound : Infinity;
+    const projectedCrisis = projBudget >= 0 && projRoundsUntilNegative <= 38;
+    const newEconomicWarningIssued = projectedCrisis ? true : (projBudget < 0 || projAvgNetPerRound >= 0 || projRoundsUntilNegative > 45) ? false : g.economicWarningIssued;
+    const economicWarningMsg = (projectedCrisis && !g.economicWarningIssued)
+      ? `⚠️ Ekonomisk prognos: i nuvarande takt går budgeten mot minus om ca ${Math.max(1, Math.round(projRoundsUntilNegative))} omgångar (snitt: ${formatMoney(Math.round(projAvgNetPerRound))}/omg). Se över löner, sälj en spelare eller ta ett lån innan det blir akut.`
+      : null;
+
     setG(prev => {
       const newRep = clamp(prev.reputation + repFromBreak + derbyRep + (upset?.rep || 0), 0, 100);
       const ticketFanAdj = p.userIsHome ? (TICKET_TIERS[prev.ticketPrice] || TICKET_TIERS.t3).fanAdj : 0;
@@ -4776,6 +4790,7 @@ function setupCup(type, base) {
           fitnessCoach: (prev.seasonStaffImpact?.fitnessCoach || 0) + fitnessImpactDelta,
         },
         seasonIncomeTotal: (prev.seasonIncomeTotal || 0) + income, seasonWageTotal: (prev.seasonWageTotal || 0) + wageBill,
+        economicWarningIssued: newEconomicWarningIssued,
         reputation: newRep, fanbase: newFan, manager: newManagerRep !== undefined ? { ...prev.manager, reputation: newManagerRep } : prev.manager,
         repHistory: [...(prev.repHistory || []), newRep].slice(-12),
         fanHistory: [...(prev.fanHistory || []), newFan].slice(-12),
@@ -4787,6 +4802,7 @@ function setupCup(type, base) {
         _toast: [breakToast, eventToast, scoutToast, constructionToast, trainingInjuryNames.length ? `Skada på träning: ${trainingInjuryNames.join(", ")}.` : null, loanReturnHomeMsg, installmentMsg].filter(Boolean).join(" ") || null,
       };
     });
+    if (economicWarningMsg) pushNews(economicWarningMsg, "Ekonomi");
     (g.pendingPlayerScouts || []).filter(s => s.dueRound <= newRound).forEach(s => {
       const scoutedPlayer = s.clubId ? (g.clubs[s.clubId]?.squad?.find(pl => pl.id === s.playerId) || g.clubs[s.clubId]?.youthSquad?.find(pl => pl.id === s.playerId))
         : Object.values(g.worldPool || {}).flat().find(pl => pl.id === s.playerId);
@@ -5727,7 +5743,7 @@ function setupCup(type, base) {
         formationCode: "4-4-2", tacticalSettings: { ...DEFAULT_TACTICAL_SETTINGS }, lineupCells: null,
         cups: { domestic: null, cup1: null, cup2: null }, activeCupType: null, qualifiedCupTypes: ["domestic"], season1Qualifiers: null,
         lastMatchReport: null, view: "home", activeTab: "home", pendingAfterResult: "home",
-        loans: [], transferInstallments: [], installmentMonthKey: monthKeyFor(prev.season, prev.round),
+        loans: [], transferInstallments: [], installmentMonthKey: monthKeyFor(prev.season, prev.round), economicWarningIssued: false,
         repHistory: [reputationForClub], fanHistory: [fanbase], incomingOffers: [], loanOffers: [],
         formationFamiliarity: 0, teamTalk: "neutral", captainId: null, clubGoodwill: {}, blacklistedPlayers: {},
         _toast: `Välkommen till ${targetClub.name}! Nytt uppdrag i ${LEAGUES.find(l => l.id === targetClub.league)?.name} Division ${division}.`,
@@ -5997,8 +6013,21 @@ function setupCup(type, base) {
       const seasonFanDelta = newFanbase - prev.fanbase;
       if (Math.abs(seasonRepDelta) >= 2) pushNews(seasonRepDelta > 0 ? `Klubbens rykte stärks efter säsongen (${Math.round(prev.reputation)} → ${Math.round(newReputation)}).` : `Klubbens rykte dalar efter säsongen (${Math.round(prev.reputation)} → ${Math.round(newReputation)}).`, "Styrelse");
       if (Math.abs(seasonFanDelta) >= 2) pushNews(seasonFanDelta > 0 ? `Fanbasen växer efter säsongen (${Math.round(prev.fanbase)} → ${Math.round(newFanbase)}).` : `Fanbasen krymper efter säsongen (${Math.round(prev.fanbase)} → ${Math.round(newFanbase)}).`, "Klubben");
-      const gotSacked = boardCrisis && prev.boardCrisisWarned;
-      if (gotSacked) pushNews(`Styrelsen sparkade er som tränare efter upprepade missade mål.`, "Styrelse");
+
+      // The board hands out an emergency loan as an "extra life" when the budget goes negative (see the
+      // Lån section of Ekonomi-fliken), but that leniency has a deadline: if the loan is fully repaid and
+      // the club still hasn't turned its finances around, that's an automatic sacking for financial
+      // reasons — separate from (and faster than) the general two-season board-confidence crisis below.
+      const loanPayment = prev.loans.reduce((sum, l) => sum + l.installment, 0);
+      const newLoans = prev.loans.map(l => ({ ...l, seasonsLeft: l.seasonsLeft - 1 })).filter(l => l.seasonsLeft > 0);
+      const loanMsg = loanPayment > 0 ? `Lånebetalning: -${formatMoney(loanPayment)}.` : null;
+      const loansJustCompleted = prev.loans.some(l => l.seasonsLeft - 1 <= 0);
+      const budgetAfterLoanPayment = prev.budget - loanPayment;
+      const loanFailureSack = loansJustCompleted && budgetAfterLoanPayment < 0;
+      if (loanFailureSack) pushNews(`Lånet är nu avbetalt, men klubbens ekonomi är fortfarande i minus (${formatMoney(budgetAfterLoanPayment)}). Styrelsen sparkar er av ekonomiska skäl.`, "Styrelse");
+
+      const gotSacked = (boardCrisis && prev.boardCrisisWarned) || loanFailureSack;
+      if (gotSacked && !loanFailureSack) pushNews(`Styrelsen sparkade er som tränare efter upprepade missade mål.`, "Styrelse");
       const newBoardCrisisWarned = boardCrisis ? true : (newBoardConfidence > 40 ? false : prev.boardCrisisWarned);
 
       let newYouth = prev.youthSquad.map(y => growYouth(y, prev.dev.akademi, prev.spelide, prev.akademiParts.tranare));
@@ -6070,10 +6099,6 @@ function setupCup(type, base) {
       newYouth = newYouth.map(y => ({ ...y, age: y.age + 1 }));
       const history = [...(prev.history || []), { season: prev.season, division: oldDivision, leagueName: s.leagueName, pos: s.pos, domesticCupResult: s.domesticCupResult, cup1Result: s.cup1Result, cup2Result: s.cup2Result, prizeTotal: s.prizeTotal, incomeTotal: prev.seasonIncomeTotal || 0, wageTotal: prev.seasonWageTotal || 0 }];
       const userPoolIds = clubsInPool(prev.leagueId, newDivision, newClubs).map(c => c.id);
-
-      const loanPayment = prev.loans.reduce((sum, l) => sum + l.installment, 0);
-      const newLoans = prev.loans.map(l => ({ ...l, seasonsLeft: l.seasonsLeft - 1 })).filter(l => l.seasonsLeft > 0);
-      const loanMsg = loanPayment > 0 ? `Lånebetalning: -${formatMoney(loanPayment)}.` : null;
 
       const ownerEvent = ownerSeasonEvent(prev.owner, s.boardTargetMet, prev.budget);
       const newOwner = { ...prev.owner, patience: ownerEvent.newPatience };
@@ -6181,7 +6206,7 @@ function setupCup(type, base) {
         reputation: newReputation, fanbase: clamp(newFanbase + visionFanbaseDelta, 0, 100), boardConfidence: newBoardConfidence, plannedSub: null,
         budget: prev.budget - loanPayment + ownerEvent.cashDelta + promotionBonus, loans: newLoans,
         owner: newOwner, takeoverBid: newTakeoverBid, tourOffers: null, manager: { ...newManager, reputation: clamp((newManager.reputation || 0) + managerAwardRepBonus, 0, 100) }, staff: newStaff, boardCrisisWarned: newBoardCrisisWarned,
-        lastSeasonAwards: seasonAwards, userAwardWins, userManagerAwardBonus: managerAwardRepBonus, lastCrisisWasFinancial: financialCrisis,
+        lastSeasonAwards: seasonAwards, userAwardWins, userManagerAwardBonus: managerAwardRepBonus, lastCrisisWasFinancial: financialCrisis || loanFailureSack,
         lastMatchReport: null, view: gotSacked ? "sacked" : boardCrisis ? "boardcrisis" : newManager.contractYears <= 0 ? "managercontract" : "seasonawards", activeTab: "home", pendingAfterResult: "home",
         jobOffers: gotSacked ? generateJobOffers(newManager.reputation, newClubs, prev.userClubId) : null,
         jobMarketMandatory: gotSacked,
@@ -13628,7 +13653,7 @@ function LoanDetail({ budget, loans, reputation, onTakeLoan, onBack }) {
           <button onClick={() => onTakeLoan(o)} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={{ background: C.turf, color: C.paper }}>Ta lånet</button>
         </PaperCard>
       ))}
-      <div className="text-10 px-1" style={{ color: C.paperDim }}>Lån dras automatiskt från budgeten vid varje säsongsskifte tills de är avbetalda.</div>
+      <div className="text-10 px-1" style={{ color: C.paperDim }}>Lån dras automatiskt från budgeten vid varje säsongsskifte tills de är avbetalda. Är budgeten fortfarande i minus den säsong ett lån betalas av helt sparkar styrelsen er av ekonomiska skäl — se det som en sista chans att vända ekonomin.</div>
     </div>
   );
 }
