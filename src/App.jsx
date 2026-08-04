@@ -12979,54 +12979,33 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
           {locked ? (
             <PaperCard><div className="text-sm text-center py-3" style={{ color: C.inkSoft }}>Kräver Scoutnätverk nivå {REGION_UNLOCK[region]}. Uppgradera i Klubb-fliken.</div></PaperCard>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              {list.map(p => {
+            <PaperCard style={{ padding: 0 }}>
+              {list.map((p, i) => {
                 const owningClub = clubs[p.clubId];
                 const pOverall = overallOf(p);
-                const isDerby = owningClub && owningClub.rivalId === userClubId;
-                const rel = owningClub ? clubRelationshipLabel(clubGoodwill?.[owningClub.id], isDerby) : null;
-                const isWorldPool = !!p.region;
                 const scouted = isPlayerScouted(p, scoutedPlayerIds, userClubId);
                 const pendingScout = (pendingPlayerScouts || []).find(s => s.playerId === p.id);
+                const isWorldPool = !!p.region;
                 const [ovLo, ovHi] = scouted ? [pOverall, pOverall] : fuzzyStatRange(pOverall, p.id, "overall", isWorldPool);
-                const [potLo, potHi] = scouted ? [p.potential, p.potential] : fuzzyStatRange(p.potential ?? pOverall, p.id, "potential", isWorldPool);
                 return (
-                  <PaperCard key={p.id} style={{ padding: 10 }}>
-                    <div className="flex items-center gap-2.5">
-                      <div style={{ position: "relative", width: 30, height: 30, flexShrink: 0 }}>
-                        <PlayerAvatar player={p} size={30} />
-                        {scouted && <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={pOverall} size={16} /></div>}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-semibold text-xs truncate">{p.name}</div>
-                        <div className="font-mono text-9 mt-0.5 truncate" style={{ color: C.inkSoft }}>{POS_LABEL[p.pos]} ({specificPositionLabel(p.specificPosition)}) · {p.age} år</div>
-                        <div className="font-mono text-9 truncate" style={{ color: C.inkSoft }}>{owningClub ? owningClub.name : (p.club || "Fri agent")}</div>
-                        {rel && <div className="text-9 font-semibold truncate" style={{ color: rel.color }}>{isDerby ? "🔥 " : ""}{rel.text}</div>}
-                        {p.rivalInterest && <div className="text-9 font-semibold truncate" style={{ color: C.loss }}>👀 {p.rivalInterest} bevakar också spelaren</div>}
-                      </div>
+                  <button key={p.id} onClick={() => setNegotiatingId(p.id)} className="w-full flex items-center gap-2 text-left" style={{ padding: "8px 10px", borderTop: i ? `1px solid ${C.paperDim}` : "none" }}>
+                    <div style={{ position: "relative", width: 26, height: 26, flexShrink: 0 }}>
+                      <PlayerAvatar player={p} size={26} />
                     </div>
-                    <div className="flex items-center justify-between mt-1.5">
-                      {scouted ? <StarRating rating={overallToStars(pOverall)} size={7} /> : <div className="text-9 font-semibold" style={{ color: C.gold }}>Overall {ovLo}–{ovHi} · Pot. {potLo}–{potHi}</div>}
-                      <div className="font-mono text-11 font-semibold shrink-0">{formatMoney(p.value)}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-11 truncate">{p.name}</div>
+                      <div className="font-mono text-9 truncate" style={{ color: C.inkSoft }}>{POS_LABEL[p.pos]} · {p.age} år · {owningClub ? owningClub.name : (p.club || "Fri agent")}</div>
                     </div>
-                    {scouted && (
-                      <div className="grid grid-cols-2 gap-1.5 mt-1.5">
-                        <AttributeGridCard attrKey="shooting" label="Anfall" value={p.attack} icon="🎯" />
-                        <AttributeGridCard attrKey="defending" label="Försvar" value={p.defense} icon="🛡️" />
-                      </div>
-                    )}
-                    {!scouted && (
-                      pendingScout ? (
-                        <div className="mt-2 w-full py-1.5 rounded-xl text-9 font-semibold text-center" style={{ background: C.paperDim, color: C.inkSoft }}>🔍 Scoutas — {Math.max(1, pendingScout.dueRound - round)} omg kvar</div>
-                      ) : (
-                        <button onClick={() => onScoutPlayer(p.id, isWorldPool ? p.region : null, null)} className="mt-2 w-full py-1.5 rounded-xl text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>🔍 Scouta spelaren</button>
-                      )
-                    )}
-                    <button onClick={() => setNegotiatingId(p.id)} disabled={!windowOpen} className="mt-1.5 w-full py-1.5 rounded-xl text-9 font-semibold" style={windowOpen ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>{windowOpen ? "Förhandla" : "Fönstret är stängt"}</button>
-                  </PaperCard>
+                    {pendingScout && <div className="text-9 font-semibold shrink-0" style={{ color: C.inkSoft }}>🔍 {Math.max(1, pendingScout.dueRound - round)} omg</div>}
+                    <div className="text-right shrink-0">
+                      <div className="font-mono text-11 font-semibold">{formatMoney(p.value)}</div>
+                      <div className="text-9 font-semibold" style={{ color: C.gold }}>{scouted ? `Overall ${pOverall}` : `${ovLo}–${ovHi}`}</div>
+                    </div>
+                    <ChevronRight size={14} color={C.inkSoft} className="shrink-0" />
+                  </button>
                 );
               })}
-            </div>
+            </PaperCard>
           )}
         </>
       ) : subView === "ungdom" ? (
