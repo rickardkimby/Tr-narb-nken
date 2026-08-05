@@ -6487,7 +6487,14 @@ function setupCup(type, base) {
             const notifCount = NAV_NOTIFS[key] || 0;
             return (
               <React.Fragment key={key}>
-                <button onClick={() => { setG(prev => ({ ...prev, activeTab: key, view: "tab" })); if (key === "news") markNewsRead(); }} className="tabbtn flex flex-col items-center gap-1 py-2.5 w-full"
+                <button onClick={() => {
+                  // A live match/shootout only actually commits its result when its own "finish" button is
+                  // pressed — everything up to that point lives in local component state. Letting the sidebar
+                  // navigate away mid-match would silently discard an unfinished (or losing) result instead of
+                  // recording it, effectively letting a bad result be "undone" by leaving before it saves.
+                  if (["livematch", "penaltyshootout"].includes(g.view)) { showToast("Avsluta matchen först innan du navigerar bort."); return; }
+                  setG(prev => ({ ...prev, activeTab: key, view: "tab" })); if (key === "news") markNewsRead();
+                }} className="tabbtn flex flex-col items-center gap-1 py-2.5 w-full"
                   style={{ background: active ? "rgba(201,154,62,0.14)" : "transparent", position: "relative", borderLeft: active ? `3px solid ${C.gold}` : "3px solid transparent" }}>
                   {notifCount > 0 && (notifCount > 1 ? <div className="badge-count">{notifCount > 9 ? "9+" : notifCount}</div> : <div className="notif-dot" />)}
                   <span style={{ fontSize: 18, lineHeight: 1, filter: active ? "none" : "grayscale(35%) opacity(0.85)" }}>{emoji}</span>
