@@ -11799,9 +11799,18 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
   }
 
   // The badge shown here is what actually takes the pitch — the starting XI's current effective rating
-  // (fitness and form baked in), not a whole-squad average diluted by bench depth that never plays.
+  // (fitness, form AND position fit baked in, exactly like each row's own liveRating), not a whole-squad
+  // average diluted by bench depth that never plays. Without the fit term this stayed flat even when a
+  // player was slotted somewhere well off their natural position.
   const startingXIPlayers = squad.filter(p => startingXI.includes(p.id));
-  const clubOverall = startingXIPlayers.length ? Math.round(startingXIPlayers.reduce((s, p) => s + effectiveOverall(p), 0) / startingXIPlayers.length) : squadOverallRating(squad);
+  const cellByPlayerId = {};
+  Object.entries(lineupCells || {}).forEach(([key, id]) => { if (id) cellByPlayerId[id] = key; });
+  const clubOverall = startingXIPlayers.length ? Math.round(startingXIPlayers.reduce((s, p) => {
+    const cellKey = cellByPlayerId[p.id];
+    const fit = cellKey ? effectivePositionFit(p, ...cellKey.split("-").map(Number)) : null;
+    const posFitMult = fit !== null ? (0.75 + 0.25 * clamp(fit, 0.3, 1)) : 1;
+    return s + clamp(Math.round(effectiveOverall(p) * posFitMult), 1, 95);
+  }, 0) / startingXIPlayers.length) : squadOverallRating(squad);
   return (
     <div className="rise-in space-y-2.5">
       <div className="grid grid-cols-4 gap-1.5">
