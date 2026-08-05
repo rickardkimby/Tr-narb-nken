@@ -2252,6 +2252,77 @@ function autoAssignFormation(slots, squad, xiIds) {
   leftoverSlots.forEach((slot, i) => { if (leftoverPlayers[i]) { map[slot.id] = leftoverPlayers[i].id; used.add(leftoverPlayers[i].id); } });
   return map;
 }
+// Shared by the user's own formation editor (formationPresetToCells) and the AI lineup builder below —
+// turns a formation code into concrete grid cells (col-row id + broad role), independent of who's
+// actually being slotted into them.
+function formationGridSlots(code) {
+  const slots = parseFormation(code);
+  return dedupeCells(slots.map(s => ({
+    id: cellKey(Math.round((s.x / 100) * (GRID_COLS - 1)), Math.round((s.y / 100) * (GRID_ROWS - 1))),
+    role: s.role,
+  })));
+}
+// A club plays one system all season, same as the user picking a formation and sticking with it —
+// deterministic from the club's own id so it's stable without needing any new persisted/migrated state.
+function aiFormationCode(club) {
+  const rng = seededRandom(String(club?.id || "unknown") + "formation");
+  return FORMATION_CODES[Math.floor(rng() * FORMATION_CODES.length)];
+}
+// The AI-club equivalent of the user building their own lineup: pick a formation, choose the strongest
+// currently-available XI to fill its shape (fitness/form/injuries/suspensions/international duty all
+// count, exactly like pickBestXI/getXI), then slot each chosen player into whichever specific position
+// (CB vs VB, CM vs CAM, ...) actually fits them best — a real position-fit penalty can now land on an AI
+// club exactly the way it lands on the user's own mistakes. This is the single source of truth for "who's
+// playing and how well they fit": the same computation drives the match result, the post-match stats, and
+// the opponent scouting report, so what gets scouted is exactly what takes the pitch.
+function selectAiLineup(club) {
+  const squad = club?.squad || [];
+  const code = club?.formationCode || aiFormationCode(club);
+  const slots = formationGridSlots(code);
+  const fit = squad.filter(p => !(p.injuryWeeks > 0) && !(p.suspendedMatches > 0) && !p.internationalDuty);
+  const pool = fit.length ? fit : squad; // total availability crisis: field who you have rather than nobody
+  const neededByRole = {};
+  slots.forEach(s => { neededByRole[s.role] = (neededByRole[s.role] || 0) + 1; });
+  const byEffOverall = (a, b) => effectiveOverall(b) - effectiveOverall(a);
+  const buckets = { MV: [], FÖ: [], MF: [], AN: [] };
+  pool.forEach(p => { (buckets[p.pos] || buckets.MF).push(p); });
+  Object.values(buckets).forEach(arr => arr.sort(byEffOverall));
+  const chosen = [];
+  Object.entries(neededByRole).forEach(([role, n]) => { chosen.push(...(buckets[role] || []).slice(0, n)); });
+  const chosenIds = new Set(chosen.map(p => p.id));
+  const shortfall = slots.length - chosen.length;
+  if (shortfall > 0) {
+    const leftover = pool.filter(p => p.pos !== "MV" && !chosenIds.has(p.id)).sort(byEffOverall);
+    chosen.push(...leftover.slice(0, shortfall));
+  }
+  // Greedy best-fit-first assignment across every remaining (slot, player) pair — simple, but more than
+  // good enough for 11-ish slots and players, and it naturally falls back to a makeshift selection (a
+  // midfielder pressed into defense) when a club is genuinely short at a position, instead of crashing
+  // or leaving a slot empty.
+  const remSlots = [...slots];
+  const remPlayers = [...chosen];
+  const cellMap = {};
+  while (remSlots.length && remPlayers.length) {
+    let bestSi = 0, bestPi = 0, bestFit = -1;
+    remSlots.forEach((slot, si) => {
+      const [col, row] = slot.id.split("-").map(Number);
+      remPlayers.forEach((p, pi) => {
+        const f = effectivePositionFit(p, col, row);
+        if (f > bestFit) { bestFit = f; bestSi = si; bestPi = pi; }
+      });
+    });
+    cellMap[remSlots[bestSi].id] = remPlayers[bestPi].id;
+    remSlots.splice(bestSi, 1);
+    remPlayers.splice(bestPi, 1);
+  }
+  const xi = Object.values(cellMap).map(id => squad.find(p => p.id === id)).filter(Boolean);
+  const fitScore = teamPositionFit(cellMap, squad);
+  const tacticalStyle = club?.tacticalStyle || oppTacticalStyle(club);
+  const { attack, defense } = xi.length
+    ? userStrength(xi, "balanserad", "balanserad", tacticalStyle, fitScore, null, null)
+    : { attack: club?.strength ?? 50, defense: club?.strength ?? 50 };
+  return { formationCode: code, cellMap, xi, attack, defense, fitScore };
+}
 
 function contractDemand(player) {
   const rng = seededRandom(String(player.id) + "contract" + player.contractYears);
@@ -3067,16 +3138,6 @@ function generateAllSchedules(clubs) {
 // just the same likely-XI-plays-and-tires, rest-of-squad-recovers clock. Without this, every club outside
 // the user's own division would sit frozen at full fitness forever, which is exactly the asymmetry that
 // made same-archetype AI clubs feel like statistical twins regardless of fixture congestion or form.
-function tickSquadFatigue(squad) {
-  if (!squad || !squad.length) return squad;
-  const fit = squad.filter(p => !(p.injuryWeeks > 0) && !(p.suspendedMatches > 0));
-  const keeper = fit.find(p => p.pos === "MV");
-  const rankedOutfield = fit.filter(p => p.pos !== "MV").sort((a, b) => effectiveOverall(b) - effectiveOverall(a));
-  const playedIds = new Set([keeper?.id, ...rankedOutfield.slice(0, 10).map(p => p.id)].filter(Boolean));
-  return squad.map(p => playedIds.has(p.id)
-    ? { ...p, stamina: clamp((p.stamina ?? 100) - Math.max(1, rndInt(4, 8) * enduranceMult(p)), 0, 100) }
-    : { ...p, stamina: clamp((p.stamina ?? 100) + rndInt(28, 36), 0, 100) });
-}
 function simulateOtherDivisionsRound(allSchedules, clubs, round, skipKey) {
   const updated = {};
   const updatedClubs = {};
@@ -3087,16 +3148,20 @@ function simulateOtherDivisionsRound(allSchedules, clubs, round, skipKey) {
       return r.map(f => {
         const home = clubs[f.home], away = clubs[f.away];
         if (!home || !away || f.homeGoals !== null) return f;
-        // Same idea as the user's own matches, scaled down and simplified for performance across an
-        // entire world's worth of fixtures — actual squad quality, live fatigue/form, and recent form
-        // nudge the nominal strength number a little, so two same-archetype clubs don't play as pure
-        // statistical twins.
-        const homeEff = home.strength * squadQualityIndex(home.squad) * squadFatigueFormMult(home.squad) * teamFormMult(recentForm(schedule, round, f.home));
-        const awayEff = away.strength * squadQualityIndex(away.squad) * squadFatigueFormMult(away.squad) * teamFormMult(recentForm(schedule, round, f.away));
+        // Same formation-and-position-fit-aware lineup the user's own division rivals get (selectAiLineup)
+        // — real attack/defense from who's actually fit, in form, and well-placed, not a single flat
+        // strength number. squadQualityIndex and recent-results momentum still layer on top as their own
+        // independent signals.
+        const homeLineup = selectAiLineup(home), awayLineup = selectAiLineup(away);
+        const homeMomentum = squadQualityIndex(home.squad) * teamFormMult(recentForm(schedule, round, f.home));
+        const awayMomentum = squadQualityIndex(away.squad) * teamFormMult(recentForm(schedule, round, f.away));
         const hAdv = homeAdvantageMult(home);
-        const [hg, ag] = poissonScorePair(expectedGoals(homeEff, awayEff, true, hAdv), expectedGoals(awayEff, homeEff, false, hAdv));
-        updatedClubs[f.home] = { ...home, squad: tickSquadFatigue(home.squad) };
-        updatedClubs[f.away] = { ...away, squad: tickSquadFatigue(away.squad) };
+        const [hg, ag] = poissonScorePair(
+          expectedGoals(homeLineup.attack * homeMomentum, awayLineup.defense * awayMomentum, true, hAdv),
+          expectedGoals(awayLineup.attack * awayMomentum, homeLineup.defense * homeMomentum, false, hAdv)
+        );
+        updatedClubs[f.home] = { ...home, formationCode: homeLineup.formationCode, squad: distributeMatchStats(home.squad, hg, new Set(homeLineup.xi.map(p => p.id))) };
+        updatedClubs[f.away] = { ...away, formationCode: awayLineup.formationCode, squad: distributeMatchStats(away.squad, ag, new Set(awayLineup.xi.map(p => p.id))) };
         return { ...f, homeGoals: hg, awayGoals: ag };
       });
     });
@@ -3193,17 +3258,6 @@ function formMult(player) {
 // same math as a single "right now" number instead of leaving it a black box.
 function effectiveOverall(player) {
   return clamp(Math.round(overallOf(player) * staminaMult(player.stamina) * formMult(player)), 1, 95);
-}
-// The AI-club equivalent of what userStrength already does for the user's own XI: a club's likely
-// starting XI plays a bit above or below its nominal .strength depending on how tired or out-of-form
-// that XI currently is. Without this, AI clubs' match strength was a single static number that never
-// reflected fixture congestion or a slump the way the user's own squad always has — same stamina/form
-// state distributeMatchStats already tracks, just condensed into one multiplier per club per match.
-function squadFatigueFormMult(squad) {
-  if (!squad || !squad.length) return 1;
-  const likelyXI = [...squad].sort((a, b) => overallOf(b) - overallOf(a)).slice(0, 11);
-  const mult = likelyXI.reduce((s, p) => s + staminaMult(p.stamina) * formMult(p), 0) / likelyXI.length;
-  return clamp(mult, 0.75, 1.15);
 }
 function userStrength(xi, tactic, spelide, tacticalSettings, fitScore, staff, managerAttrs) {
   let attack = xi.reduce((s, p) => s + p.attack * staminaMult(p.stamina) * formMult(p) * (p.pos === "AN" ? 1.3 : p.pos === "MF" ? 1.1 : 0.5), 0) / xi.length;
@@ -3345,7 +3399,7 @@ function computeSeasonAwards(clubs, userClubId, userSquad, worldStandings) {
   });
   return { global, byDivision };
 }
-function distributeMatchStats(squad, goalCount) {
+function distributeMatchStats(squad, goalCount, playingIds) {
   if (!squad.length) return squad;
   // Tick down existing injuries/suspensions first, and figure out who's actually available this match —
   // without this, AI clubs' best players would play every single game forever, which skews stats unrealistically.
@@ -3395,13 +3449,15 @@ function distributeMatchStats(squad, goalCount) {
     if (roll < 0.003 * cardMult) redInc.add(p.id);
     else if (roll < 0.05 * cardMult) yellowInc.add(p.id);
   });
-  // A plausible "starting XI" (1 keeper + best ~10 outfield, ranked by CURRENT fitness/form rather than
-  // raw ability) actually plays this match, drawn only from currently available (non-injured, non-suspended)
-  // players — a tired or out-of-form regular is a little more likely to be rotated out, exactly like a
-  // real manager (or the user, via the Trupp tab's live rating) would do.
+  // The starting XI is normally the one selectAiLineup already picked for this exact match (formation,
+  // fitness/form and real position fit all baked in) — the same lineup the scouting report shows and the
+  // one that decided the scoreline. Falls back to a plain fitness/form-ranked top-11 only when no lineup
+  // was supplied (a genuine caller bug, not a supported path).
   const keeper = available.find(p => p.pos === "MV");
   const rankedOutfield = [...outfield].sort((a, b) => effectiveOverall(b) - effectiveOverall(a));
-  const playedPlayers = [keeper, ...rankedOutfield.slice(0, 10)].filter(Boolean);
+  const playedPlayers = playingIds
+    ? available.filter(p => (playingIds.has ? playingIds.has(p.id) : playingIds.includes(p.id)))
+    : [keeper, ...rankedOutfield.slice(0, 10)].filter(Boolean);
   const playedIds = new Set(playedPlayers.map(p => p.id));
   // Same injury-risk shape as the user's own in-match roll (see finalizeMatch's baselineChance) — a
   // physically weaker, more injury-prone ("Skör" vs "Robust"), or already-tired player is genuinely more
@@ -3683,11 +3739,11 @@ function processDomesticCupRound(teams, clubs, userClubId, squad, tactic, spelid
       const oppId = a === userClubId ? b : a;
       const opp = clubs[oppId];
       const { attack, defense } = userStrength(xi, tactic, spelide, tacticalSettings);
-      const oppEff = opp.strength * squadFatigueFormMult(opp.squad);
-      const [userGoals, oppGoals] = poissonScorePair(expectedGoals(attack, oppEff, false), expectedGoals(oppEff, defense, false));
+      const oppLineup = selectAiLineup(opp);
+      const [userGoals, oppGoals] = poissonScorePair(expectedGoals(attack, oppLineup.defense, false), expectedGoals(oppLineup.attack, defense, false));
       let penalties = null, userWon;
       if (userGoals === oppGoals) {
-        const winProb = clamp(0.5 + (attack - oppEff) / 200, 0.3, 0.7);
+        const winProb = clamp(0.5 + (attack - (oppLineup.attack + oppLineup.defense) / 2) / 200, 0.3, 0.7);
         userWon = Math.random() < winProb;
         penalties = userWon ? `${rndInt(4, 6)}-${rndInt(2, 4)}` : `${rndInt(2, 4)}-${rndInt(4, 6)}`;
       } else { userWon = userGoals > oppGoals; }
@@ -3698,8 +3754,8 @@ function processDomesticCupRound(teams, clubs, userClubId, squad, tactic, spelid
       userReport = { oppName: opp.name, oppColor: opp.color, userColor: clubs[userClubId]?.color, userGoals, oppGoals, penalties, result: userWon ? "win" : "loss", ratings };
     } else {
       const A = clubs[a], B = clubs[b];
-      const aEff = A.strength * squadFatigueFormMult(A.squad), bEff = B.strength * squadFatigueFormMult(B.squad);
-      const [ag, bg] = poissonScorePair(expectedGoals(aEff, bEff, false), expectedGoals(bEff, aEff, false));
+      const aLineup = selectAiLineup(A), bLineup = selectAiLineup(B);
+      const [ag, bg] = poissonScorePair(expectedGoals(aLineup.attack, bLineup.defense, false), expectedGoals(bLineup.attack, aLineup.defense, false));
       winners.push(ag === bg ? pick([a, b]) : (ag > bg ? a : b));
     }
   }
@@ -3713,8 +3769,8 @@ function instantResolveKnockout(teamIds, clubs) {
     if (round.length % 2 === 1) { const idx = rndInt(0, round.length - 1); next.push(round[idx]); round.splice(idx, 1); }
     for (let i = 0; i < round.length; i += 2) {
       const A = clubs[round[i]], B = clubs[round[i + 1]];
-      const aEff = A.strength * squadFatigueFormMult(A.squad), bEff = B.strength * squadFatigueFormMult(B.squad);
-      const [ag, bg] = poissonScorePair(expectedGoals(aEff, bEff, false), expectedGoals(bEff, aEff, false));
+      const aLineup = selectAiLineup(A), bLineup = selectAiLineup(B);
+      const [ag, bg] = poissonScorePair(expectedGoals(aLineup.attack, bLineup.defense, false), expectedGoals(bLineup.attack, aLineup.defense, false));
       next.push(ag === bg ? pick([round[i], round[i + 1]]) : (ag > bg ? round[i] : round[i + 1]));
     }
     list = next;
@@ -3751,7 +3807,8 @@ function simulateDecisiveMatch(strengthA, strengthB, aHome, homeAdvMult = 1) {
 }
 function resolveTie(x, y, clubs) {
   const X = clubs[x], Y = clubs[y];
-  const xEff = X.strength * squadFatigueFormMult(X.squad), yEff = Y.strength * squadFatigueFormMult(Y.squad);
+  const xLineup = selectAiLineup(X), yLineup = selectAiLineup(Y);
+  const xEff = (xLineup.attack + xLineup.defense) / 2, yEff = (yLineup.attack + yLineup.defense) / 2;
   const leg1 = simulateDecisiveMatch(xEff, yEff, true, homeAdvantageMult(X));
   const leg2 = simulateDecisiveMatch(yEff, xEff, true, homeAdvantageMult(Y));
   const xGoals = leg1.goalsA + leg2.goalsB, yGoals = leg1.goalsB + leg2.goalsA;
@@ -4418,17 +4475,23 @@ function setupCup(type, base) {
         if (isUser) return f; // resolved later in resolveSecondHalf
         const home = newClubs[f.home], away = newClubs[f.away];
         const hAdv = homeAdvantageMult(home);
-        // Same live fatigue/momentum layered on top of the season baseline that the user's own squad
-        // always plays under (per-player stamina/form via userStrength) and background-division AI
-        // clubs already got (see simulateOtherDivisionsRound) — direct table rivals were the one gap.
-        const homeEff = home.strength * squadFatigueFormMult(home.squad) * teamFormMult(recentForm(g.schedule, g.round, f.home));
-        const awayEff = away.strength * squadFatigueFormMult(away.squad) * teamFormMult(recentForm(g.schedule, g.round, f.away));
-        const [hg, ag] = poissonScorePair(expectedGoals(homeEff, awayEff, true, hAdv), expectedGoals(awayEff, homeEff, false, hAdv));
+        // Same formation-and-position-fit-aware lineup the user builds for themselves (selectAiLineup) —
+        // direct table rivals now get a genuine attack/defense from who's actually fit, in form, and
+        // well-placed, not a flat strength number. Club-level momentum from recent results still layers
+        // on top as its own independent signal.
+        const homeLineup = selectAiLineup(home), awayLineup = selectAiLineup(away);
+        const homeMomentum = teamFormMult(recentForm(g.schedule, g.round, f.home));
+        const awayMomentum = teamFormMult(recentForm(g.schedule, g.round, f.away));
+        const [hg, ag] = poissonScorePair(
+          expectedGoals(homeLineup.attack * homeMomentum, awayLineup.defense * awayMomentum, true, hAdv),
+          expectedGoals(awayLineup.attack * awayMomentum, homeLineup.defense * homeMomentum, false, hAdv)
+        );
         const drift = (id, res) => {
           const c = newClubs[id];
           const strength = clamp(c.strength + (res === "win" ? rnd(0.1, 0.35) : res === "loss" ? -rnd(0.1, 0.3) : rnd(-0.06, 0.06)) + rnd(-0.08, 0.08), 20, 97);
           const goalsFor = id === f.home ? hg : ag;
-          newClubs[id] = { ...c, strength, squad: distributeMatchStats(c.squad, goalsFor) };
+          const lineup = id === f.home ? homeLineup : awayLineup;
+          newClubs[id] = { ...c, strength, formationCode: lineup.formationCode, squad: distributeMatchStats(c.squad, goalsFor, new Set(lineup.xi.map(p => p.id))) };
         };
         if (hg > ag) { drift(f.home, "win"); drift(f.away, "loss"); }
         else if (hg < ag) { drift(f.away, "win"); drift(f.home, "loss"); }
@@ -4441,6 +4504,11 @@ function setupCup(type, base) {
     const userIsHome = fixture.home === g.userClubId;
     const oppId = userIsHome ? fixture.away : fixture.home;
     const opp = newClubs[oppId];
+    // Same lineup a scouting report would show (selectAiLineup is pure/deterministic from the opponent's
+    // current squad state, which hasn't changed since kickoff) — collapsed to one scalar here because the
+    // live match engine still consumes a single opponent strength number throughout the match.
+    const oppLineup = selectAiLineup(opp);
+    const oppStrength = (oppLineup.attack + oppLineup.defense) / 2;
     const { attack, defense } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff, g.manager?.attributes);
     const { attack: attackNoStaff, defense: defenseNoStaff } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), null);
     const analystImpactDelta = Math.max(0, attack - attackNoStaff);
@@ -4451,7 +4519,7 @@ function setupCup(type, base) {
 
     setG(prev => ({
       ...prev, clubs: newClubs, view: "livematch",
-      pendingRound: { newSchedule, oppId, oppName: opp.name, oppStrength: opp.strength * squadFatigueFormMult(opp.squad), userIsHome, weather, xiIds: xi.map(p => p.id), analystImpactDelta, gkCoachImpactDelta, fitnessImpactDelta },
+      pendingRound: { newSchedule, oppId, oppName: opp.name, oppStrength, userIsHome, weather, xiIds: xi.map(p => p.id), analystImpactDelta, gkCoachImpactDelta, fitnessImpactDelta },
     }));
   }
 
@@ -5019,15 +5087,16 @@ function setupCup(type, base) {
     for (const [a, b] of pairs) {
       if (a === g.userClubId || b === g.userClubId) { userOppId = a === g.userClubId ? b : a; continue; }
       const A = g.clubs[a], B = g.clubs[b];
-      const aEff = A.strength * squadFatigueFormMult(A.squad), bEff = B.strength * squadFatigueFormMult(B.squad);
-      const [ag, bg] = poissonScorePair(expectedGoals(aEff, bEff, false), expectedGoals(bEff, aEff, false));
+      const aLineup = selectAiLineup(A), bLineup = selectAiLineup(B);
+      const [ag, bg] = poissonScorePair(expectedGoals(aLineup.attack, bLineup.defense, false), expectedGoals(bLineup.attack, aLineup.defense, false));
       winners.push(ag === bg ? pick([a, b]) : (ag > bg ? a : b));
     }
     const opp = g.clubs[userOppId];
     const xi = getXI(g.squad, g.startingXI);
     const { attack, defense } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff, g.manager?.attributes);
     const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}domestic${cup.roundIndex || 1}`);
-    const pending = { oppId: userOppId, oppName: opp.name, oppStrength: opp.strength * squadFatigueFormMult(opp.squad), userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
+    const oppLineup = selectAiLineup(opp);
+    const pending = { oppId: userOppId, oppName: opp.name, oppStrength: (oppLineup.attack + oppLineup.defense) / 2, userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "domesticRound", winners } }));
   }
   function finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
@@ -5090,14 +5159,15 @@ function setupCup(type, base) {
       if (isUser) { userIsHome = f.home === g.userClubId; oppId2 = userIsHome ? f.away : f.home; return f; }
       const home = g.clubs[f.home], away = g.clubs[f.away];
       const hAdv = homeAdvantageMult(home);
-      const homeEff = home.strength * squadFatigueFormMult(home.squad), awayEff = away.strength * squadFatigueFormMult(away.squad);
-      const [hgOther, agOther] = poissonScorePair(expectedGoals(homeEff, awayEff, true, hAdv), expectedGoals(awayEff, homeEff, false, hAdv));
+      const homeLineup = selectAiLineup(home), awayLineup = selectAiLineup(away);
+      const [hgOther, agOther] = poissonScorePair(expectedGoals(homeLineup.attack, awayLineup.defense, true, hAdv), expectedGoals(awayLineup.attack, homeLineup.defense, false, hAdv));
       return { ...f, homeGoals: hgOther, awayGoals: agOther };
     });
     const opp = g.clubs[oppId2];
     const xi = getXI(g.squad, g.startingXI);
     const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}cup1group${cup.groupRound}`);
-    const pending = { oppId: oppId2, oppName: opp.name, oppStrength: opp.strength * squadFatigueFormMult(opp.squad), userIsHome, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
+    const oppLineup = selectAiLineup(opp);
+    const pending = { oppId: oppId2, oppName: opp.name, oppStrength: (oppLineup.attack + oppLineup.defense) / 2, userIsHome, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "groupMatch", resolvedOthers } }));
   }
   function finalizeGroupMatch(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
@@ -5165,7 +5235,8 @@ function setupCup(type, base) {
     const userIsHomeThisLeg = cup.tie.leg === 1 ? cup.tie.userHomeLeg1 : !cup.tie.userHomeLeg1;
     const xi = getXI(g.squad, g.startingXI);
     const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}${cupType}leg${cup.tie.leg}`);
-    const pending = { oppId: cup.tie.oppId, oppName: opp.name, oppStrength: opp.strength * squadFatigueFormMult(opp.squad), userIsHome: userIsHomeThisLeg, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
+    const oppLineup = selectAiLineup(opp);
+    const pending = { oppId: cup.tie.oppId, oppName: opp.name, oppStrength: (oppLineup.attack + oppLineup.defense) / 2, userIsHome: userIsHomeThisLeg, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "leg", cupType, legNum: cup.tie.leg } }));
   }
   function finalizeCupLeg(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
@@ -5206,7 +5277,8 @@ function setupCup(type, base) {
       if (!et) {
         const xi = getXI(g.squad, g.startingXI);
         const strength2 = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings);
-        const oppStrength = g.clubs[cup.tie.oppId].strength * squadFatigueFormMult(g.clubs[cup.tie.oppId].squad);
+        const etOppLineup = selectAiLineup(g.clubs[cup.tie.oppId]);
+        const oppStrength = (etOppLineup.attack + etOppLineup.defense) / 2;
         const diff = (strength2.attack - oppStrength) / 100;
         const etUser = Math.random() < clamp(0.22 + diff, 0.08, 0.42) ? (Math.random() < 0.15 ? 2 : 1) : 0;
         const etOpp = Math.random() < clamp(0.22 - diff, 0.08, 0.42) ? (Math.random() < 0.15 ? 2 : 1) : 0;
@@ -5222,7 +5294,8 @@ function setupCup(type, base) {
       } else {
         const xi = getXI(g.squad, g.startingXI);
         const strength2 = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings);
-        const oppStrength = g.clubs[cup.tie.oppId].strength * squadFatigueFormMult(g.clubs[cup.tie.oppId].squad);
+        const pkOppLineup = selectAiLineup(g.clubs[cup.tie.oppId]);
+        const oppStrength = (pkOppLineup.attack + pkOppLineup.defense) / 2;
         const shootout = simulatePenaltyShootout(xi, g.clubs[cup.tie.oppId]?.squad || [], strength2.attack, oppStrength, g.setPieceTakers);
         setG(prev => ({ ...prev, view: "penaltyshootout", pendingShootout: { ...shootout, oppId: cup.tie.oppId, targetView: "cup", resumeCupLeg: true } }));
         return;
@@ -5264,7 +5337,8 @@ function setupCup(type, base) {
     const opp = g.clubs[cup.finalOpponentId];
     const xi = getXI(g.squad, g.startingXI);
     const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}${cupType}final`);
-    const pending = { oppId: cup.finalOpponentId, oppName: opp.name, oppStrength: opp.strength * squadFatigueFormMult(opp.squad), userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
+    const oppLineup = selectAiLineup(opp);
+    const pending = { oppId: cup.finalOpponentId, oppName: opp.name, oppStrength: (oppLineup.attack + oppLineup.defense) / 2, userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "final", cupType } }));
   }
   function finalizeCupFinal(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
@@ -5843,6 +5917,14 @@ function setupCup(type, base) {
   function setDifficulty(key) {
     setG(prev => ({ ...prev, difficulty: key }));
     showToast(`Svårighetsgrad satt till ${(DIFFICULTY_SETTINGS[key] || DIFFICULTY_SETTINGS.normal).label}.`);
+  }
+  // Requires an assisterande tränare (see the gate in MatchPrepView) — remembers which screen to return
+  // to so scouting doesn't lose the manager's place before kickoff.
+  function openScoutView(oppId) {
+    setG(prev => ({ ...prev, view: "scoutopponent", scoutOppId: oppId, scoutReturnView: prev.view }));
+  }
+  function closeScoutView() {
+    setG(prev => ({ ...prev, view: prev.scoutReturnView || "home" }));
   }
   function setSetPieceTakers(next) {
     setG(prev => ({ ...prev, setPieceTakers: next }));
@@ -6734,7 +6816,10 @@ function setupCup(type, base) {
                   onBack={() => setG(prev => ({ ...prev, view: "home" }))}
                   onSetPlannedSub={setPlannedSub}
                   onSetTeamTalk={setTeamTalk} onRestStars={restStars} onSetTicketPrice={setTicketPrice}
-                  onGotoSquad={() => setG(prev => ({ ...prev, activeTab: "squad", view: "tab" }))} onPlay={beginRound} />
+                  onGotoSquad={() => setG(prev => ({ ...prev, activeTab: "squad", view: "tab" }))} onPlay={beginRound}
+                  onScoutOpponent={openScoutView} />
+              ) : g.view === "scoutopponent" ? (
+                <OpponentScoutView club={g.clubs[g.scoutOppId]} onBack={closeScoutView} />
               ) : g.view === "tourplanner" ? (
                 <TourPlannerView g={g} onBack={() => setG(prev => ({ ...prev, view: "home" }))} onOpenTours={openTourOffers} onStartTour={startTour} />
               ) : g.view === "cup" && g.activeCupType && g.cups[g.activeCupType] ? (
@@ -6743,7 +6828,8 @@ function setupCup(type, base) {
                   onPlayGroup={playGroupMatch} onContinueGroup={continueGroupRound}
                   onPlayLeg={playCupLeg} onContinueLeg={continueCupLeg}
                   onPlayFinal={playCupFinal} onContinueFinal={continueCupFinal}
-                  onFinish={finishCup} onBackToHome={() => setG(prev => ({ ...prev, view: "home" }))} />
+                  onFinish={finishCup} onBackToHome={() => setG(prev => ({ ...prev, view: "home" }))}
+                  hasAssistant={!!g.staff.assistant} onScoutOpponent={openScoutView} />
               ) : g.activeTab === "news" ? (
                 <NewsTab newsFeed={g.newsFeed} onNewsAction={handleNewsAction} />
               ) : g.activeTab === "home" ? (
@@ -8212,7 +8298,7 @@ function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRo
   );
 }
 
-function MatchPrepView({ g, userClub, oppClub, countryName, isHome, onBack, onSetPlannedSub, onSetTeamTalk, onRestStars, onSetTicketPrice, onGotoSquad, onPlay }) {
+function MatchPrepView({ g, userClub, oppClub, countryName, isHome, onBack, onSetPlannedSub, onSetTeamTalk, onRestStars, onSetTicketPrice, onGotoSquad, onPlay, onScoutOpponent }) {
   const matchIssues = lineupIssues(g.squad, g.startingXI, "league");
   const xiPreview = getXI(g.squad, g.startingXI);
   const strengthPreview = userStrength(xiPreview, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff);
@@ -8256,6 +8342,11 @@ function MatchPrepView({ g, userClub, oppClub, countryName, isHome, onBack, onSe
             <div className="text-11 mt-1" style={{ color: C.ink }}>{report.strengthLine}</div>
             <div className="text-11" style={{ color: C.inkSoft }}>{report.archLine}</div>
             <div className="text-10 mt-1.5" style={{ color: C.inkSoft }}>{weatherPreview.icon} {weatherPreview.name} väntas.</div>
+            {g.staff.assistant ? (
+              <button onClick={() => onScoutOpponent(oppClub.id)} className="mt-2.5 w-full py-2 rounded-xl text-11 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>🔎 Scouta motståndarens startelva</button>
+            ) : (
+              <div className="mt-2.5 text-10" style={{ color: C.inkSoft }}>Anställ en assisterande tränare för att scouta motståndarens startelva och betyg inför matchen.</div>
+            )}
           </div>
         )}
       </PaperCard>
@@ -9299,7 +9390,12 @@ function cupDueRoundNow(cup) {
   const activeDueRounds = (cup.type === "cup1" && cup.phase !== "groups") ? cup.knockoutDueRounds : cup.dueRounds;
   return activeDueRounds?.[cup.dueIndex ?? 0] ?? 0;
 }
-function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onContinueDomestic, onPlayGroup, onContinueGroup, onPlayLeg, onContinueLeg, onPlayFinal, onContinueFinal, onFinish, onBackToHome, currentRound }) {
+function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onContinueDomestic, onPlayGroup, onContinueGroup, onPlayLeg, onContinueLeg, onPlayFinal, onContinueFinal, onFinish, onBackToHome, currentRound, hasAssistant, onScoutOpponent }) {
+  const ScoutButton = ({ oppId }) => hasAssistant ? (
+    <button onClick={() => onScoutOpponent(oppId)} className="mt-2 w-full py-2 rounded-xl text-11 font-semibold" style={{ background: "transparent", border: `1px solid ${C.gold}`, color: C.gold }}>🔎 Scouta motståndarens startelva</button>
+  ) : (
+    <div className="text-9 text-center mt-2" style={{ color: C.inkSoft }}>Anställ en assisterande tränare för att scouta motståndaren.</div>
+  );
   if (!cup) {
     // Defensive fallback: activeCupType and cups[type] should always be set together, but if they were
     // ever to fall out of sync, this avoids a hard crash and gives the user a way back to Home instead.
@@ -9359,9 +9455,10 @@ function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onConti
     const seed = `domesticpair${cup.roundIndex || 1}${cup.teams.join(",")}`;
     const { pairs, byeTeam } = resolveDomesticPairing(cup.teams, seed);
     let oppName = byeTeam === userClubId ? "Ledigt lag (vidare utan match)" : "";
+    let domesticOppId = null;
     for (const [a, b] of pairs) {
-      if (a === userClubId) { oppName = clubs[b]?.name || "Okänt lag"; break; }
-      if (b === userClubId) { oppName = clubs[a]?.name || "Okänt lag"; break; }
+      if (a === userClubId) { oppName = clubs[b]?.name || "Okänt lag"; domesticOppId = b; break; }
+      if (b === userClubId) { oppName = clubs[a]?.name || "Okänt lag"; domesticOppId = a; break; }
     }
     return (
       <div className="rise-in space-y-2.5">
@@ -9370,6 +9467,7 @@ function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onConti
           <div className="flex items-center justify-center gap-3 mt-3"><span className="text-sm font-medium">{userTeamName}</span><span className="font-display text-xl" style={{ color: C.inkSoft }}>VS</span><span className="text-sm font-medium">{oppName}</span></div>
           <div className="text-xs text-center mt-2" style={{ color: C.inkSoft }}>{cup.teams.length} lag kvar</div>
           <button onClick={onPlayDomestic} className="mt-4 w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-2" style={{ background: C.gold, color: C.turfDeep }}><Play size={16} fill={C.turfDeep} /> SPELA MATCH</button>
+          {domesticOppId && <ScoutButton oppId={domesticOppId} />}
         </PaperCard>
       </div>
     );
@@ -9388,6 +9486,7 @@ function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onConti
           <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{cup.label} · Gruppspel · Omgång {cup.groupRound + 1}/{cup.groupSchedule.length}</div>
           {oppId && <div className="flex items-center justify-center gap-3 mt-3"><span className="text-sm font-medium">{userTeamName}</span><span className="font-display text-xl" style={{ color: C.inkSoft }}>VS</span><span className="text-sm font-medium">{clubs[oppId].name}</span></div>}
           <button onClick={onPlayGroup} className="mt-4 w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-2" style={{ background: C.gold, color: C.turfDeep }}><Play size={16} fill={C.turfDeep} /> SPELA MATCH</button>
+          {oppId && <ScoutButton oppId={oppId} />}
         </PaperCard>
         <PaperCard style={{ padding: 0 }}>
           <div className="px-3 pt-3 pb-2 text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Gruppställning (topp 2 går vidare)</div>
@@ -9415,6 +9514,7 @@ function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onConti
           <div className="text-xs text-center mt-1" style={{ color: C.inkSoft }}>{cup.finalArena}</div>
           <div className="flex items-center justify-center gap-3 mt-3"><span className="text-sm font-medium">{userTeamName}</span><span className="font-display text-xl" style={{ color: C.inkSoft }}>VS</span><span className="text-sm font-medium">{opp.name}</span></div>
           <button onClick={onPlayFinal} className="mt-4 w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-2" style={{ background: C.gold, color: C.turfDeep }}><Play size={16} fill={C.turfDeep} /> SPELA FINAL</button>
+          <ScoutButton oppId={cup.finalOpponentId} />
         </PaperCard>
       </div>
     );
@@ -9446,6 +9546,7 @@ function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onConti
           </div>
           <div className="text-center text-sm font-bold mt-2.5 py-1.5 rounded-lg" style={{ color: status.color, background: `${status.color}1a` }}>{status.text}</div>
           <button onClick={onPlayLeg} className="mt-3 w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-2" style={{ background: C.gold, color: C.turfDeep }}><Play size={16} fill={C.turfDeep} /> SPELA MATCH 2</button>
+          <ScoutButton oppId={cup.tie.oppId} />
         </PaperCard>
       </div>
     );
@@ -9458,6 +9559,7 @@ function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onConti
         <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{cup.label} · {cup.roundName} · Match 1 av 2</div>
         <div className="flex items-center justify-center gap-3 mt-3"><span className="text-sm font-medium">{userTeamName}</span><span className="font-display text-xl" style={{ color: C.inkSoft }}>VS</span><span className="text-sm font-medium">{opp.name}</span></div>
         <button onClick={onPlayLeg} className="mt-4 w-full py-2.5 rounded-xl font-display text-sm tracking-wide flex items-center justify-center gap-2" style={{ background: C.gold, color: C.turfDeep }}><Play size={16} fill={C.turfDeep} /> SPELA MATCH 1</button>
+        <ScoutButton oppId={cup.tie.oppId} />
       </PaperCard>
     </div>
   );
@@ -10805,12 +10907,7 @@ function dedupeCells(gridSlots) {
   });
 }
 function formationPresetToCells(code, squad, xiIds) {
-  const slots = parseFormation(code);
-  const gridSlots = dedupeCells(slots.map(s => ({
-    id: cellKey(Math.round((s.x / 100) * (GRID_COLS - 1)), Math.round((s.y / 100) * (GRID_ROWS - 1))),
-    role: s.role,
-  })));
-  return autoAssignFormation(gridSlots, squad, xiIds);
+  return autoAssignFormation(formationGridSlots(code), squad, xiIds);
 }
 function initialLineup(squad, startingXI, formationCode, savedCells) {
   if (savedCells && Object.keys(savedCells).length) {
@@ -11617,6 +11714,91 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
           </div>
         </>
       )}
+    </div>
+  );
+}
+// The assisterande tränare's scouting report: the opponent's likely starting XI shown exactly the way
+// the user sees their own — same row component, same live betyg (form/kondition/position all baked in),
+// same pitch layout — just read-only. selectAiLineup is pure and deterministic from the opponent's
+// current squad state, so what's shown here is exactly what will take the pitch, not a rough estimate.
+function OpponentScoutView({ club, onBack }) {
+  const [rowMode, setRowMode] = useState("detaljerad");
+  const lineup = useMemo(() => club ? selectAiLineup(club) : null, [club]);
+  if (!club || !lineup) return null;
+  const squad = club.squad || [];
+  const starterRows = Object.entries(lineup.cellMap).map(([key, playerId]) => {
+    const [col, row] = key.split("-").map(Number);
+    return { key, col, row, player: squad.find(p => p.id === playerId) };
+  }).filter(r => r.player);
+  const starterIds = new Set(starterRows.map(r => r.player.id));
+  const benchPlayers = squad.filter(p => !starterIds.has(p.id)).sort((a, b) => effectiveOverall(b) - effectiveOverall(a));
+  const clubOverall = starterRows.length ? Math.round(starterRows.reduce((s, r) => {
+    const fit = effectivePositionFit(r.player, r.col, r.row);
+    const posFitMult = 0.75 + 0.25 * clamp(fit, 0.3, 1);
+    return s + clamp(Math.round(effectiveOverall(r.player) * posFitMult), 1, 95);
+  }, 0) / starterRows.length) : squadOverallRating(squad);
+  const rowProps = { selectedBenchId: null, onRowTap: () => {}, onSelectPlayer: () => {} };
+
+  return (
+    <div className="rise-in space-y-2.5">
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, right: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Bakåt</button>
+      <PaperCard>
+        <div className="flex items-center gap-2.5">
+          <ClubJersey club={club} size={36} />
+          <div className="min-w-0">
+            <div className="font-display text-lg truncate">{club.name}</div>
+            <div className="text-11" style={{ color: C.inkSoft }}>Scoutrapport från assisterande tränaren · Formation {lineup.formationCode}</div>
+          </div>
+        </div>
+      </PaperCard>
+      <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 10, alignItems: "start" }}>
+        <div style={{ minWidth: 0 }}>
+          <PaperCard style={{ padding: 0 }}>
+            <div className="flex items-center justify-between px-2.5 pt-2.5 pb-1">
+              <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Startelva ({starterRows.length}/11)</div>
+              <div className="flex rounded-lg overflow-hidden" style={{ border: `1px solid ${C.paperDim}` }}>
+                <button onClick={() => setRowMode("detaljerad")} className="px-2 py-0.5 text-9 font-semibold" style={rowMode === "detaljerad" ? { background: C.turf, color: C.paper } : { background: "transparent", color: C.inkSoft }}>Detaljerad</button>
+                <button onClick={() => setRowMode("kompakt")} className="px-2 py-0.5 text-9 font-semibold" style={rowMode === "kompakt" ? { background: C.turf, color: C.paper } : { background: "transparent", color: C.inkSoft }}>Kompakt</button>
+              </div>
+            </div>
+            {rowMode === "detaljerad" && (
+              <div className="flex items-center gap-2 px-2.5 pb-1 text-9 uppercase font-semibold" style={{ color: C.inkSoft }}>
+                <span style={{ width: 14 + 8 + 24 + 8 }}></span><span className="flex-1">Namn</span><span style={{ width: 60, textAlign: "center" }}>Betyg</span>
+                <span style={{ width: 40, textAlign: "center" }}>Pos</span><span style={{ width: 22, textAlign: "center" }}>Övr</span><span style={{ width: 18 }}></span>
+              </div>
+            )}
+            {starterRows.map(r => <LineupTablePlayerRow key={r.player.id} player={r.player} posCode={nearestPositionForCell(r.col, r.row)} cellCol={r.col} cellRow={r.row} compact={rowMode === "kompakt"} {...rowProps} />)}
+          </PaperCard>
+          <PaperCard style={{ padding: 0, marginTop: 10 }}>
+            <div className="text-xs uppercase tracking-wide font-semibold px-2.5 pt-2.5 pb-1" style={{ color: C.inkSoft }}>Bänken ({benchPlayers.length})</div>
+            {benchPlayers.map(p => <LineupTablePlayerRow key={p.id} player={p} compact={rowMode === "kompakt"} {...rowProps} />)}
+          </PaperCard>
+        </div>
+        <PaperCard style={{ minWidth: 0 }}>
+          <div className="text-9 uppercase tracking-wide font-semibold truncate" style={{ color: C.inkSoft }}>Startelva</div>
+          <div className="mt-0.5 flex items-center gap-1"><StarRating rating={overallToStars(clubOverall)} size={6} showLabel={false} /><span className="font-mono text-9 font-bold" style={{ color: C.ink }}>{(clubOverall / 10).toFixed(1)}</span></div>
+          <div className="text-9 mt-0.5" style={{ color: C.inkSoft }}>Aktuellt betyg — form, kondition &amp; position inräknat</div>
+          <div style={{ position: "relative", width: "100%", aspectRatio: "5/8.5", margin: "10px auto 0", background: "linear-gradient(90deg,#1B5E45,#134C39)", borderRadius: 12, overflow: "hidden", border: "2px solid rgba(255,255,255,0.2)" }}>
+            <PitchMarkings vertical />
+            {starterRows.map(r => {
+              const { col, row, player } = r;
+              const leftPct = (row + 0.5) / GRID_ROWS * 100, topPct = (GRID_COLS - 1 - col + 0.5) / GRID_COLS * 100;
+              const fit = positionFit(player.specificPosition, col, row);
+              const unavailable = player.injuryWeeks > 0 || player.suspendedMatches > 0 || player.internationalDuty;
+              const fitColor = unavailable ? C.loss : fit >= 0.8 ? C.win : fit >= 0.55 ? C.gold : C.loss;
+              return (
+                <div key={player.id} style={{ position: "absolute", left: `${leftPct}%`, top: `${topPct}%`, transform: "translate(-50%, -50%)", display: "flex", flexDirection: "column", alignItems: "center" }}>
+                  <div style={{ width: 26, height: 26, borderRadius: "50%", background: overallTier(overallOf(player)).color, border: `2.5px solid ${fitColor}`, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 6px rgba(0,0,0,0.35)" }}>
+                    <span className="font-display" style={{ fontSize: 8, color: overallTier(overallOf(player)).color === C.gold ? C.turfDeep : "#fff" }}>{nearestPositionForCell(col, row)}</span>
+                  </div>
+                  <div className="font-semibold" style={{ fontSize: 6.5, color: "#fff", background: "rgba(0,0,0,0.55)", padding: "0 3px", borderRadius: 3, marginTop: 2, maxWidth: 62, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "9px" }}>{player.name.split(" ").slice(-1)[0]}</div>
+                  <div className="font-mono font-bold" style={{ fontSize: 6.5, marginTop: 1, color: "#fff", background: "rgba(0,0,0,0.5)", borderRadius: 3, padding: "1px 3px" }}>⭐ {effectiveOverall(player)}</div>
+                </div>
+              );
+            })}
+          </div>
+        </PaperCard>
+      </div>
     </div>
   );
 }
