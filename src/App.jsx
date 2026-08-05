@@ -3062,8 +3062,24 @@ function generateAllSchedules(clubs) {
   });
   return schedules;
 }
+// A stamina-only version of what distributeMatchStats does for the user's division rivals: no goal/assist/
+// rating attribution (this runs across the entire simulated football world every round, so it stays cheap),
+// just the same likely-XI-plays-and-tires, rest-of-squad-recovers clock. Without this, every club outside
+// the user's own division would sit frozen at full fitness forever, which is exactly the asymmetry that
+// made same-archetype AI clubs feel like statistical twins regardless of fixture congestion or form.
+function tickSquadFatigue(squad) {
+  if (!squad || !squad.length) return squad;
+  const fit = squad.filter(p => !(p.injuryWeeks > 0) && !(p.suspendedMatches > 0));
+  const keeper = fit.find(p => p.pos === "MV");
+  const rankedOutfield = fit.filter(p => p.pos !== "MV").sort((a, b) => effectiveOverall(b) - effectiveOverall(a));
+  const playedIds = new Set([keeper?.id, ...rankedOutfield.slice(0, 10).map(p => p.id)].filter(Boolean));
+  return squad.map(p => playedIds.has(p.id)
+    ? { ...p, stamina: clamp((p.stamina ?? 100) - Math.max(1, rndInt(4, 8) * enduranceMult(p)), 0, 100) }
+    : { ...p, stamina: clamp((p.stamina ?? 100) + rndInt(28, 36), 0, 100) });
+}
 function simulateOtherDivisionsRound(allSchedules, clubs, round, skipKey) {
   const updated = {};
+  const updatedClubs = {};
   Object.entries(allSchedules || {}).forEach(([key, schedule]) => {
     if (key === skipKey || round >= schedule.length) { updated[key] = schedule; return; }
     updated[key] = schedule.map((r, ri) => {
@@ -3072,17 +3088,20 @@ function simulateOtherDivisionsRound(allSchedules, clubs, round, skipKey) {
         const home = clubs[f.home], away = clubs[f.away];
         if (!home || !away || f.homeGoals !== null) return f;
         // Same idea as the user's own matches, scaled down and simplified for performance across an
-        // entire world's worth of fixtures — actual squad quality and recent form nudge the nominal
-        // strength number a little, so two same-archetype clubs don't play as pure statistical twins.
-        const homeEff = home.strength * squadQualityIndex(home.squad) * teamFormMult(recentForm(schedule, round, f.home));
-        const awayEff = away.strength * squadQualityIndex(away.squad) * teamFormMult(recentForm(schedule, round, f.away));
+        // entire world's worth of fixtures — actual squad quality, live fatigue/form, and recent form
+        // nudge the nominal strength number a little, so two same-archetype clubs don't play as pure
+        // statistical twins.
+        const homeEff = home.strength * squadQualityIndex(home.squad) * squadFatigueFormMult(home.squad) * teamFormMult(recentForm(schedule, round, f.home));
+        const awayEff = away.strength * squadQualityIndex(away.squad) * squadFatigueFormMult(away.squad) * teamFormMult(recentForm(schedule, round, f.away));
         const hAdv = homeAdvantageMult(home);
         const [hg, ag] = poissonScorePair(expectedGoals(homeEff, awayEff, true, hAdv), expectedGoals(awayEff, homeEff, false, hAdv));
+        updatedClubs[f.home] = { ...home, squad: tickSquadFatigue(home.squad) };
+        updatedClubs[f.away] = { ...away, squad: tickSquadFatigue(away.squad) };
         return { ...f, homeGoals: hg, awayGoals: ag };
       });
     });
   });
-  return updated;
+  return { schedules: updated, clubs: updatedClubs };
 }
 function generateSchedule(teamIds) {
   const teams = [...teamIds];
@@ -3174,6 +3193,17 @@ function formMult(player) {
 // same math as a single "right now" number instead of leaving it a black box.
 function effectiveOverall(player) {
   return clamp(Math.round(overallOf(player) * staminaMult(player.stamina) * formMult(player)), 1, 95);
+}
+// The AI-club equivalent of what userStrength already does for the user's own XI: a club's likely
+// starting XI plays a bit above or below its nominal .strength depending on how tired or out-of-form
+// that XI currently is. Without this, AI clubs' match strength was a single static number that never
+// reflected fixture congestion or a slump the way the user's own squad always has — same stamina/form
+// state distributeMatchStats already tracks, just condensed into one multiplier per club per match.
+function squadFatigueFormMult(squad) {
+  if (!squad || !squad.length) return 1;
+  const likelyXI = [...squad].sort((a, b) => overallOf(b) - overallOf(a)).slice(0, 11);
+  const mult = likelyXI.reduce((s, p) => s + staminaMult(p.stamina) * formMult(p), 0) / likelyXI.length;
+  return clamp(mult, 0.75, 1.15);
 }
 function userStrength(xi, tactic, spelide, tacticalSettings, fitScore, staff, managerAttrs) {
   let attack = xi.reduce((s, p) => s + p.attack * staminaMult(p.stamina) * formMult(p) * (p.pos === "AN" ? 1.3 : p.pos === "MF" ? 1.1 : 0.5), 0) / xi.length;
@@ -3362,10 +3392,12 @@ function distributeMatchStats(squad, goalCount) {
     if (roll < 0.003 * cardMult) redInc.add(p.id);
     else if (roll < 0.05 * cardMult) yellowInc.add(p.id);
   });
-  // A plausible "starting XI" (1 keeper + best ~10 outfield by attribute, roughly matching a real lineup)
-  // actually plays this match, drawn only from currently available (non-injured, non-suspended) players.
+  // A plausible "starting XI" (1 keeper + best ~10 outfield, ranked by CURRENT fitness/form rather than
+  // raw ability) actually plays this match, drawn only from currently available (non-injured, non-suspended)
+  // players — a tired or out-of-form regular is a little more likely to be rotated out, exactly like a
+  // real manager (or the user, via the Trupp tab's live rating) would do.
   const keeper = available.find(p => p.pos === "MV");
-  const rankedOutfield = [...outfield].sort((a, b) => overallOf(b) - overallOf(a));
+  const rankedOutfield = [...outfield].sort((a, b) => effectiveOverall(b) - effectiveOverall(a));
   const playedIds = new Set([keeper?.id, ...rankedOutfield.slice(0, 10).map(p => p.id)].filter(Boolean));
   const newInjuryWeeks = {};
   playedIds.forEach(id => {
@@ -3374,8 +3406,17 @@ function distributeMatchStats(squad, goalCount) {
   return ticked.map(p => {
     const played = playedIds.has(p.id);
     const gotRed = redInc.has(p.id);
-    if (!played && !goalInc[p.id] && !assistInc[p.id] && !yellowInc.has(p.id) && !gotRed) return p;
+    const hasStatChange = goalInc[p.id] || assistInc[p.id] || yellowInc.has(p.id) || gotRed;
+    // Same recovery every unused player on the user's own bench gets between matches (see finalizeMatch) —
+    // AI squads live under the identical stamina economy, not a frozen number.
+    if (!played && !hasStatChange) return { ...p, stamina: clamp((p.stamina ?? 100) + rndInt(28, 36), 0, 100) };
     const rating = played ? clamp(6.1 + (goalInc[p.id] || 0) * 0.7 + (assistInc[p.id] || 0) * 0.4 - (gotRed ? 1.2 : 0) - (yellowInc.has(p.id) ? 0.15 : 0) + rnd(-0.5, 0.5), 3, 10) : 0;
+    // Same per-match depletion formula as the user's own starting XI (see finalizeMatch), minus the
+    // fitness-coach discount since AI clubs don't run a backroom staff of their own. A stat-only
+    // contribution from someone outside the notional XI (an impact sub) still recovers like a bench player.
+    const newStamina = played
+      ? clamp((p.stamina ?? 100) - Math.max(1, rndInt(4, 8) * enduranceMult(p)), 0, 100)
+      : clamp((p.stamina ?? 100) + rndInt(28, 36), 0, 100);
     return {
       ...p,
       goals: (p.goals || 0) + (goalInc[p.id] || 0),
@@ -3386,6 +3427,8 @@ function distributeMatchStats(squad, goalCount) {
       assists_league: (p.assists_league || 0) + (assistInc[p.id] || 0),
       seasonYellowCards_league: (p.seasonYellowCards_league || 0) + (yellowInc.has(p.id) ? 1 : 0),
       seasonRedCards_league: (p.seasonRedCards_league || 0) + (gotRed ? 1 : 0),
+      recentRatings: played ? [...(p.recentRatings || []), rating].slice(-5) : p.recentRatings,
+      stamina: newStamina,
       apps: (p.apps || 0) + (played ? 1 : 0),
       ratingSum: (p.ratingSum || 0) + rating,
       injuryWeeks: newInjuryWeeks[p.id] ?? p.injuryWeeks,
@@ -3622,10 +3665,11 @@ function processDomesticCupRound(teams, clubs, userClubId, squad, tactic, spelid
       const oppId = a === userClubId ? b : a;
       const opp = clubs[oppId];
       const { attack, defense } = userStrength(xi, tactic, spelide, tacticalSettings);
-      const [userGoals, oppGoals] = poissonScorePair(expectedGoals(attack, opp.strength, false), expectedGoals(opp.strength, defense, false));
+      const oppEff = opp.strength * squadFatigueFormMult(opp.squad);
+      const [userGoals, oppGoals] = poissonScorePair(expectedGoals(attack, oppEff, false), expectedGoals(oppEff, defense, false));
       let penalties = null, userWon;
       if (userGoals === oppGoals) {
-        const winProb = clamp(0.5 + (attack - opp.strength) / 200, 0.3, 0.7);
+        const winProb = clamp(0.5 + (attack - oppEff) / 200, 0.3, 0.7);
         userWon = Math.random() < winProb;
         penalties = userWon ? `${rndInt(4, 6)}-${rndInt(2, 4)}` : `${rndInt(2, 4)}-${rndInt(4, 6)}`;
       } else { userWon = userGoals > oppGoals; }
@@ -3636,7 +3680,8 @@ function processDomesticCupRound(teams, clubs, userClubId, squad, tactic, spelid
       userReport = { oppName: opp.name, oppColor: opp.color, userColor: clubs[userClubId]?.color, userGoals, oppGoals, penalties, result: userWon ? "win" : "loss", ratings };
     } else {
       const A = clubs[a], B = clubs[b];
-      const [ag, bg] = poissonScorePair(expectedGoals(A.strength, B.strength, false), expectedGoals(B.strength, A.strength, false));
+      const aEff = A.strength * squadFatigueFormMult(A.squad), bEff = B.strength * squadFatigueFormMult(B.squad);
+      const [ag, bg] = poissonScorePair(expectedGoals(aEff, bEff, false), expectedGoals(bEff, aEff, false));
       winners.push(ag === bg ? pick([a, b]) : (ag > bg ? a : b));
     }
   }
@@ -3650,7 +3695,8 @@ function instantResolveKnockout(teamIds, clubs) {
     if (round.length % 2 === 1) { const idx = rndInt(0, round.length - 1); next.push(round[idx]); round.splice(idx, 1); }
     for (let i = 0; i < round.length; i += 2) {
       const A = clubs[round[i]], B = clubs[round[i + 1]];
-      const [ag, bg] = poissonScorePair(expectedGoals(A.strength, B.strength, false), expectedGoals(B.strength, A.strength, false));
+      const aEff = A.strength * squadFatigueFormMult(A.squad), bEff = B.strength * squadFatigueFormMult(B.squad);
+      const [ag, bg] = poissonScorePair(expectedGoals(aEff, bEff, false), expectedGoals(bEff, aEff, false));
       next.push(ag === bg ? pick([round[i], round[i + 1]]) : (ag > bg ? round[i] : round[i + 1]));
     }
     list = next;
@@ -3687,8 +3733,9 @@ function simulateDecisiveMatch(strengthA, strengthB, aHome, homeAdvMult = 1) {
 }
 function resolveTie(x, y, clubs) {
   const X = clubs[x], Y = clubs[y];
-  const leg1 = simulateDecisiveMatch(X.strength, Y.strength, true, homeAdvantageMult(X));
-  const leg2 = simulateDecisiveMatch(Y.strength, X.strength, true, homeAdvantageMult(Y));
+  const xEff = X.strength * squadFatigueFormMult(X.squad), yEff = Y.strength * squadFatigueFormMult(Y.squad);
+  const leg1 = simulateDecisiveMatch(xEff, yEff, true, homeAdvantageMult(X));
+  const leg2 = simulateDecisiveMatch(yEff, xEff, true, homeAdvantageMult(Y));
   const xGoals = leg1.goalsA + leg2.goalsB, yGoals = leg1.goalsB + leg2.goalsA;
   const xLegWins = (leg1.winner === "A" ? 1 : 0) + (leg2.winner === "B" ? 1 : 0);
   if (xLegWins === 2) return x;
@@ -4352,7 +4399,12 @@ function setupCup(type, base) {
         if (isUser) return f; // resolved later in resolveSecondHalf
         const home = newClubs[f.home], away = newClubs[f.away];
         const hAdv = homeAdvantageMult(home);
-        const [hg, ag] = poissonScorePair(expectedGoals(home.strength, away.strength, true, hAdv), expectedGoals(away.strength, home.strength, false, hAdv));
+        // Same live fatigue/momentum layered on top of the season baseline that the user's own squad
+        // always plays under (per-player stamina/form via userStrength) and background-division AI
+        // clubs already got (see simulateOtherDivisionsRound) — direct table rivals were the one gap.
+        const homeEff = home.strength * squadFatigueFormMult(home.squad) * teamFormMult(recentForm(g.schedule, g.round, f.home));
+        const awayEff = away.strength * squadFatigueFormMult(away.squad) * teamFormMult(recentForm(g.schedule, g.round, f.away));
+        const [hg, ag] = poissonScorePair(expectedGoals(homeEff, awayEff, true, hAdv), expectedGoals(awayEff, homeEff, false, hAdv));
         const drift = (id, res) => {
           const c = newClubs[id];
           const strength = clamp(c.strength + (res === "win" ? rnd(0.1, 0.35) : res === "loss" ? -rnd(0.1, 0.3) : rnd(-0.06, 0.06)) + rnd(-0.08, 0.08), 20, 97);
@@ -4380,7 +4432,7 @@ function setupCup(type, base) {
 
     setG(prev => ({
       ...prev, clubs: newClubs, view: "livematch",
-      pendingRound: { newSchedule, oppId, oppName: opp.name, oppStrength: opp.strength, userIsHome, weather, xiIds: xi.map(p => p.id), analystImpactDelta, gkCoachImpactDelta, fitnessImpactDelta },
+      pendingRound: { newSchedule, oppId, oppName: opp.name, oppStrength: opp.strength * squadFatigueFormMult(opp.squad), userIsHome, weather, xiIds: xi.map(p => p.id), analystImpactDelta, gkCoachImpactDelta, fitnessImpactDelta },
     }));
   }
 
@@ -4882,8 +4934,12 @@ function setupCup(type, base) {
           const buyerClub = updatedClubs[sale.buyerId];
           return { id: uid(), season: g.season, round: newRound, playerId: sale.playerId, playerName: soldPlayer?.name, playerPos: soldPlayer?.specificPosition, fromClubId: g.userClubId, fromClubName: userClub.name, fromColor: userClub.color, toClubId: sale.buyerId, toClubName: buyerClub?.name, toColor: buyerClub?.color, fee: sale.fee, leagueId: g.leagueId };
         });
+      // Every club simulated below plays out its own fixture this round too — same stamina/recovery
+      // clock as the user's division rivals (see tickSquadFatigue), so a club met later in a cup tie
+      // isn't frozen at full fitness while everyone else's squad has been living a real season.
+      const otherDivisions = simulateOtherDivisionsRound(prev.allSchedules, listingClubs, g.round, `${g.leagueId}_d${userClub.division}`);
       return {
-        ...prev, clubs: { ...listingClubs, [g.userClubId]: { ...listingClubs[g.userClubId], squad: finalSquad, youthSquad: finalYouthSquad } }, schedule: finalSchedule, squad: finalSquad,
+        ...prev, clubs: { ...listingClubs, ...otherDivisions.clubs, [g.userClubId]: { ...listingClubs[g.userClubId], squad: finalSquad, youthSquad: finalYouthSquad } }, schedule: finalSchedule, squad: finalSquad,
         startingXI: prev.startingXI.filter(id => finalSquad.some(p => p.id === id)),
         youthSquad: finalYouthSquad, sponsors: finalSponsors, market: rotatedMarket,
         pendingPlayerScouts: stillPendingScouts, scoutedPlayerIds: newScoutedIds, scoutedPlayers: newScoutedPlayers,
@@ -4892,7 +4948,7 @@ function setupCup(type, base) {
         transferInstallments: installmentsAfter, installmentMonthKey: newMonthKey,
         staffCandidates: refreshStaffCandidates(prev.staffCandidates, newRound, prev.clubs[prev.userClubId].league),
         recentMatchFinances: [matchFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10),
-        allSchedules: simulateOtherDivisionsRound(prev.allSchedules, updatedClubs, g.round, `${g.leagueId}_d${userClub.division}`),
+        allSchedules: otherDivisions.schedules,
         seasonStaffImpact: {
           ...prev.seasonStaffImpact,
           physio: (prev.seasonStaffImpact?.physio || 0) + physioImpactDelta + physioTrainingImpactDelta,
@@ -4936,14 +4992,15 @@ function setupCup(type, base) {
     for (const [a, b] of pairs) {
       if (a === g.userClubId || b === g.userClubId) { userOppId = a === g.userClubId ? b : a; continue; }
       const A = g.clubs[a], B = g.clubs[b];
-      const [ag, bg] = poissonScorePair(expectedGoals(A.strength, B.strength, false), expectedGoals(B.strength, A.strength, false));
+      const aEff = A.strength * squadFatigueFormMult(A.squad), bEff = B.strength * squadFatigueFormMult(B.squad);
+      const [ag, bg] = poissonScorePair(expectedGoals(aEff, bEff, false), expectedGoals(bEff, aEff, false));
       winners.push(ag === bg ? pick([a, b]) : (ag > bg ? a : b));
     }
     const opp = g.clubs[userOppId];
     const xi = getXI(g.squad, g.startingXI);
     const { attack, defense } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff, g.manager?.attributes);
     const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}domestic${cup.roundIndex || 1}`);
-    const pending = { oppId: userOppId, oppName: opp.name, oppStrength: opp.strength, userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
+    const pending = { oppId: userOppId, oppName: opp.name, oppStrength: opp.strength * squadFatigueFormMult(opp.squad), userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "domesticRound", winners } }));
   }
   function finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
@@ -5006,13 +5063,14 @@ function setupCup(type, base) {
       if (isUser) { userIsHome = f.home === g.userClubId; oppId2 = userIsHome ? f.away : f.home; return f; }
       const home = g.clubs[f.home], away = g.clubs[f.away];
       const hAdv = homeAdvantageMult(home);
-      const [hgOther, agOther] = poissonScorePair(expectedGoals(home.strength, away.strength, true, hAdv), expectedGoals(away.strength, home.strength, false, hAdv));
+      const homeEff = home.strength * squadFatigueFormMult(home.squad), awayEff = away.strength * squadFatigueFormMult(away.squad);
+      const [hgOther, agOther] = poissonScorePair(expectedGoals(homeEff, awayEff, true, hAdv), expectedGoals(awayEff, homeEff, false, hAdv));
       return { ...f, homeGoals: hgOther, awayGoals: agOther };
     });
     const opp = g.clubs[oppId2];
     const xi = getXI(g.squad, g.startingXI);
     const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}cup1group${cup.groupRound}`);
-    const pending = { oppId: oppId2, oppName: opp.name, oppStrength: opp.strength, userIsHome, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
+    const pending = { oppId: oppId2, oppName: opp.name, oppStrength: opp.strength * squadFatigueFormMult(opp.squad), userIsHome, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "groupMatch", resolvedOthers } }));
   }
   function finalizeGroupMatch(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
@@ -5080,7 +5138,7 @@ function setupCup(type, base) {
     const userIsHomeThisLeg = cup.tie.leg === 1 ? cup.tie.userHomeLeg1 : !cup.tie.userHomeLeg1;
     const xi = getXI(g.squad, g.startingXI);
     const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}${cupType}leg${cup.tie.leg}`);
-    const pending = { oppId: cup.tie.oppId, oppName: opp.name, oppStrength: opp.strength, userIsHome: userIsHomeThisLeg, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
+    const pending = { oppId: cup.tie.oppId, oppName: opp.name, oppStrength: opp.strength * squadFatigueFormMult(opp.squad), userIsHome: userIsHomeThisLeg, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "leg", cupType, legNum: cup.tie.leg } }));
   }
   function finalizeCupLeg(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
@@ -5121,7 +5179,7 @@ function setupCup(type, base) {
       if (!et) {
         const xi = getXI(g.squad, g.startingXI);
         const strength2 = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings);
-        const oppStrength = g.clubs[cup.tie.oppId].strength;
+        const oppStrength = g.clubs[cup.tie.oppId].strength * squadFatigueFormMult(g.clubs[cup.tie.oppId].squad);
         const diff = (strength2.attack - oppStrength) / 100;
         const etUser = Math.random() < clamp(0.22 + diff, 0.08, 0.42) ? (Math.random() < 0.15 ? 2 : 1) : 0;
         const etOpp = Math.random() < clamp(0.22 - diff, 0.08, 0.42) ? (Math.random() < 0.15 ? 2 : 1) : 0;
@@ -5137,7 +5195,7 @@ function setupCup(type, base) {
       } else {
         const xi = getXI(g.squad, g.startingXI);
         const strength2 = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings);
-        const oppStrength = g.clubs[cup.tie.oppId].strength;
+        const oppStrength = g.clubs[cup.tie.oppId].strength * squadFatigueFormMult(g.clubs[cup.tie.oppId].squad);
         const shootout = simulatePenaltyShootout(xi, g.clubs[cup.tie.oppId]?.squad || [], strength2.attack, oppStrength, g.setPieceTakers);
         setG(prev => ({ ...prev, view: "penaltyshootout", pendingShootout: { ...shootout, oppId: cup.tie.oppId, targetView: "cup", resumeCupLeg: true } }));
         return;
@@ -5179,7 +5237,7 @@ function setupCup(type, base) {
     const opp = g.clubs[cup.finalOpponentId];
     const xi = getXI(g.squad, g.startingXI);
     const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}${cupType}final`);
-    const pending = { oppId: cup.finalOpponentId, oppName: opp.name, oppStrength: opp.strength, userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
+    const pending = { oppId: cup.finalOpponentId, oppName: opp.name, oppStrength: opp.strength * squadFatigueFormMult(opp.squad), userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "final", cupType } }));
   }
   function finalizeCupFinal(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
