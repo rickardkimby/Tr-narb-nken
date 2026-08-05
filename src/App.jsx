@@ -8438,7 +8438,7 @@ function ManagerProfileView({ manager, assistantManager, staff, g, userClub, onR
       </PaperCard>
 
       {manager.interestedClub && (
-        <PaperCard style={{ background: "rgba(201,154,62,0.15)" }}>
+        <PaperCard style={{ background: "#F3E7C9" }}>
           <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Intresserad klubb</div>
           <div className="text-sm font-semibold mt-1">{manager.interestedClub.clubName}</div>
           <div className="text-11 mt-1" style={{ color: C.inkSoft }}>De hör sig för om du är intresserad av ett byte, och antyder en lön på {formatMoney(manager.interestedClub.offeredWage)}/omg. Ni kan inte byta klubb rakt av, men intresset ger förhandlingsläge hos er nuvarande ägare.</div>
@@ -8699,7 +8699,7 @@ function ManagerContractDecisionView({ g, userClub, onRenew, onSeeJobs }) {
         <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Ert avtal med {userClub.name} är slut. Skriv på ett nytt kontrakt, eller sök er vidare — särskilt om andra klubbar visat intresse.</div>
       </PaperCard>
       {interest && (
-        <PaperCard style={{ background: "rgba(201,154,62,0.15)" }}>
+        <PaperCard style={{ background: "#F3E7C9" }}>
           <div className="text-10 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Intresserad klubb</div>
           <div className="text-sm font-semibold mt-1">{interest.clubName}</div>
           <div className="text-11 mt-1" style={{ color: C.inkSoft }}>Antyder en lön på {formatMoney(interest.offeredWage)}/omg. Tacka nej till {userClub.name} och utforska hela jobbmarknaden om du vill förhandla vidare med dem eller andra.</div>
@@ -9870,7 +9870,7 @@ function MatchInsightsGuideView({ onBack }) {
           <div className="text-11 mt-1.5" style={{ color: C.ink }}>{s.body}</div>
         </PaperCard>
       ))}
-      <PaperCard style={{ background: "rgba(201,154,62,0.1)", border: `1px solid ${C.gold}` }}>
+      <PaperCard style={{ background: "#F3E7C9", border: `1px solid ${C.gold}` }}>
         <div className="text-sm font-semibold" style={{ color: "#B8862E" }}>💡 Tips för att maximera resultat</div>
         <div className="mt-2 space-y-1.5">
           {tips.map((t, i) => (
@@ -14015,7 +14015,7 @@ function OwnerDetail({ owner, takeoverBid, budget, reputation, fanbase, shopLeve
       )}
 
       {takeoverBid && (
-        <PaperCard style={{ background: "rgba(201,154,62,0.15)" }}>
+        <PaperCard style={{ background: "#F3E7C9" }}>
           <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Övertagandebud</div>
           <div className="text-sm mt-1 font-semibold">{takeoverBid.name} ({nationalityLabel(takeoverBid.nationality)})</div>
           <div className="text-11 mt-1" style={{ color: C.inkSoft }}>{takeoverBid.type === "storsatsare" ? "Lovar stora investeringar i truppen." : "Vill sanera ekonomin och gå försiktigt fram."} Kapitaltillskott: {formatMoney(takeoverBid.capitalBoost)}.</div>
@@ -14234,7 +14234,7 @@ function PartnerClubDetail({ club, clubs, partnerClubId, onSign, onEnd, onBack }
         <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>En mindre samarbetsklubb gör lån mellan er helt friktionsfria — inga förhandlingar, ingen väntan. Perfekt för att låna ut unga talanger för speltid, eller snabbt låna in en spelare vid skadekris.</div>
       </PaperCard>
       {partner ? (
-        <PaperCard style={{ background: "rgba(201,154,62,0.15)" }}>
+        <PaperCard style={{ background: "#F3E7C9" }}>
           <div className="flex items-center gap-2.5">
             <ClubJersey club={partner} size={30} />
             <div>
