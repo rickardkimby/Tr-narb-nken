@@ -3168,6 +3168,13 @@ function formMult(player) {
   const avg = recent.reduce((s, r) => s + r, 0) / recent.length;
   return 1 + clamp((avg - 6.3) * 0.05, -0.12, 0.12);
 }
+// The base Overall never moves week to week — it's the player's underlying ability. What they actually
+// put out on the pitch right now also depends on fitness and recent form, both of which feed directly
+// into userStrength() during a match but were otherwise invisible anywhere in the UI. This surfaces that
+// same math as a single "right now" number instead of leaving it a black box.
+function effectiveOverall(player) {
+  return clamp(Math.round(overallOf(player) * staminaMult(player.stamina) * formMult(player)), 1, 95);
+}
 function userStrength(xi, tactic, spelide, tacticalSettings, fitScore, staff, managerAttrs) {
   let attack = xi.reduce((s, p) => s + p.attack * staminaMult(p.stamina) * formMult(p) * (p.pos === "AN" ? 1.3 : p.pos === "MF" ? 1.1 : 0.5), 0) / xi.length;
   let defense = xi.reduce((s, p) => s + p.defense * staminaMult(p.stamina) * formMult(p) * (p.pos === "FÖ" || p.pos === "MV" ? 1.3 : p.pos === "MF" ? 0.9 : 0.5), 0) / xi.length;
@@ -11102,6 +11109,10 @@ const LINEUP_TABLE_POS_TINT = { MV: "rgba(217,169,75,0.16)", FÖ: "rgba(63,143,1
 function LineupTablePlayerRow({ player, posCode, cellCol, cellRow, selectedBenchId, onRowTap, onSelectPlayer, compact }) {
   const overall = overallOf(player);
   const fit = cellCol !== undefined ? effectivePositionFit(player, cellCol, cellRow) : null;
+  // The one number that matters before kickoff: base ability with fitness, form, and (once slotted) position
+  // fit already applied — the exact same multipliers userStrength() uses in the match itself, not an estimate.
+  const posFitMult = fit !== null ? (0.75 + 0.25 * clamp(fit, 0.3, 1)) : 1;
+  const liveRating = clamp(Math.round(effectiveOverall(player) * posFitMult), 1, 95);
   const unavailable = player.injuryWeeks > 0 || player.suspendedMatches > 0 || player.internationalDuty;
   const isTapSelected = selectedBenchId === player.id;
   const outOfPosition = posCode && posCode !== player.specificPosition;
@@ -11127,7 +11138,7 @@ function LineupTablePlayerRow({ player, posCode, cellCol, cellRow, selectedBench
         <span className="shrink-0"><PlayerAvatar player={player} size={20} /></span>
         <span className="flex-1 min-w-0 font-semibold text-11 truncate" style={{ color: unavailable ? C.loss : C.ink }}>{player.name}</span>
         <span className="font-mono text-9 font-bold shrink-0" style={{ width: 32, textAlign: "center", color: unavailable ? C.loss : C.ink }}>{player.specificPosition}</span>
-        <span className="font-mono text-11 font-bold shrink-0" style={{ width: 20, textAlign: "center" }}>{overall}</span>
+        <span className="font-mono text-11 font-bold shrink-0" style={{ width: 20, textAlign: "center", color: liveRating < overall ? C.loss : liveRating > overall ? C.win : C.ink }} title={`Grundbetyg ${overall}`}>{liveRating}</span>
         <span title="Ork" className="shrink-0" style={{ width: 7, height: 7, borderRadius: "50%", background: unavailable ? C.loss : staminaColor }} />
         <button onClick={e => { e.stopPropagation(); onSelectPlayer(player.id); }} className="shrink-0 font-bold" style={{ width: 16, height: 16, borderRadius: "50%", background: "rgba(30,42,34,0.08)", color: C.inkSoft, fontSize: 8, lineHeight: "16px", textAlign: "center" }}>ⓘ</button>
       </div>
@@ -11142,12 +11153,12 @@ function LineupTablePlayerRow({ player, posCode, cellCol, cellRow, selectedBench
         <span className="flex-1 min-w-0">
           <span className="font-semibold text-11 truncate" style={{ display: "block", color: unavailable ? C.loss : C.ink }}>{player.name}</span>
         </span>
-        <div style={{ width: 50, flexShrink: 0, overflow: "hidden" }}><StarRating rating={overallToStars(overall)} size={7} showLabel={false} /></div>
+        <div style={{ width: 50, flexShrink: 0, overflow: "hidden" }}><StarRating rating={overallToStars(liveRating)} size={7} showLabel={false} /></div>
         <span className="shrink-0 text-center" style={{ width: 58, whiteSpace: "nowrap", overflow: "hidden" }}>
           <span className="font-mono text-9 font-bold" style={{ color: unavailable ? C.loss : C.ink }}>{player.specificPosition}</span>
           {outOfPosition && <span className="font-mono text-9" style={{ color: C.loss }}> ({posCode})</span>}
         </span>
-        <span className="font-mono text-11 font-bold shrink-0" style={{ width: 22, textAlign: "center" }}>{overall}</span>
+        <span className="font-mono text-11 font-bold shrink-0" style={{ width: 22, textAlign: "center", color: liveRating < overall ? C.loss : liveRating > overall ? C.win : C.ink }} title={`Grundbetyg ${overall}`}>{liveRating}</span>
         <button onClick={e => { e.stopPropagation(); onSelectPlayer(player.id); }} className="shrink-0 font-bold" style={{ width: 18, height: 18, borderRadius: "50%", background: "rgba(30,42,34,0.08)", color: C.inkSoft, fontSize: 9, lineHeight: "18px", textAlign: "center" }}>ⓘ</button>
       </div>
       {unavailable && (
@@ -11372,8 +11383,9 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
       <PaperCard style={{ minWidth: 0 }}>
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <div className="text-9 uppercase tracking-wide font-semibold truncate" style={{ color: C.inkSoft }}>Truppen <span className="font-mono" style={{ color: startingXI.length === 11 ? C.win : C.loss }}>({startingXI.length}/11)</span></div>
+            <div className="text-9 uppercase tracking-wide font-semibold truncate" style={{ color: C.inkSoft }}>Startelva <span className="font-mono" style={{ color: startingXI.length === 11 ? C.win : C.loss }}>({startingXI.length}/11)</span></div>
             <div className="mt-0.5 flex items-center gap-1"><StarRating rating={overallToStars(clubOverall)} size={6} showLabel={false} /><span className="font-mono text-9 font-bold" style={{ color: C.ink }}>{(clubOverall / 10).toFixed(1)}</span></div>
+            <div className="text-9 mt-0.5" style={{ color: C.inkSoft }}>Aktuellt betyg — form &amp; kondition inräknat</div>
           </div>
           <div style={{ borderLeft: `1px dashed ${C.paperDim}`, paddingLeft: 8 }}>
             <div className="text-9 uppercase tracking-wide font-semibold truncate" style={{ color: C.inkSoft }}>Startelvan</div>
@@ -11692,7 +11704,10 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
       clubs={clubs} round={round} onSendLoan={onSendLoan ? (toId, toName) => { onSendLoan(toId, toName); setSelectedId(null); } : null} squadSize={squad.length} squad={squad} chemistryPairs={chemistryPairs} onAssessPlayer={onAssessPlayer} reputation={reputation} budget={budget} transferHistory={transferHistory} userClubId={userClubId} onHintForSale={onHintForSale} onStartTraining={onStartTraining} onCancelTraining={onCancelTraining} manager={manager} onPitchVision={onPitchVision} />;
   }
 
-  const clubOverall = squadOverallRating(squad);
+  // The badge shown here is what actually takes the pitch — the starting XI's current effective rating
+  // (fitness and form baked in), not a whole-squad average diluted by bench depth that never plays.
+  const startingXIPlayers = squad.filter(p => startingXI.includes(p.id));
+  const clubOverall = startingXIPlayers.length ? Math.round(startingXIPlayers.reduce((s, p) => s + effectiveOverall(p), 0) / startingXIPlayers.length) : squadOverallRating(squad);
   return (
     <div className="rise-in space-y-2.5">
       <div className="grid grid-cols-4 gap-1.5">
@@ -11729,6 +11744,7 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
   const attrs = getAttrs(player);
   const labels = attrLabels(player.pos);
   const overall = overallOf(player);
+  const liveOverall = effectiveOverall(player);
   const tier = overallTier(overall);
   const avgRating = player.apps ? (player.ratingSum / player.apps).toFixed(1) : "–";
   const recentRatingsList = player.recentRatings || [];
@@ -11813,6 +11829,11 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
               <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}><span className="font-semibold" style={{ color: C.ink }}>{player.personality}</span> — {PERSONALITY_DESC[player.personality]}</div>
             )}
             <div className="mt-1.5"><StarRating rating={overallToStars(overall)} size={11} /></div>
+            {liveOverall !== overall && (
+              <div className="text-11 mt-1 font-semibold" style={{ color: liveOverall < overall ? C.loss : C.win }}>
+                Just nu: {liveOverall} ({liveOverall < overall ? "−" : "+"}{Math.abs(overall - liveOverall)}) — kondition {Math.round(player.stamina ?? 100)}% {(player.recentRatings || []).length >= 3 ? `· form ${(player.recentRatings.reduce((s, r) => s + r, 0) / player.recentRatings.length).toFixed(1)}` : ""}
+              </div>
+            )}
           </div>
         </div>
         {injured && <div className="mt-2 text-11 font-semibold px-2.5 py-1.5 rounded-lg text-center" style={{ background: "rgba(180,68,59,0.15)", color: C.loss }}>Skadad — {player.injuryWeeks} omgångar kvar</div>}
