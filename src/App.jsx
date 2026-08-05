@@ -4129,6 +4129,7 @@ function TranarbankenApp() {
       seasonIncomeTotal: parsed.seasonIncomeTotal || 0, seasonWageTotal: parsed.seasonWageTotal || 0,
       seasonStartBudget: parsed.seasonStartBudget ?? parsed.budget,
       difficulty: parsed.difficulty || "normal",
+      internationalDutyEnabled: parsed.internationalDutyEnabled !== false,
       savedScoutProfiles: parsed.savedScoutProfiles || [],
       clubRecords: parsed.clubRecords || {},
       setPieceTakers: parsed.setPieceTakers || { penalties: [], freeKick: null, cornerLeft: null, cornerRight: null },
@@ -4294,7 +4295,7 @@ function TranarbankenApp() {
     reader.readAsText(file);
   }
 
-  function handleConfirmSetup(countryId, division, clubId, managerName, pressChoice, selectedWorld) {
+  function handleConfirmSetup(countryId, division, clubId, managerName, pressChoice, selectedWorld, internationalDutyEnabled = true) {
     const clubs = selectedWorld || previewWorld;
     const club = clubs[clubId];
     const activeSeason1Qualifiers = selectedWorld ? buildSeason1Qualifiers(selectedWorld) : season1Qualifiers;
@@ -4337,7 +4338,7 @@ function TranarbankenApp() {
       akademiParts: { tranare: startPartLevel(3), intag: startPartLevel(3) }, scoutingParts: { analys: startPartLevel(3), kontakter: startPartLevel(3) },
       sponsors: { main: null, stadium: null, local: null },
       staff: { assistant: null, physio: null, scout: null, gkCoach: null, analyst: null, fitnessCoach: null }, boardConfidence: startBoardConfidence, boardCrisisWarned: false, economicWarningIssued: false, eliteReputationSeasons: 0, eliteStreakHasTrophy: false, jobOffers: null, plannedSub: null, incomingOffers: [], loans: [], loanOffers: [], transferHistory: [], squadViewPrefs: { rowMode: "detaljerad", showAllBench: false },
-      seasonIncomeTotal: 0, seasonWageTotal: 0, difficulty: "normal", savedScoutProfiles: [], clubRecords: {}, seasonStaffImpact: { physio: 0, assistant: 0, analyst: 0, gkCoach: 0, fitnessCoach: 0 },
+      seasonIncomeTotal: 0, seasonWageTotal: 0, difficulty: "normal", internationalDutyEnabled, savedScoutProfiles: [], clubRecords: {}, seasonStaffImpact: { physio: 0, assistant: 0, analyst: 0, gkCoach: 0, fitnessCoach: 0 },
       setPieceTakers: { penalties: [], freeKick: null, cornerLeft: null, cornerRight: null }, chemistryPairs: {}, newsFeed: [], captainId: null, clubGoodwill: {}, blacklistedPlayers: {}, staffCandidates: {}, recentMatchFinances: [],
       formationCode: "4-4-2", tacticalSettings: { ...DEFAULT_TACTICAL_SETTINGS }, lineupCells: null,
       owner: generateOwner(reputation), takeoverBid: null, tourOffers: null, tourCompletedThisOffseason: false, tourPrepBonus: 0, lastTourResult: null,
@@ -4687,7 +4688,7 @@ function setupCup(type, base) {
     // entry gets fully overwritten by squadAfterBreak/finalSquad further down regardless.
     const listingClubs = (() => {
       const base = aiTransferResult ? aiTransferResult.clubs : freshlyListedClubs;
-      if (!INTERNATIONAL_BREAK_ROUNDS.includes(newRound)) return base;
+      if (g.internationalDutyEnabled === false || !INTERNATIONAL_BREAK_ROUNDS.includes(newRound)) return base;
       return Object.fromEntries(Object.entries(base).map(([id, c]) => [id, { ...c, squad: processInternationalBreak(c.squad).newSquad }]));
     })();
     const newIncomingOffers = windowJustOpened ? generateIncomingOffers(newSquad, listingClubs, g.userClubId, g.reputation, newRound) : g.incomingOffers;
@@ -4697,7 +4698,7 @@ function setupCup(type, base) {
     let squadAfterBreak = squadAfterLoans;
     let breakToast = null;
     let repFromBreak = 0;
-    if (INTERNATIONAL_BREAK_ROUNDS.includes(newRound)) {
+    if (g.internationalDutyEnabled !== false && INTERNATIONAL_BREAK_ROUNDS.includes(newRound)) {
       const breakResult = processInternationalBreak(squadAfterLoans);
       squadAfterBreak = breakResult.newSquad;
       repFromBreak = breakResult.repBonus;
@@ -7639,6 +7640,7 @@ function Onboarding({ world, onConfirm, onCancel }) {
   const [viewingSquadId, setViewingSquadId] = useState(null);
   const [step, setStep] = useState(null); // null | "name" | "press"
   const [managerName, setManagerName] = useState("");
+  const [internationalDutyEnabled, setInternationalDutyEnabled] = useState(true);
   const [customDbs, setCustomDbs] = useState([]);
   const [selectedDbId, setSelectedDbId] = useState(null); // null = standard database (the `world` prop)
   const [activeWorld, setActiveWorld] = useState(world);
@@ -7725,6 +7727,14 @@ function Onboarding({ world, onConfirm, onCancel }) {
             <input value={managerName} onChange={e => setManagerName(e.target.value)} maxLength={28} placeholder="T.ex. Alex Lindqvist"
               className="w-full mt-2 text-lg font-semibold outline-none border-b pb-1" style={{ color: C.ink, borderColor: C.paperDim, background: "transparent" }} />
           </div>
+          <label className="rounded-2xl p-4 flex items-start gap-3 cursor-pointer" style={{ background: C.paper }}>
+            <input type="checkbox" checked={internationalDutyEnabled} onChange={e => setInternationalDutyEnabled(e.target.checked)}
+              className="mt-0.5 shrink-0" style={{ width: 18, height: 18 }} />
+            <div className="min-w-0">
+              <div className="text-sm font-semibold" style={{ color: C.ink }}>Landslagsuttagningar</div>
+              <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Under interlandsuppehåll kan spelare — i din trupp och hos alla AI-klubbar — kallas upp och missa nästa match. Går bara att välja här, inför karriären.</div>
+            </div>
+          </label>
           <button onClick={() => managerName.trim() && setStep("press")} disabled={!managerName.trim()} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={managerName.trim() ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.1)", color: C.paperDim, opacity: 0.6 }}>NÄSTA: PRESSKONFERENS</button>
         </div>
       </OnboardingWrap>
@@ -7747,7 +7757,7 @@ function Onboarding({ world, onConfirm, onCancel }) {
           </div>
           <div className="text-11 px-1" style={{ color: C.paperDim }}>Journalisterna vill veta hur du ser på uppdraget. Vad säger du?</div>
           {options.map(opt => (
-            <button key={opt.key} onClick={() => onConfirm(leagueId, division, clubId, managerName.trim(), opt.key, activeWorld)} className="w-full text-left rounded-2xl p-4" style={{ background: C.paper, color: C.ink }}>
+            <button key={opt.key} onClick={() => onConfirm(leagueId, division, clubId, managerName.trim(), opt.key, activeWorld, internationalDutyEnabled)} className="w-full text-left rounded-2xl p-4" style={{ background: C.paper, color: C.ink }}>
               <div className="font-semibold text-sm">{opt.label}</div>
               <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>{opt.desc}</div>
             </button>
