@@ -4055,6 +4055,7 @@ function TranarbankenApp() {
       outgoingLoans: parsed.outgoingLoans || [],
       loanOffers: parsed.loanOffers || [],
       seasonIncomeTotal: parsed.seasonIncomeTotal || 0, seasonWageTotal: parsed.seasonWageTotal || 0,
+      seasonStartBudget: parsed.seasonStartBudget ?? parsed.budget,
       difficulty: parsed.difficulty || "normal",
       savedScoutProfiles: parsed.savedScoutProfiles || [],
       clubRecords: parsed.clubRecords || {},
@@ -4255,9 +4256,10 @@ function TranarbankenApp() {
     manager.reputation = clamp(manager.reputation + (pressOpt?.managerRepDelta || 0), 5, 99);
     const prestigeScore = (arche.tierMin + arche.tierMax) / 2 - (division - 1) * 8;
     const startPartLevel = (max) => clamp(prestigeScore >= 82 ? 3 : prestigeScore >= 70 ? 2 : 1, 1, max);
+    const startBudget = Math.round(CLUB_BUDGET_OVERRIDES[clubId] ?? (arche.startBudget * divMult));
     const initial = {
       setupDone: true, leagueId: countryId, userClubId: clubId, season: 1, round: 0, tactic: "balanserad", spelide: "balanserad",
-      budget: Math.round(CLUB_BUDGET_OVERRIDES[clubId] ?? (arche.startBudget * divMult)), lastDelta: 0, dev, reputation, fanbase: startFanbase, lastCup2ChampionId: null,
+      budget: startBudget, seasonStartBudget: startBudget, lastDelta: 0, dev, reputation, fanbase: startFanbase, lastCup2ChampionId: null,
       clubs, schedule: generateSchedule(userPoolIds), allSchedules: generateAllSchedules(clubs), squad: startSquad, startingXI: pickBestXI(startSquad).map(p => p.id), market, worldPool,
       arenaStands: startArenaStands(club, division), arenaFacilities: { restaurant: startPartLevel(3), shop: startPartLevel(3) },
       akademiParts: { tranare: startPartLevel(3), intag: startPartLevel(3) }, scoutingParts: { analys: startPartLevel(3), kontakter: startPartLevel(3) },
@@ -5836,7 +5838,7 @@ function setupCup(type, base) {
       return {
         ...prev, userClubId: clubId, leagueId: targetClub.league, clubs: newClubs,
         squad: startSquad, startingXI: pickBestXI(startSquad).map(p => p.id), market, worldPool: newWorldPool,
-        budget, dev, fanbase, reputation: reputationForClub,
+        budget, seasonStartBudget: budget, dev, fanbase, reputation: reputationForClub,
         schedule: generateSchedule(userPoolIds), allSchedules: generateAllSchedules(newClubs),
         arenaStands: startArenaStands(targetClub, division), arenaFacilities: { restaurant: startPartLevel(3), shop: startPartLevel(3) },
         akademiParts: { tranare: startPartLevel(3), intag: startPartLevel(3) }, scoutingParts: { analys: startPartLevel(3), kontakter: startPartLevel(3) },
@@ -6341,7 +6343,7 @@ function setupCup(type, base) {
         schedule: generateSchedule(userPoolIds), allSchedules: generateAllSchedules(newClubs), squad: newSquad, youthSquad: newYouth,
         startingXI: prev.startingXI.filter(id => !departedIds.has(id)),
         reputation: newReputation, fanbase: clamp(newFanbase + visionFanbaseDelta, 0, 100), boardConfidence: newBoardConfidence, plannedSub: null,
-        budget: prev.budget - loanPayment + ownerEvent.cashDelta + promotionBonus, loans: newLoans,
+        budget: prev.budget - loanPayment + ownerEvent.cashDelta + promotionBonus, seasonStartBudget: prev.budget - loanPayment + ownerEvent.cashDelta + promotionBonus, loans: newLoans,
         owner: newOwner, takeoverBid: newTakeoverBid, tourOffers: null, manager: { ...newManager, reputation: clamp((newManager.reputation || 0) + managerAwardRepBonus, 0, 100) }, staff: newStaff, boardCrisisWarned: newBoardCrisisWarned,
         lastSeasonAwards: seasonAwards, userAwardWins, userManagerAwardBonus: managerAwardRepBonus, lastCrisisWasFinancial: financialCrisis || loanFailureSack,
         lastMatchReport: null, view: gotSacked ? "sacked" : boardCrisis ? "boardcrisis" : newManager.contractYears <= 0 ? "managercontract" : "seasonawards", activeTab: "home", pendingAfterResult: "home",
@@ -6678,7 +6680,7 @@ function setupCup(type, base) {
                   repHistory={g.repHistory} fanHistory={g.fanHistory} onSubViewChange={setSubViewOpen}
                   clubs={g.clubs} partnerClubId={g.partnerClubId} onSignPartnerClub={signPartnerClub} onEndPartnerClub={endPartnerClub} manager={g.manager} />
               ) : g.activeTab === "ekonomi" ? (
-                <EconomyTab budget={g.budget} reputation={g.reputation} division={userClub.division} sponsringLevel={g.dev.sponsring} squad={g.squad} history={g.history}
+                <EconomyTab budget={g.budget} seasonStartBudget={g.seasonStartBudget} reputation={g.reputation} division={userClub.division} sponsringLevel={g.dev.sponsring} squad={g.squad} history={g.history}
                   season={g.season} round={g.round} totalRounds={g.schedule.length} seasonIncomeTotal={g.seasonIncomeTotal || 0} seasonWageTotal={g.seasonWageTotal || 0}
                   ticketPrice={g.ticketPrice} onSetTicketPrice={setTicketPrice}
                   loans={g.loans} onTakeLoan={takeLoan} sponsors={g.sponsors} dev={g.dev} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSignSponsor={signSponsor} onTerminateSponsor={terminateSponsor}
@@ -14063,7 +14065,7 @@ function EconomyStatCard({ icon, label, value, valueColor, barPct, barColor, sub
     </div>
   );
 }
-function EconomyTab({ budget, reputation, division, sponsringLevel, squad, history, season, round, totalRounds, seasonIncomeTotal, seasonWageTotal, ticketPrice, onSetTicketPrice,
+function EconomyTab({ budget, seasonStartBudget, reputation, division, sponsringLevel, squad, history, season, round, totalRounds, seasonIncomeTotal, seasonWageTotal, ticketPrice, onSetTicketPrice,
   loans, onTakeLoan, sponsors, dev, onUpgrade, onUpgradePart, onSignSponsor, onTerminateSponsor, club, arenaStands, arenaFacilities, arenaConstruction, onStartConstruction, recentMatchFinances, transferInstallments, onSubViewChange, customArenaName, onNameArena, staff, transferHistory, userClubId }) {
   const [selectedCategory, setSelectedCategory] = useState(null);
   useEffect(() => { onSubViewChange?.(!!selectedCategory); }, [selectedCategory]);
@@ -14082,7 +14084,11 @@ function EconomyTab({ budget, reputation, division, sponsringLevel, squad, histo
   const avgWagePerRound = seasonWageTotal / roundsPlayed;
   const avgNetPerRound = avgIncomePerRound - avgWagePerRound;
   const projectedEndBudget = budget + avgNetPerRound * roundsLeft;
-  const seasonNetSoFar = seasonIncomeTotal - seasonWageTotal;
+  // The full picture, not just matchday income vs. wages — transfer fees, prize money, sponsor
+  // bonuses, loan payments and one-off events all move the budget too, and previously weren't
+  // reflected here at all, which could show a misleading negative "season so far" even when the
+  // budget had actually grown.
+  const seasonNetSoFar = budget - (seasonStartBudget ?? budget);
 
   return (
     <div className="rise-in space-y-2.5">
