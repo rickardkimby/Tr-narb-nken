@@ -2259,6 +2259,18 @@ function aiFormationCode(club) {
   const rng = seededRandom(String(club?.id || "unknown") + "formation");
   return FORMATION_CODES[Math.floor(rng() * FORMATION_CODES.length)];
 }
+// A big favorite (especially at home) leans toward "anfall"; a clear underdog (especially away) leans
+// toward "forsvar" — a pre-match proxy for a real manager reading the match situation, since instant
+// AI-vs-AI results have no evolving scoreline to react to mid-game the way the user's own live matches
+// already do (see the live match engine's late-game oppMomentum). Neutral (balanserad) with no context.
+function aiTacticLean(club, matchContext) {
+  if (!matchContext) return "balanserad";
+  const homeAdj = matchContext.isHome === true ? 4 : matchContext.isHome === false ? -4 : 0;
+  const gap = (club?.strength ?? 60) - (matchContext.oppStrength ?? 60) + homeAdj;
+  if (gap >= 12) return "anfall";
+  if (gap <= -12) return "forsvar";
+  return "balanserad";
+}
 // The AI-club equivalent of the user building their own lineup: pick a formation, choose the strongest
 // currently-available XI to fill its shape (fitness/form/injuries/suspensions/international duty all
 // count, exactly like pickBestXI/getXI), then slot each chosen player into whichever specific position
@@ -2266,7 +2278,9 @@ function aiFormationCode(club) {
 // club exactly the way it lands on the user's own mistakes. This is the single source of truth for "who's
 // playing and how well they fit": the same computation drives the match result, the post-match stats, and
 // the opponent scouting report, so what gets scouted is exactly what takes the pitch.
-function selectAiLineup(club) {
+// matchContext ({ oppStrength, isHome }) is optional — when supplied it drives a pre-match tactical lean
+// (see aiTacticLean); omitted call sites keep the previous fixed "balanserad" behavior.
+function selectAiLineup(club, matchContext) {
   const squad = club?.squad || [];
   const code = club?.formationCode || aiFormationCode(club);
   const slots = formationGridSlots(code);
@@ -2281,25 +2295,28 @@ function selectAiLineup(club) {
   const chosen = [];
   Object.entries(neededByRole).forEach(([role, n]) => { chosen.push(...(buckets[role] || []).slice(0, n)); });
   const chosenIds = new Set(chosen.map(p => p.id));
-  const shortfall = slots.length - chosen.length;
-  if (shortfall > 0) {
-    const leftover = pool.filter(p => p.pos !== "MV" && !chosenIds.has(p.id)).sort(byEffOverall);
-    chosen.push(...leftover.slice(0, shortfall));
+  if (slots.length > chosen.length) {
+    // A genuine crisis (several defenders out at once, say) still needs 11 names out — but who fills the
+    // gap matters. Handing every remaining available player to the fit-based assignment below (rather than
+    // pre-picking whoever rates highest overall) lets it find the most sensible emergency cover — a
+    // central midfielder pressed into a back four — instead of blindly grabbing the best-rated player
+    // regardless of position, which could land a winger at right-back.
+    chosen.push(...pool.filter(p => p.pos !== "MV" && !chosenIds.has(p.id)));
   }
   // Greedy best-fit-first assignment across every remaining (slot, player) pair — simple, but more than
-  // good enough for 11-ish slots and players, and it naturally falls back to a makeshift selection (a
-  // midfielder pressed into defense) when a club is genuinely short at a position, instead of crashing
-  // or leaving a slot empty.
+  // good enough for 11-ish slots and players. Ties on fit break toward the better player, so among several
+  // similarly-awkward emergency options the stronger one still gets picked.
   const remSlots = [...slots];
   const remPlayers = [...chosen];
   const cellMap = {};
   while (remSlots.length && remPlayers.length) {
-    let bestSi = 0, bestPi = 0, bestFit = -1;
+    let bestSi = 0, bestPi = 0, bestFit = -1, bestOverall = -1;
     remSlots.forEach((slot, si) => {
       const [col, row] = slot.id.split("-").map(Number);
       remPlayers.forEach((p, pi) => {
         const f = effectivePositionFit(p, col, row);
-        if (f > bestFit) { bestFit = f; bestSi = si; bestPi = pi; }
+        const o = effectiveOverall(p);
+        if (f > bestFit || (f === bestFit && o > bestOverall)) { bestFit = f; bestOverall = o; bestSi = si; bestPi = pi; }
       });
     });
     cellMap[remSlots[bestSi].id] = remPlayers[bestPi].id;
@@ -2313,10 +2330,11 @@ function selectAiLineup(club) {
   // amount a user's own manager does — a graceful default covers clubs from saves made before this field
   // existed, rather than silently skipping the bonus for them forever.
   const managerAttrs = club?.manager?.attributes || { taktik: 30 };
+  const tactic = aiTacticLean(club, matchContext);
   const { attack, defense } = xi.length
-    ? userStrength(xi, "balanserad", "balanserad", tacticalStyle, fitScore, null, managerAttrs)
+    ? userStrength(xi, tactic, "balanserad", tacticalStyle, fitScore, null, managerAttrs)
     : { attack: club?.strength ?? 50, defense: club?.strength ?? 50 };
-  return { formationCode: code, cellMap, xi, attack, defense, fitScore };
+  return { formationCode: code, cellMap, xi, attack, defense, fitScore, tactic };
 }
 
 function contractDemand(player) {
@@ -3149,7 +3167,7 @@ function simulateOtherDivisionsRound(allSchedules, clubs, round, skipKey) {
         // sub-attribute-alignment quality delta, so squadQualityIndex is deliberately NOT reapplied here
         // too — stacking both would double-count the same signal. Recent-results momentum still layers on
         // top as its own independent signal.
-        const homeLineup = selectAiLineup(home), awayLineup = selectAiLineup(away);
+        const homeLineup = selectAiLineup(home, { oppStrength: away.strength, isHome: true }), awayLineup = selectAiLineup(away, { oppStrength: home.strength, isHome: false });
         const homeMomentum = teamFormMult(recentForm(schedule, round, f.home));
         const awayMomentum = teamFormMult(recentForm(schedule, round, f.away));
         const hAdv = homeAdvantageMult(home);
@@ -3487,8 +3505,15 @@ function distributeMatchStats(squad, goalCount, playingIds) {
     let yellowCards = p.yellowCards || 0, suspendedMatches = p.suspendedMatches;
     if (gotRed) suspendedMatches += rndInt(1, 2);
     else if (yellowInc.has(p.id)) { yellowCards += 1; if (yellowCards >= 5) { suspendedMatches += 1; yellowCards -= 5; } }
+    // Same match-by-match development as the user's own squad (see finalizeMatch's developmentDeltas
+    // call) — an AI player who actually played and rated well nudges up toward their potential a little
+    // each week, and a poor run nudges down, instead of only ever changing once a season at the age-based
+    // reshuffle.
+    const { attackDelta, defenseDelta } = played ? developmentDeltas(p, rating) : { attackDelta: 0, defenseDelta: 0 };
     return {
       ...p,
+      attack: clamp(p.attack + attackDelta, 15, 99),
+      defense: clamp(p.defense + defenseDelta, 15, 99),
       goals: (p.goals || 0) + (goalInc[p.id] || 0),
       assists: (p.assists || 0) + (assistInc[p.id] || 0),
       seasonYellowCards: (p.seasonYellowCards || 0) + (yellowInc.has(p.id) ? 1 : 0),
@@ -3736,7 +3761,7 @@ function processDomesticCupRound(teams, clubs, userClubId, squad, tactic, spelid
       const oppId = a === userClubId ? b : a;
       const opp = clubs[oppId];
       const { attack, defense } = userStrength(xi, tactic, spelide, tacticalSettings);
-      const oppLineup = selectAiLineup(opp);
+      const oppLineup = selectAiLineup(opp, { oppStrength: (attack + defense) / 2 });
       const [userGoals, oppGoals] = poissonScorePair(expectedGoals(attack, oppLineup.defense, false), expectedGoals(oppLineup.attack, defense, false));
       let penalties = null, userWon;
       if (userGoals === oppGoals) {
@@ -4476,7 +4501,7 @@ function setupCup(type, base) {
         // direct table rivals now get a genuine attack/defense from who's actually fit, in form, and
         // well-placed, not a flat strength number. Club-level momentum from recent results still layers
         // on top as its own independent signal.
-        const homeLineup = selectAiLineup(home), awayLineup = selectAiLineup(away);
+        const homeLineup = selectAiLineup(home, { oppStrength: away.strength, isHome: true }), awayLineup = selectAiLineup(away, { oppStrength: home.strength, isHome: false });
         const homeMomentum = teamFormMult(recentForm(g.schedule, g.round, f.home));
         const awayMomentum = teamFormMult(recentForm(g.schedule, g.round, f.away));
         const [hg, ag] = poissonScorePair(
@@ -4504,7 +4529,7 @@ function setupCup(type, base) {
     // Same lineup a scouting report would show (selectAiLineup is pure/deterministic from the opponent's
     // current squad state, which hasn't changed since kickoff) — collapsed to one scalar here because the
     // live match engine still consumes a single opponent strength number throughout the match.
-    const oppLineup = selectAiLineup(opp);
+    const oppLineup = selectAiLineup(opp, { oppStrength: squadOverallRating(xi), isHome: !userIsHome });
     const oppStrength = (oppLineup.attack + oppLineup.defense) / 2;
     const { attack, defense } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff, g.manager?.attributes);
     const { attack: attackNoStaff, defense: defenseNoStaff } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), null);
@@ -5092,8 +5117,9 @@ function setupCup(type, base) {
     const xi = getXI(g.squad, g.startingXI);
     const { attack, defense } = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings, teamPositionFit(g.lineupCells, g.squad), g.staff, g.manager?.attributes);
     const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}domestic${cup.roundIndex || 1}`);
-    const oppLineup = selectAiLineup(opp);
-    const pending = { oppId: userOppId, oppName: opp.name, oppStrength: (oppLineup.attack + oppLineup.defense) / 2, userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
+    const userIsHomeThisMatch = Math.random() < 0.5;
+    const oppLineup = selectAiLineup(opp, { oppStrength: (attack + defense) / 2, isHome: !userIsHomeThisMatch });
+    const pending = { oppId: userOppId, oppName: opp.name, oppStrength: (oppLineup.attack + oppLineup.defense) / 2, userIsHome: userIsHomeThisMatch, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "domesticRound", winners } }));
   }
   function finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
@@ -5156,14 +5182,14 @@ function setupCup(type, base) {
       if (isUser) { userIsHome = f.home === g.userClubId; oppId2 = userIsHome ? f.away : f.home; return f; }
       const home = g.clubs[f.home], away = g.clubs[f.away];
       const hAdv = homeAdvantageMult(home);
-      const homeLineup = selectAiLineup(home), awayLineup = selectAiLineup(away);
+      const homeLineup = selectAiLineup(home, { oppStrength: away.strength, isHome: true }), awayLineup = selectAiLineup(away, { oppStrength: home.strength, isHome: false });
       const [hgOther, agOther] = poissonScorePair(expectedGoals(homeLineup.attack, awayLineup.defense, true, hAdv), expectedGoals(awayLineup.attack, homeLineup.defense, false, hAdv));
       return { ...f, homeGoals: hgOther, awayGoals: agOther };
     });
     const opp = g.clubs[oppId2];
     const xi = getXI(g.squad, g.startingXI);
     const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}cup1group${cup.groupRound}`);
-    const oppLineup = selectAiLineup(opp);
+    const oppLineup = selectAiLineup(opp, { oppStrength: squadOverallRating(xi), isHome: !userIsHome });
     const pending = { oppId: oppId2, oppName: opp.name, oppStrength: (oppLineup.attack + oppLineup.defense) / 2, userIsHome, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "groupMatch", resolvedOthers } }));
   }
@@ -5232,7 +5258,7 @@ function setupCup(type, base) {
     const userIsHomeThisLeg = cup.tie.leg === 1 ? cup.tie.userHomeLeg1 : !cup.tie.userHomeLeg1;
     const xi = getXI(g.squad, g.startingXI);
     const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}${cupType}leg${cup.tie.leg}`);
-    const oppLineup = selectAiLineup(opp);
+    const oppLineup = selectAiLineup(opp, { oppStrength: squadOverallRating(xi), isHome: !userIsHomeThisLeg });
     const pending = { oppId: cup.tie.oppId, oppName: opp.name, oppStrength: (oppLineup.attack + oppLineup.defense) / 2, userIsHome: userIsHomeThisLeg, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "leg", cupType, legNum: cup.tie.leg } }));
   }
@@ -5274,7 +5300,7 @@ function setupCup(type, base) {
       if (!et) {
         const xi = getXI(g.squad, g.startingXI);
         const strength2 = userStrength(xi, g.tactic, g.spelide, g.tacticalSettings);
-        const etOppLineup = selectAiLineup(g.clubs[cup.tie.oppId]);
+        const etOppLineup = selectAiLineup(g.clubs[cup.tie.oppId], { oppStrength: squadOverallRating(xi) });
         const oppStrength = (etOppLineup.attack + etOppLineup.defense) / 2;
         const diff = (strength2.attack - oppStrength) / 100;
         const etUser = Math.random() < clamp(0.22 + diff, 0.08, 0.42) ? (Math.random() < 0.15 ? 2 : 1) : 0;
@@ -5334,7 +5360,7 @@ function setupCup(type, base) {
     const opp = g.clubs[cup.finalOpponentId];
     const xi = getXI(g.squad, g.startingXI);
     const weather = weatherForMatch(`cupweather${g.round}${g.userClubId}${cupType}final`);
-    const oppLineup = selectAiLineup(opp);
+    const oppLineup = selectAiLineup(opp, { oppStrength: squadOverallRating(xi) }); // neutral-venue final, no home/away lean
     const pending = { oppId: cup.finalOpponentId, oppName: opp.name, oppStrength: (oppLineup.attack + oppLineup.defense) / 2, userIsHome: Math.random() < 0.5, weather, xiIds: xi.map(p => p.id), analystImpactDelta: 0, gkCoachImpactDelta: 0, fitnessImpactDelta: 0 };
     setG(prev => ({ ...prev, view: "livematch", pendingRound: pending, pendingCupContext: { type: "final", cupType } }));
   }
