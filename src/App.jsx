@@ -3354,7 +3354,10 @@ function distributeMatchStats(squad, goalCount) {
     injuryWeeks: Math.max(0, (p.injuryWeeks || 0) - 1),
     suspendedMatches: Math.max(0, (p.suspendedMatches || 0) - 1),
   }));
-  const available = ticked.filter(p => p.injuryWeeks === 0 && p.suspendedMatches === 0);
+  // A player called up for international duty (see processInternationalBreak, applied to AI clubs too)
+  // misses exactly this one match, same as the user's own squad — excluded here, then cleared below once
+  // this match has passed.
+  const available = ticked.filter(p => p.injuryWeeks === 0 && p.suspendedMatches === 0 && !p.internationalDuty);
   const outfield = available.filter(p => p.pos !== "MV");
   if (!outfield.length) return ticked;
   const scorerWeighted = [];
@@ -3398,18 +3401,27 @@ function distributeMatchStats(squad, goalCount) {
   // real manager (or the user, via the Trupp tab's live rating) would do.
   const keeper = available.find(p => p.pos === "MV");
   const rankedOutfield = [...outfield].sort((a, b) => effectiveOverall(b) - effectiveOverall(a));
-  const playedIds = new Set([keeper?.id, ...rankedOutfield.slice(0, 10).map(p => p.id)].filter(Boolean));
+  const playedPlayers = [keeper, ...rankedOutfield.slice(0, 10)].filter(Boolean);
+  const playedIds = new Set(playedPlayers.map(p => p.id));
+  // Same injury-risk shape as the user's own in-match roll (see finalizeMatch's baselineChance) — a
+  // physically weaker, more injury-prone ("Skör" vs "Robust"), or already-tired player is genuinely more
+  // likely to go down, not a single flat number for the whole league. No physio/difficulty discount since
+  // AI clubs don't run a backroom staff and difficulty is specifically the user's own challenge dial.
   const newInjuryWeeks = {};
-  playedIds.forEach(id => {
-    if (Math.random() < 0.035) newInjuryWeeks[id] = rndInt(1, 4);
+  playedPlayers.forEach(p => {
+    const staminaRisk = clamp((70 - (p.stamina ?? 100)) / 700, 0, 0.07);
+    const chance = clamp((0.045 - getAttrs(p).physical / 2200 + staminaRisk) * injuryProneMult(p), 0.005, 0.12);
+    if (Math.random() < chance) newInjuryWeeks[p.id] = rndInt(1, 4);
   });
   return ticked.map(p => {
     const played = playedIds.has(p.id);
     const gotRed = redInc.has(p.id);
     const hasStatChange = goalInc[p.id] || assistInc[p.id] || yellowInc.has(p.id) || gotRed;
     // Same recovery every unused player on the user's own bench gets between matches (see finalizeMatch) —
-    // AI squads live under the identical stamina economy, not a frozen number.
-    if (!played && !hasStatChange) return { ...p, stamina: clamp((p.stamina ?? 100) + rndInt(28, 36), 0, 100) };
+    // AI squads live under the identical stamina economy, not a frozen number. An international-duty
+    // absence (see the availability filter above) lasts exactly this one match, then clears like the
+    // user's own returning internationals.
+    if (!played && !hasStatChange) return { ...p, stamina: clamp((p.stamina ?? 100) + rndInt(28, 36), 0, 100), internationalDuty: false };
     const rating = played ? clamp(6.1 + (goalInc[p.id] || 0) * 0.7 + (assistInc[p.id] || 0) * 0.4 - (gotRed ? 1.2 : 0) - (yellowInc.has(p.id) ? 0.15 : 0) + rnd(-0.5, 0.5), 3, 10) : 0;
     // Same per-match depletion formula as the user's own starting XI (see finalizeMatch), minus the
     // fitness-coach discount since AI clubs don't run a backroom staff of their own. A stat-only
@@ -3417,6 +3429,11 @@ function distributeMatchStats(squad, goalCount) {
     const newStamina = played
       ? clamp((p.stamina ?? 100) - Math.max(1, rndInt(4, 8) * enduranceMult(p)), 0, 100)
       : clamp((p.stamina ?? 100) + rndInt(28, 36), 0, 100);
+    // Same 5-yellow-cards-bans-you-a-match rule the user's own squad already lives under (see
+    // finalizeMatch) — without this an AI player could rack up cards all season and never sit one out.
+    let yellowCards = p.yellowCards || 0, suspendedMatches = p.suspendedMatches;
+    if (gotRed) suspendedMatches += rndInt(1, 2);
+    else if (yellowInc.has(p.id)) { yellowCards += 1; if (yellowCards >= 5) { suspendedMatches += 1; yellowCards -= 5; } }
     return {
       ...p,
       goals: (p.goals || 0) + (goalInc[p.id] || 0),
@@ -3432,7 +3449,8 @@ function distributeMatchStats(squad, goalCount) {
       apps: (p.apps || 0) + (played ? 1 : 0),
       ratingSum: (p.ratingSum || 0) + rating,
       injuryWeeks: newInjuryWeeks[p.id] ?? p.injuryWeeks,
-      suspendedMatches: gotRed ? Math.max(p.suspendedMatches, rndInt(1, 2)) : p.suspendedMatches,
+      yellowCards,
+      suspendedMatches,
     };
   });
 }
@@ -4663,7 +4681,15 @@ function setupCup(type, base) {
     const windowJustOpened = TRANSFER_WINDOWS.some(([a]) => a === newRound);
     const freshlyListedClubs = windowJustOpened ? refreshWorldListings(updatedClubs, g.userClubId) : updatedClubs;
     const aiTransferResult = windowJustOpened ? simulateAITransfers(freshlyListedClubs, g.userClubId, g.season, newRound) : null;
-    const listingClubs = aiTransferResult ? aiTransferResult.clubs : freshlyListedClubs;
+    // Every AI club goes through the exact same national-team call-up lottery the user's own squad faces
+    // below during an interländsuppehåll (see processInternationalBreak) — this only fires 4 times a
+    // season, so running it across the whole world of clubs here costs nothing noticeable. The user's own
+    // entry gets fully overwritten by squadAfterBreak/finalSquad further down regardless.
+    const listingClubs = (() => {
+      const base = aiTransferResult ? aiTransferResult.clubs : freshlyListedClubs;
+      if (!INTERNATIONAL_BREAK_ROUNDS.includes(newRound)) return base;
+      return Object.fromEntries(Object.entries(base).map(([id, c]) => [id, { ...c, squad: processInternationalBreak(c.squad).newSquad }]));
+    })();
     const newIncomingOffers = windowJustOpened ? generateIncomingOffers(newSquad, listingClubs, g.userClubId, g.reputation, newRound) : g.incomingOffers;
     const newLoanOffers = windowJustOpened ? generatePlayerLoanOffers(listingClubs, g.userClubId, userClub.division) : (g.loanOffers || []);
     const newLoanRequests = windowJustOpened ? generateIncomingLoanRequests(newSquad, listingClubs, g.userClubId) : (g.loanRequests || []);
