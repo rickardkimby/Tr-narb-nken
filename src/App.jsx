@@ -196,19 +196,6 @@ function poissonScorePair(lambdaHome, lambdaAway) {
   }
   return [poisson(lambdaHome), poisson(lambdaAway)];
 }
-// How well a squad's actual sub-attributes back up its raw attack/defense numbers — usable for ANY
-// club's squad, not just the user's. A squad genuinely playing to its numbers (or better) gets a small
-// boost; one padded by less relevant attributes gets a small penalty. Deliberately modest and capped.
-function squadQualityIndex(squad) {
-  if (!squad || !squad.length) return 1;
-  const sample = squad.slice(0, 16); // cap cost for large squads, a representative slice is enough
-  const deltas = sample.map(p => {
-    const rawEstimate = p.pos === "MV" ? p.defense : (p.attack + p.defense) / 2;
-    return overallOf(p) - rawEstimate;
-  });
-  const avgDelta = deltas.reduce((s, d) => s + d, 0) / sample.length;
-  return 1 + clamp(avgDelta * 0.006, -0.1, 0.1);
-}
 // A team's recent results give a modest, bounded momentum signal — same idea as individual player form,
 // scaled up to the team level so a club on a genuine hot or cold streak plays a little above or below
 // its nominal strength, whether that's the user's club or any AI-controlled one.
@@ -785,7 +772,7 @@ function generateWorld() {
       usedNames.add(c.name);
       const squad = withSeededRandom(c.id + "squad", () => makeSquad(country.id, c.archetype, 1, arche.startDev.akademi));
       const strength = withSeededRandom(c.id + "strength", () => deriveClubStrength(squad));
-      clubs[c.id] = { id: c.id, league: c.league, division: 1, name: c.name, short: c.short, color: c.color, archetype: c.archetype, strength, manager: generateManager(country.id), squad, youthSquad: Array.from({ length: academyProspectCountForLevel(arche.startDev.akademi) }, () => generateYouthProspect(arche.startDev.akademi, 0, country.id)) };
+      clubs[c.id] = { id: c.id, league: c.league, division: 1, name: c.name, short: c.short, color: c.color, archetype: c.archetype, strength, manager: generateManager(country.id, 1), squad, youthSquad: Array.from({ length: academyProspectCountForLevel(arche.startDev.akademi) }, () => generateYouthProspect(arche.startDev.akademi, 0, country.id)) };
     });
     const namedCount = CLUB_DATA.filter(c => c.league === country.id).length;
     const fillerCount = Math.max(0, 20 - namedCount);
@@ -799,14 +786,14 @@ function generateWorld() {
         const strength = deriveClubStrength(squad);
         return { archetype, name, strength, squad };
       });
-      clubs[id] = { id, league: country.id, division: 1, name, short: shortCodeFrom(name), color: colorForClubName(country.id, name) || pick(COLOR_POOL), archetype, strength, manager: generateManager(country.id), squad, youthSquad: Array.from({ length: academyProspectCountForLevel(ARCHETYPES[archetype].startDev.akademi) }, () => generateYouthProspect(ARCHETYPES[archetype].startDev.akademi, 0, country.id)) };
+      clubs[id] = { id, league: country.id, division: 1, name, short: shortCodeFrom(name), color: colorForClubName(country.id, name) || pick(COLOR_POOL), archetype, strength, manager: generateManager(country.id, 1), squad, youthSquad: Array.from({ length: academyProspectCountForLevel(ARCHETYPES[archetype].startDev.akademi) }, () => generateYouthProspect(ARCHETYPES[archetype].startDev.akademi, 0, country.id)) };
     }
     CLUB_DATA_D2.filter(c => c.league === country.id).forEach(c => {
       const arche = ARCHETYPES[c.archetype];
       usedNames.add(c.name);
       const squad = withSeededRandom(c.id + "squad", () => makeSquad(country.id, c.archetype, 2, arche.startDev.akademi));
       const strength = withSeededRandom(c.id + "strength", () => deriveClubStrength(squad));
-      clubs[c.id] = { id: c.id, league: c.league, division: 2, name: c.name, short: c.short, color: c.color, archetype: c.archetype, strength, manager: generateManager(country.id), squad, youthSquad: Array.from({ length: academyProspectCountForLevel(Math.max(1, arche.startDev.akademi - 1)) }, () => generateYouthProspect(Math.max(1, arche.startDev.akademi - 1), 0, country.id)) };
+      clubs[c.id] = { id: c.id, league: c.league, division: 2, name: c.name, short: c.short, color: c.color, archetype: c.archetype, strength, manager: generateManager(country.id, 2), squad, youthSquad: Array.from({ length: academyProspectCountForLevel(Math.max(1, arche.startDev.akademi - 1)) }, () => generateYouthProspect(Math.max(1, arche.startDev.akademi - 1), 0, country.id)) };
     });
     const namedD2Count = CLUB_DATA_D2.filter(c => c.league === country.id).length;
     for (let i = 0; i < 20 - namedD2Count; i++) {
@@ -819,14 +806,14 @@ function generateWorld() {
         const strength = deriveClubStrength(squad);
         return { archetype, name, strength, squad };
       });
-      clubs[id] = { id, league: country.id, division: 2, name, short: shortCodeFrom(name), color: colorForClubName(country.id, name) || pick(COLOR_POOL), archetype, strength, manager: generateManager(country.id), squad, youthSquad: Array.from({ length: academyProspectCountForLevel(Math.max(1, ARCHETYPES[archetype].startDev.akademi - 1)) }, () => generateYouthProspect(Math.max(1, ARCHETYPES[archetype].startDev.akademi - 1), 0, country.id)) };
+      clubs[id] = { id, league: country.id, division: 2, name, short: shortCodeFrom(name), color: colorForClubName(country.id, name) || pick(COLOR_POOL), archetype, strength, manager: generateManager(country.id, 2), squad, youthSquad: Array.from({ length: academyProspectCountForLevel(Math.max(1, ARCHETYPES[archetype].startDev.akademi - 1)) }, () => generateYouthProspect(Math.max(1, ARCHETYPES[archetype].startDev.akademi - 1), 0, country.id)) };
     }
     CLUB_DATA_D3.filter(c => c.league === country.id).forEach(c => {
       const arche = ARCHETYPES[c.archetype];
       usedNames.add(c.name);
       const squad = withSeededRandom(c.id + "squad", () => makeSquad(country.id, c.archetype, 3, arche.startDev.akademi));
       const strength = withSeededRandom(c.id + "strength", () => deriveClubStrength(squad));
-      clubs[c.id] = { id: c.id, league: c.league, division: 3, name: c.name, short: c.short, color: c.color, archetype: c.archetype, strength, manager: generateManager(country.id), squad, youthSquad: Array.from({ length: academyProspectCountForLevel(Math.max(1, arche.startDev.akademi - 2)) }, () => generateYouthProspect(Math.max(1, arche.startDev.akademi - 2), 0, country.id)) };
+      clubs[c.id] = { id: c.id, league: c.league, division: 3, name: c.name, short: c.short, color: c.color, archetype: c.archetype, strength, manager: generateManager(country.id, 3), squad, youthSquad: Array.from({ length: academyProspectCountForLevel(Math.max(1, arche.startDev.akademi - 2)) }, () => generateYouthProspect(Math.max(1, arche.startDev.akademi - 2), 0, country.id)) };
     });
     const namedD3Count = CLUB_DATA_D3.filter(c => c.league === country.id).length;
     for (let i = 0; i < 20 - namedD3Count; i++) {
@@ -839,7 +826,7 @@ function generateWorld() {
         const strength = deriveClubStrength(squad);
         return { archetype, name, strength, squad };
       });
-      clubs[id] = { id, league: country.id, division: 3, name, short: shortCodeFrom(name), color: colorForClubName(country.id, name) || pick(COLOR_POOL), archetype, strength, manager: generateManager(country.id), squad, youthSquad: Array.from({ length: academyProspectCountForLevel(Math.max(1, ARCHETYPES[archetype].startDev.akademi - 2)) }, () => generateYouthProspect(Math.max(1, ARCHETYPES[archetype].startDev.akademi - 2), 0, country.id)) };
+      clubs[id] = { id, league: country.id, division: 3, name, short: shortCodeFrom(name), color: colorForClubName(country.id, name) || pick(COLOR_POOL), archetype, strength, manager: generateManager(country.id, 3), squad, youthSquad: Array.from({ length: academyProspectCountForLevel(Math.max(1, ARCHETYPES[archetype].startDev.akademi - 2)) }, () => generateYouthProspect(Math.max(1, ARCHETYPES[archetype].startDev.akademi - 2), 0, country.id)) };
     }
   });
   assignRivals(clubs);
@@ -1197,9 +1184,13 @@ const REGION_BIAS = {
 };
 
 function randomPlayerName(nationality) { return nameForNationality(nationality || pick(NATIONALITY_KEYS)); }
-function generateManager(clubCountry) {
+// Same base-by-division and ±8 spread as initialManager's own taktik roll — an AI manager is now a
+// genuine (small) contributor to their club's match strength via userStrength's managerAttrs param,
+// not just a name and flag for scouting-report flavor text.
+function generateManager(clubCountry, division) {
   const nationality = Math.random() < 0.78 ? clubCountry : pick(NATIONALITY_KEYS.filter(n => n !== clubCountry));
-  return { name: nameForNationality(nationality), nationality };
+  const base = { 1: 42, 2: 34, 3: 26 }[division] || 34;
+  return { name: nameForNationality(nationality), nationality, attributes: { taktik: rndInt(base - 8, base + 8) } };
 }
 function computeWage(value, attack, defense) {
   return Math.max(4, Math.round(value * 0.011 + ((attack + defense) / 2) * 0.15));
@@ -2318,8 +2309,12 @@ function selectAiLineup(club) {
   const xi = Object.values(cellMap).map(id => squad.find(p => p.id === id)).filter(Boolean);
   const fitScore = teamPositionFit(cellMap, squad);
   const tacticalStyle = club?.tacticalStyle || oppTacticalStyle(club);
+  // An AI manager's taktik attribute (generateManager) now nudges their club's strength the same small
+  // amount a user's own manager does — a graceful default covers clubs from saves made before this field
+  // existed, rather than silently skipping the bonus for them forever.
+  const managerAttrs = club?.manager?.attributes || { taktik: 30 };
   const { attack, defense } = xi.length
-    ? userStrength(xi, "balanserad", "balanserad", tacticalStyle, fitScore, null, null)
+    ? userStrength(xi, "balanserad", "balanserad", tacticalStyle, fitScore, null, managerAttrs)
     : { attack: club?.strength ?? 50, defense: club?.strength ?? 50 };
   return { formationCode: code, cellMap, xi, attack, defense, fitScore };
 }
@@ -3150,11 +3145,13 @@ function simulateOtherDivisionsRound(allSchedules, clubs, round, skipKey) {
         if (!home || !away || f.homeGoals !== null) return f;
         // Same formation-and-position-fit-aware lineup the user's own division rivals get (selectAiLineup)
         // — real attack/defense from who's actually fit, in form, and well-placed, not a single flat
-        // strength number. squadQualityIndex and recent-results momentum still layer on top as their own
-        // independent signals.
+        // strength number. userStrength (used inside selectAiLineup) already folds in its own
+        // sub-attribute-alignment quality delta, so squadQualityIndex is deliberately NOT reapplied here
+        // too — stacking both would double-count the same signal. Recent-results momentum still layers on
+        // top as its own independent signal.
         const homeLineup = selectAiLineup(home), awayLineup = selectAiLineup(away);
-        const homeMomentum = squadQualityIndex(home.squad) * teamFormMult(recentForm(schedule, round, f.home));
-        const awayMomentum = squadQualityIndex(away.squad) * teamFormMult(recentForm(schedule, round, f.away));
+        const homeMomentum = teamFormMult(recentForm(schedule, round, f.home));
+        const awayMomentum = teamFormMult(recentForm(schedule, round, f.away));
         const hAdv = homeAdvantageMult(home);
         const [hg, ag] = poissonScorePair(
           expectedGoals(homeLineup.attack * homeMomentum, awayLineup.defense * awayMomentum, true, hAdv),
@@ -4115,7 +4112,7 @@ function TranarbankenApp() {
   function normalizeSave(parsed) {
     if (!parsed.setupDone) return parsed;
     const fixedClubs = {};
-    Object.values(parsed.clubs).forEach(c => { fixedClubs[c.id] = c.manager ? c : { ...c, manager: generateManager(c.league) }; });
+    Object.values(parsed.clubs).forEach(c => { fixedClubs[c.id] = c.manager?.attributes ? c : { ...c, manager: generateManager(c.league, c.division) }; });
     if (!Object.values(fixedClubs).some(c => c.rivalId)) assignRivals(fixedClubs);
     const fixPlayer = p => ({
       nationality: p.nationality || parsed.leagueId, age: p.age || rndInt(20, 30),
@@ -5999,7 +5996,7 @@ function setupCup(type, base) {
       const prestigeScore = (arche.tierMin + arche.tierMax) / 2 - (division - 1) * 8;
       const startPartLevel = (max) => clamp(prestigeScore >= 82 ? 3 : prestigeScore >= 70 ? 2 : 1, 1, max);
       // The old club carries on under a freshly appointed AI manager once you leave.
-      const newClubs = { ...prev.clubs, [oldClubId]: { ...prev.clubs[oldClubId], manager: generateManager(prev.clubs[oldClubId].league) } };
+      const newClubs = { ...prev.clubs, [oldClubId]: { ...prev.clubs[oldClubId], manager: generateManager(prev.clubs[oldClubId].league, prev.clubs[oldClubId].division) } };
       const rating = effectiveScoutRating(dev, reputationForClub);
       const existingPool = prev.worldPool || generateWorldPool();
       const dE = drawFromWorldPool(existingPool.europa, rating, 4);
