@@ -12990,11 +12990,169 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
   );
 }
 
+// A read-only counterpart to PlayerProfile for players you don't own — scouted opponents, world-pool
+// finds, anyone browsed via the transfer market. PlayerProfile is built entirely around managing your
+// own squad (training, contract renewal, hinting for sale, dressing-room chat), so reusing it directly
+// here would either need a long trail of ownership guards threaded through unrelated sections or risk a
+// stray action being offered on a player who isn't yours. This shows the same attribute breakdown and
+// career history, minus every club-management action, ending in a single "Förhandla" button.
+function ScoutedPlayerProfile({ player, club, transferHistory, onNegotiate, onBack }) {
+  const attrs = getAttrs(player);
+  const labels = attrLabels(player.pos);
+  const overall = overallOf(player);
+  const liveOverall = effectiveOverall(player);
+  const tier = overallTier(overall);
+  const best = bestAttribute(player);
+  const otherPositions = Object.keys(SPECIFIC_POSITION_LOOKUP).filter(code => {
+    const anchor = SPECIFIC_POSITION_LOOKUP[code];
+    return code !== player.specificPosition && positionFit(player.specificPosition, anchor.col, anchor.row) >= 0.7;
+  });
+  const seasonLog = player.seasonLog || [];
+  const careerApps = seasonLog.reduce((s, r) => s + (r.apps || 0), 0) + (player.apps || 0);
+  const careerGoals = seasonLog.reduce((s, r) => s + (r.goals || 0), 0) + (player.goals || 0);
+  const careerAssists = seasonLog.reduce((s, r) => s + (r.assists || 0), 0) + (player.assists || 0);
+  const moves = (transferHistory || []).filter(t => t.playerId === player.id).sort((a, b) => (b.season - a.season) || (b.round - a.round));
+  const injured = player.injuryWeeks > 0;
+  const suspended = player.suspendedMatches > 0;
+  return (
+    <div className="rise-in space-y-2.5">
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, right: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Bakåt</button>
+      <PaperCard>
+        <div className="flex items-center gap-3">
+          <div style={{ position: "relative", width: 60, height: 60, flexShrink: 0 }}>
+            <PlayerAvatar player={player} size={60} />
+            <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={overall} size={26} /></div>
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="font-display text-xl truncate">{player.name}</div>
+            <div className="text-11" style={{ color: C.inkSoft }}>{POS_LABEL[player.pos]} ({specificPositionLabel(player.specificPosition)}) · {nationalityLabel(player.nationality)} · {player.age} år · <span style={{ color: tier.color === C.gold ? "#B8862E" : tier.color }}>{tier.label}</span></div>
+            {club && (
+              <div className="flex items-center gap-1.5 mt-0.5"><ClubJersey club={club} size={16} /><span className="text-11" style={{ color: C.inkSoft }}>{club.name}</span></div>
+            )}
+            <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Lön: <span className="font-semibold" style={{ color: C.ink }}>{formatMoney(player.wage)}/omg</span> · Värde: <span className="font-semibold" style={{ color: C.ink }}>{formatMoney(player.value)}</span></div>
+            {otherPositions.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                <span className="text-9" style={{ color: C.inkSoft }}>Kan även spela:</span>
+                {otherPositions.map(code => <span key={code} className="text-9 font-mono px-1.5 py-0.5 rounded" style={{ background: C.paperDim, color: C.ink }}>{code}</span>)}
+              </div>
+            )}
+            <div className="text-11 mt-0.5" style={{ color: C.gold }}>Bästa egenskap: {best.label} ({best.value})</div>
+            {player.personality && player.personality !== "Balanserad" && (
+              <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}><span className="font-semibold" style={{ color: C.ink }}>{player.personality}</span> — {PERSONALITY_DESC[player.personality]}</div>
+            )}
+            <div className="mt-1.5"><StarRating rating={overallToStars(overall)} size={11} /></div>
+            {liveOverall !== overall && (
+              <div className="text-11 mt-1 font-semibold" style={{ color: liveOverall < overall ? C.loss : C.win }}>
+                Just nu: {liveOverall} ({liveOverall < overall ? "−" : "+"}{Math.abs(overall - liveOverall)}) — kondition {Math.round(player.stamina ?? 100)}%
+              </div>
+            )}
+          </div>
+        </div>
+        {injured && <div className="mt-2 text-11 font-semibold px-2.5 py-1.5 rounded-lg text-center" style={{ background: "rgba(180,68,59,0.15)", color: C.loss }}>Skadad — {player.injuryWeeks} omgångar kvar</div>}
+        {suspended && <div className="mt-2 text-11 font-semibold px-2.5 py-1.5 rounded-lg text-center" style={{ background: "rgba(180,68,59,0.15)", color: C.loss }}>Avstängd — {player.suspendedMatches} omgångar kvar</div>}
+      </PaperCard>
+
+      {(player.scoutReports && player.scoutReports.length > 0) ? (
+        [...player.scoutReports].reverse().map((r, i) => (
+          <PaperCard key={i}>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{r.source === "scout" ? "Scoutrapport" : "Ass. tränarens omdöme"}</div>
+              <div className="text-10" style={{ color: C.inkSoft }}>Säsong {r.season}</div>
+            </div>
+            <div className="text-11" style={{ color: C.ink }}>{r.comment}</div>
+          </PaperCard>
+        ))
+      ) : (
+        <PaperCard>
+          <div className="text-xs uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Ass. tränarens omdöme</div>
+          <div className="text-11" style={{ color: C.ink }}>{scoutComment(player)}</div>
+        </PaperCard>
+      )}
+
+      <PaperCard>
+        <div className="grid grid-cols-3 gap-1.5 text-center">
+          <div><div className="font-display text-lg">{careerApps}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Matcher (karriär)</div></div>
+          <div><div className="font-display text-lg">{careerGoals}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Mål (karriär)</div></div>
+          <div><div className="font-display text-lg">{careerAssists}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Assist (karriär)</div></div>
+        </div>
+        <div className="text-9 uppercase tracking-wide font-semibold mt-3 mb-1.5" style={{ color: C.inkSoft }}>Egenskaper</div>
+        <div className="grid grid-cols-3 gap-1.5">
+          {Object.entries(labels).map(([key, label]) => <AttributeGridCard key={key} attrKey={key} label={label} value={attrs[key]} />)}
+        </div>
+        <div className="text-9 uppercase tracking-wide font-semibold mt-3 mb-1.5" style={{ color: C.inkSoft }}>Ytterligare egenskaper</div>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
+            <div className="flex items-center justify-between">
+              <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: "rgba(201,154,62,0.13)" }}>🦶</span>
+              <div className="flex gap-0.5">{[1, 2, 3, 4, 5].map(n => <Star key={n} size={9} fill={n <= weakFoot(player) ? C.gold : "none"} color={n <= weakFoot(player) ? C.gold : C.paperDim} />)}</div>
+            </div>
+            <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Svag fot</div>
+          </div>
+          <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
+            <div className="flex items-center justify-between">
+              <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: `${attrQualityColor(headingAbility(player))}22` }}>🎯</span>
+              <span className="font-mono text-11 font-bold" style={{ color: C.ink }}>{headingAbility(player)}</span>
+            </div>
+            <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Huvudspel</div>
+          </div>
+          <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
+            <div className="flex items-center justify-between">
+              <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: injuryProneness(player) === "Skör" ? "rgba(180,68,59,0.15)" : injuryProneness(player) === "Robust" ? "rgba(63,143,107,0.15)" : "rgba(92,107,96,0.12)" }}>🩹</span>
+            </div>
+            <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Skaderisk</div>
+            <div className="text-10 font-bold mt-0.5" style={{ color: injuryProneness(player) === "Skör" ? C.loss : injuryProneness(player) === "Robust" ? C.win : C.inkSoft }}>{injuryProneness(player)}</div>
+          </div>
+          <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
+            <div className="flex items-center justify-between">
+              <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: clutchFactor(player) >= 0.6 ? "rgba(63,143,107,0.15)" : clutchFactor(player) <= -0.6 ? "rgba(180,68,59,0.15)" : "rgba(92,107,96,0.12)" }}>🔥</span>
+            </div>
+            <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Storform</div>
+            <div className="text-10 font-bold mt-0.5" style={{ color: clutchFactor(player) >= 0.6 ? C.win : clutchFactor(player) <= -0.6 ? C.loss : C.inkSoft }}>{clutchLabel(clutchFactor(player))}</div>
+          </div>
+          <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
+            <div className="flex items-center justify-between">
+              <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: `${attrQualityColor(endurance(player))}22` }}>🔋</span>
+              <span className="font-mono text-11 font-bold" style={{ color: C.ink }}>{endurance(player)}</span>
+            </div>
+            <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Uthållighet</div>
+          </div>
+          <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
+            <div className="flex items-center justify-between">
+              <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: `${attrQualityColor(determination(player))}22` }}>🎓</span>
+              <span className="font-mono text-11 font-bold" style={{ color: C.ink }}>{determination(player)}</span>
+            </div>
+            <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Beslutsamhet</div>
+          </div>
+        </div>
+      </PaperCard>
+
+      {moves.length > 0 && (
+        <PaperCard style={{ padding: 0 }}>
+          <div className="px-3 pt-3 pb-2 text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Övergångshistorik</div>
+          {moves.map((t, i) => (
+            <div key={t.id} className="flex items-center gap-2.5 px-3 py-2" style={{ borderTop: i === 0 ? "none" : "1px solid rgba(30,42,34,0.08)" }}>
+              <div className="flex-1 min-w-0 text-11" style={{ color: C.inkSoft }}>
+                <ClubJersey club={{ id: t.fromClubId, color: t.fromColor }} size={16} /> {t.fromClubName} → <ClubJersey club={{ id: t.toClubId, color: t.toColor }} size={16} /> {t.toClubName || "Okänd köpare"}
+                <div className="text-9 mt-0.5">Säsong {t.season}</div>
+              </div>
+              <div className="font-mono text-sm font-bold shrink-0">{formatMoney(t.fee)}</div>
+            </div>
+          ))}
+        </PaperCard>
+      )}
+
+      {onNegotiate && (
+        <button onClick={() => onNegotiate(player, club)} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Förhandla</button>
+      )}
+    </div>
+  );
+}
 // Permanent list of every player you've scouted, sourced from g.scoutedPlayers — survives dismissing a
 // scout mission or the scout report screen. Tries to show live, up-to-date stats for players who still
 // exist in a club squad or the world pool; falls back to the stored snapshot for synthetic scout-mission
 // finds (which exist nowhere else) or players who've since moved on.
-function ScoutListView({ scoutedPlayers, clubs, worldPool, onNegotiate, onBack }) {
+function ScoutListView({ scoutedPlayers, clubs, worldPool, transferHistory, onNegotiate, onBack }) {
+  const [viewingId, setViewingId] = useState(null);
   const rows = [...(scoutedPlayers || [])].reverse().map(snap => {
     let live = null;
     if (snap.clubId && clubs[snap.clubId]) {
@@ -13006,6 +13164,10 @@ function ScoutListView({ scoutedPlayers, clubs, worldPool, onNegotiate, onBack }
     const player = live ? { ...live, clubId: live.clubId ?? snap.clubId ?? null, region: live.region ?? snap.region ?? null } : snap;
     return { player, club: player.clubId ? clubs[player.clubId] : null };
   });
+  if (viewingId) {
+    const row = rows.find(r => r.player.id === viewingId);
+    if (row) return <ScoutedPlayerProfile player={row.player} club={row.club} transferHistory={transferHistory} onNegotiate={onNegotiate} onBack={() => setViewingId(null)} />;
+  }
   return (
     <div className="rise-in space-y-3">
       <button onClick={onBack} className="text-sm mb-1" style={{ color: C.goldSoft }}>← Tillbaka</button>
@@ -13018,7 +13180,7 @@ function ScoutListView({ scoutedPlayers, clubs, worldPool, onNegotiate, onBack }
             const pOverall = overallOf(p);
             return (
               <PaperCard key={p.id} style={{ padding: 10 }}>
-                <div className="flex items-center gap-2.5">
+                <button onClick={() => setViewingId(p.id)} className="w-full flex items-center gap-2.5 text-left">
                   <div style={{ position: "relative", width: 30, height: 30, flexShrink: 0 }}>
                     <PlayerAvatar player={p} size={30} />
                     <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={pOverall} size={16} /></div>
@@ -13028,7 +13190,7 @@ function ScoutListView({ scoutedPlayers, clubs, worldPool, onNegotiate, onBack }
                     <div className="font-mono text-9 mt-0.5 truncate" style={{ color: C.inkSoft }}>{POS_LABEL[p.pos]} ({specificPositionLabel(p.specificPosition)}) · {p.age} år</div>
                     <div className="font-mono text-9 truncate" style={{ color: C.inkSoft }}>{club ? club.name : (p.club || "Fri agent")}</div>
                   </div>
-                </div>
+                </button>
                 <div className="flex items-center justify-between mt-1.5">
                   <StarRating rating={overallToStars(pOverall)} size={7} />
                   <div className="font-mono text-11 font-semibold shrink-0">{formatMoney(p.value)}</div>
@@ -13452,7 +13614,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
   if (showOwnHistory) return <OwnTransferHistoryView transferHistory={transferHistory} userClubId={userClubId} currentSeason={season} onBack={() => setShowOwnHistory(false)} />;
   if (showGlobalTransfers) return <GlobalTransfersView transferHistory={transferHistory} userClubId={userClubId} onBack={() => setShowGlobalTransfers(false)} />;
   if (showClubBrowser) return <ClubSquadBrowserView clubs={clubs} userClubId={userClubId} homeLeagueId={leagueId} budget={budget} reputation={reputation} difficulty={difficulty} clubGoodwill={clubGoodwill} partnerClubId={partnerClubId} onNegotiationFailed={onNegotiationFailed} onFinalize={onFinalizeClubBrowseTransfer} onInstantLoanFromPartner={onInstantLoanFromPartner} onBack={() => setShowClubBrowser(false)} scoutedPlayerIds={scoutedPlayerIds} pendingPlayerScouts={pendingPlayerScouts} onScoutPlayer={onScoutPlayer} round={round} initialClubId={browseTargetClubId} transferHistory={transferHistory} />;
-  if (showScoutList) return <ScoutListView scoutedPlayers={scoutedPlayers} clubs={clubs} worldPool={worldPool} onBack={() => setShowScoutList(false)} onNegotiate={(player, club) => setNegotiatingListedPlayer({ player, club })} />;
+  if (showScoutList) return <ScoutListView scoutedPlayers={scoutedPlayers} clubs={clubs} worldPool={worldPool} transferHistory={transferHistory} onBack={() => setShowScoutList(false)} onNegotiate={(player, club) => setNegotiatingListedPlayer({ player, club })} />;
 
   if (negotiatingListedPlayer) {
     const { player: lp, club: lc } = negotiatingListedPlayer;
