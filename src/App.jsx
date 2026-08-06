@@ -2230,17 +2230,42 @@ function parseFormation(code) {
   });
   return slots;
 }
+// Fit-based greedy assignment, run separately WITHIN each broad role first (see selectAiLineup for the
+// full reasoning): matching purely "first pool-order player of the right broad category" used to hand a
+// slot to whoever happened to sort first, with zero regard for which specific slot (CB vs VB vs a
+// wing-back) actually suited them — a natural center-back could land at right-back while an actual
+// full-back sat unused elsewhere in the same broad category. Auto-fill (new career setup, switching
+// formations) now places the best-FITTING player in each specific slot instead.
 function autoAssignFormation(slots, squad, xiIds) {
   const pool = xiIds.map(id => squad.find(p => p.id === id)).filter(Boolean);
-  const used = new Set();
+  const byRole = { MV: [], FÖ: [], MF: [], AN: [] };
+  pool.forEach(p => { (byRole[p.pos] || byRole.MF).push(p); });
   const map = {};
-  slots.forEach(slot => {
-    const match = pool.find(p => !used.has(p.id) && p.pos === slot.role);
-    if (match) { map[slot.id] = match.id; used.add(match.id); }
-  });
-  const leftoverSlots = slots.filter(s => !map[s.id]);
-  const leftoverPlayers = pool.filter(p => !used.has(p.id));
-  leftoverSlots.forEach((slot, i) => { if (leftoverPlayers[i]) { map[slot.id] = leftoverPlayers[i].id; used.add(leftoverPlayers[i].id); } });
+  const assignGreedy = (slotList, playerList) => {
+    const remSlots = [...slotList];
+    const remPlayers = [...playerList];
+    while (remSlots.length && remPlayers.length) {
+      let bestSi = 0, bestPi = 0, bestFit = -1, bestOverall = -1;
+      remSlots.forEach((slot, si) => {
+        const [col, row] = slot.id.split("-").map(Number);
+        remPlayers.forEach((p, pi) => {
+          const f = effectivePositionFit(p, col, row);
+          const o = effectiveOverall(p);
+          if (f > bestFit || (f === bestFit && o > bestOverall)) { bestFit = f; bestOverall = o; bestSi = si; bestPi = pi; }
+        });
+      });
+      map[remSlots[bestSi].id] = remPlayers[bestPi].id;
+      remSlots.splice(bestSi, 1);
+      remPlayers.splice(bestPi, 1);
+    }
+  };
+  const rolesPresent = new Set(slots.map(s => s.role));
+  rolesPresent.forEach(role => { assignGreedy(slots.filter(s => s.role === role), byRole[role] || []); });
+  const unfilledSlots = slots.filter(s => !map[s.id]);
+  if (unfilledSlots.length) {
+    const usedIds = new Set(Object.values(map));
+    assignGreedy(unfilledSlots, pool.filter(p => !usedIds.has(p.id)));
+  }
   return map;
 }
 // Shared by the user's own formation editor (formationPresetToCells) and the AI lineup builder below —
@@ -2292,36 +2317,46 @@ function selectAiLineup(club, matchContext) {
   const buckets = { MV: [], FÖ: [], MF: [], AN: [] };
   pool.forEach(p => { (buckets[p.pos] || buckets.MF).push(p); });
   Object.values(buckets).forEach(arr => arr.sort(byEffOverall));
-  const chosen = [];
-  Object.entries(neededByRole).forEach(([role, n]) => { chosen.push(...(buckets[role] || []).slice(0, n)); });
-  const chosenIds = new Set(chosen.map(p => p.id));
-  if (slots.length > chosen.length) {
-    // A genuine crisis (several defenders out at once, say) still needs 11 names out — but who fills the
-    // gap matters. Handing every remaining available player to the fit-based assignment below (rather than
-    // pre-picking whoever rates highest overall) lets it find the most sensible emergency cover — a
-    // central midfielder pressed into a back four — instead of blindly grabbing the best-rated player
-    // regardless of position, which could land a winger at right-back.
-    chosen.push(...pool.filter(p => p.pos !== "MV" && !chosenIds.has(p.id)));
-  }
-  // Greedy best-fit-first assignment across every remaining (slot, player) pair — simple, but more than
-  // good enough for 11-ish slots and players. Ties on fit break toward the better player, so among several
-  // similarly-awkward emergency options the stronger one still gets picked.
-  const remSlots = [...slots];
-  const remPlayers = [...chosen];
+  const chosenByRole = {};
+  Object.entries(neededByRole).forEach(([role, n]) => { chosenByRole[role] = (buckets[role] || []).slice(0, n); });
+  // Greedy best-fit-first assignment, run separately WITHIN each broad role first — a central midfielder's
+  // anchor (col 2) sits right next to a wing-back's (also col 2), so letting the greedy match run globally
+  // across every role at once could let a real CDM "steal" a defensive slot from an actual defender purely
+  // because of that column overlap, cascading until a genuine striker gets bumped into defense with nobody
+  // ever actually being short a defender. Keeping each role's own players matched to its own slots first
+  // rules that out entirely; only a genuine numeric shortfall in a role reaches the cross-role fallback below.
   const cellMap = {};
-  while (remSlots.length && remPlayers.length) {
-    let bestSi = 0, bestPi = 0, bestFit = -1, bestOverall = -1;
-    remSlots.forEach((slot, si) => {
-      const [col, row] = slot.id.split("-").map(Number);
-      remPlayers.forEach((p, pi) => {
-        const f = effectivePositionFit(p, col, row);
-        const o = effectiveOverall(p);
-        if (f > bestFit || (f === bestFit && o > bestOverall)) { bestFit = f; bestOverall = o; bestSi = si; bestPi = pi; }
+  const assignGreedy = (slotList, playerList) => {
+    const remSlots = [...slotList];
+    const remPlayers = [...playerList];
+    while (remSlots.length && remPlayers.length) {
+      let bestSi = 0, bestPi = 0, bestFit = -1, bestOverall = -1;
+      remSlots.forEach((slot, si) => {
+        const [col, row] = slot.id.split("-").map(Number);
+        remPlayers.forEach((p, pi) => {
+          const f = effectivePositionFit(p, col, row);
+          const o = effectiveOverall(p);
+          if (f > bestFit || (f === bestFit && o > bestOverall)) { bestFit = f; bestOverall = o; bestSi = si; bestPi = pi; }
+        });
       });
-    });
-    cellMap[remSlots[bestSi].id] = remPlayers[bestPi].id;
-    remSlots.splice(bestSi, 1);
-    remPlayers.splice(bestPi, 1);
+      cellMap[remSlots[bestSi].id] = remPlayers[bestPi].id;
+      remSlots.splice(bestSi, 1);
+      remPlayers.splice(bestPi, 1);
+    }
+  };
+  Object.keys(neededByRole).forEach(role => {
+    assignGreedy(slots.filter(s => s.role === role), chosenByRole[role]);
+  });
+  const unfilledSlots = slots.filter(s => !cellMap[s.id]);
+  if (unfilledSlots.length) {
+    // A genuine crisis (several defenders out at once, say) still needs 11 names out — but who fills the
+    // gap matters. Handing every remaining available player to the fit-based assignment (rather than
+    // pre-picking whoever rates highest overall) finds the most sensible emergency cover — a midfielder
+    // pressed into a back four — instead of blindly grabbing the best-rated player regardless of position,
+    // which could land a winger at right-back.
+    const usedIds = new Set(Object.values(cellMap));
+    const leftover = pool.filter(p => p.pos !== "MV" && !usedIds.has(p.id));
+    assignGreedy(unfilledSlots, leftover);
   }
   const xi = Object.values(cellMap).map(id => squad.find(p => p.id === id)).filter(Boolean);
   const fitScore = teamPositionFit(cellMap, squad);
@@ -11627,7 +11662,7 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
             const leftPct = (row + 0.5) / GRID_ROWS * 100, topPct = (GRID_COLS - 1 - col + 0.5) / GRID_COLS * 100;
             const isSlotSelected = selectedSlotKey === key;
             if (!player) return null;
-            const fit = positionFit(player.specificPosition, col, row);
+            const fit = effectivePositionFit(player, col, row);
             const unavailable = player.injuryWeeks > 0 || player.suspendedMatches > 0 || player.internationalDuty;
             const fitColor = unavailable ? C.loss : fit >= 0.8 ? C.win : fit >= 0.55 ? C.gold : C.loss;
             const isDragging = dragTileId === player.id;
@@ -11806,7 +11841,7 @@ function OpponentScoutView({ club, onBack }) {
             {starterRows.map(r => {
               const { col, row, player } = r;
               const leftPct = (row + 0.5) / GRID_ROWS * 100, topPct = (GRID_COLS - 1 - col + 0.5) / GRID_COLS * 100;
-              const fit = positionFit(player.specificPosition, col, row);
+              const fit = effectivePositionFit(player, col, row);
               const unavailable = player.injuryWeeks > 0 || player.suspendedMatches > 0 || player.internationalDuty;
               const fitColor = unavailable ? C.loss : fit >= 0.8 ? C.win : fit >= 0.55 ? C.gold : C.loss;
               return (
