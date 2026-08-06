@@ -2214,15 +2214,15 @@ function parseFormation(code) {
   const n = lines.length;
   const slots = [{ id: "gk", role: "MV", x: 6, y: 50 }];
   lines.forEach((count, li) => {
-    // A front line of exactly two should read as two central strikers (ST) by default, not spread all the
-    // way to the wide edges like a back four or midfield four would — that's what previously turned "two
-    // strikers" into two wide attacking midfielders. It also needs to sit far enough forward to actually
-    // land on the striker column instead of the attacking-midfielder column just behind it.
-    const isNarrowAttackPair = li === n - 1 && count === 2;
-    const x = isNarrowAttackPair ? 94 : 22 + (n === 1 ? 0 : (li / (n - 1)) * 66);
+    // The last line is always the attacking line and must land on the true striker column (x=94), whatever
+    // its player count — 1, 2, or 3 — otherwise the generic spacing formula stops one column short and the
+    // striker slot gets mislabeled (and fit-scored) as an attacking-midfield slot instead.
+    const isLastLine = li === n - 1;
+    const isNarrowAttackPair = isLastLine && count === 2;
+    const x = isLastLine ? 94 : 22 + (n === 1 ? 0 : (li / (n - 1)) * 66);
     let role = "MF";
     if (li === 0) role = "FÖ";
-    else if (li === n - 1) role = "AN";
+    else if (isLastLine) role = "AN";
     for (let i = 0; i < count; i++) {
       const y = count === 1 ? 50 : isNarrowAttackPair ? 25 + i * 50 : 10 + (i / (count - 1)) * 80;
       slots.push({ id: `${li}-${i}`, role, x, y });
