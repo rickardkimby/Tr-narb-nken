@@ -2278,11 +2278,72 @@ function formationGridSlots(code) {
     role: s.role,
   })));
 }
-// A club plays one system all season, same as the user picking a formation and sticking with it —
-// deterministic from the club's own id so it's stable without needing any new persisted/migrated state.
+// Given a formation's slots and the pool of available players, picks the strongest player for each broad
+// role (by count needed) and greedily assigns them to whichever specific slot fits them best. Shared by
+// selectAiLineup (build the actual matchday XI) and aiFormationCode below (score every candidate formation
+// against a squad before committing to one) so the two can never disagree about what a given formation
+// would actually look like fielded.
+function buildAiLineupCells(slots, pool) {
+  const neededByRole = {};
+  slots.forEach(s => { neededByRole[s.role] = (neededByRole[s.role] || 0) + 1; });
+  const byEffOverall = (a, b) => effectiveOverall(b) - effectiveOverall(a);
+  const buckets = { MV: [], FÖ: [], MF: [], AN: [] };
+  pool.forEach(p => { (buckets[p.pos] || buckets.MF).push(p); });
+  Object.values(buckets).forEach(arr => arr.sort(byEffOverall));
+  const chosenByRole = {};
+  Object.entries(neededByRole).forEach(([role, n]) => { chosenByRole[role] = (buckets[role] || []).slice(0, n); });
+  const cellMap = {};
+  const assignGreedy = (slotList, playerList) => {
+    const remSlots = [...slotList];
+    const remPlayers = [...playerList];
+    while (remSlots.length && remPlayers.length) {
+      let bestSi = 0, bestPi = 0, bestFit = -1, bestOverall = -1;
+      remSlots.forEach((slot, si) => {
+        const [col, row] = slot.id.split("-").map(Number);
+        remPlayers.forEach((p, pi) => {
+          const f = effectivePositionFit(p, col, row);
+          const o = effectiveOverall(p);
+          if (f > bestFit || (f === bestFit && o > bestOverall)) { bestFit = f; bestOverall = o; bestSi = si; bestPi = pi; }
+        });
+      });
+      cellMap[remSlots[bestSi].id] = remPlayers[bestPi].id;
+      remSlots.splice(bestSi, 1);
+      remPlayers.splice(bestPi, 1);
+    }
+  };
+  Object.keys(neededByRole).forEach(role => {
+    assignGreedy(slots.filter(s => s.role === role), chosenByRole[role]);
+  });
+  const unfilledSlots = slots.filter(s => !cellMap[s.id]);
+  if (unfilledSlots.length) {
+    const usedIds = new Set(Object.values(cellMap));
+    const leftover = pool.filter(p => p.pos !== "MV" && !usedIds.has(p.id));
+    assignGreedy(unfilledSlots, leftover);
+  }
+  return cellMap;
+}
+// A club plays one system all season, same as the user picking a formation and sticking with it — but which
+// system that is now comes from actually trying every formation against the club's own squad and keeping
+// whichever one lets its players line up closest to their natural positions, rather than a pure club-id coin
+// flip. A squad heavy on central midfielders and short on real full-backs will settle on a system that
+// doesn't need wing-backs, instead of forcing a CAM out to right wing-back every week because the dice said
+// so. Once computed the result gets persisted onto the club (see selectAiLineup's callers), so this full
+// evaluation only actually runs once per club rather than on every match.
 function aiFormationCode(club) {
-  const rng = seededRandom(String(club?.id || "unknown") + "formation");
-  return FORMATION_CODES[Math.floor(rng() * FORMATION_CODES.length)];
+  const squad = club?.squad || [];
+  if (!squad.length) {
+    const rng = seededRandom(String(club?.id || "unknown") + "formation");
+    return FORMATION_CODES[Math.floor(rng() * FORMATION_CODES.length)];
+  }
+  const fit = squad.filter(p => !(p.injuryWeeks > 0) && !(p.suspendedMatches > 0) && !p.internationalDuty);
+  const pool = fit.length ? fit : squad;
+  let bestCode = FORMATION_CODES[0], bestScore = -Infinity;
+  FORMATION_CODES.forEach(code => {
+    const cellMap = buildAiLineupCells(formationGridSlots(code), pool);
+    const score = teamPositionFit(cellMap, squad);
+    if (score > bestScore) { bestScore = score; bestCode = code; }
+  });
+  return bestCode;
 }
 // A big favorite (especially at home) leans toward "anfall"; a clear underdog (especially away) leans
 // toward "forsvar" — a pre-match proxy for a real manager reading the match situation, since instant
@@ -2311,53 +2372,7 @@ function selectAiLineup(club, matchContext) {
   const slots = formationGridSlots(code);
   const fit = squad.filter(p => !(p.injuryWeeks > 0) && !(p.suspendedMatches > 0) && !p.internationalDuty);
   const pool = fit.length ? fit : squad; // total availability crisis: field who you have rather than nobody
-  const neededByRole = {};
-  slots.forEach(s => { neededByRole[s.role] = (neededByRole[s.role] || 0) + 1; });
-  const byEffOverall = (a, b) => effectiveOverall(b) - effectiveOverall(a);
-  const buckets = { MV: [], FÖ: [], MF: [], AN: [] };
-  pool.forEach(p => { (buckets[p.pos] || buckets.MF).push(p); });
-  Object.values(buckets).forEach(arr => arr.sort(byEffOverall));
-  const chosenByRole = {};
-  Object.entries(neededByRole).forEach(([role, n]) => { chosenByRole[role] = (buckets[role] || []).slice(0, n); });
-  // Greedy best-fit-first assignment, run separately WITHIN each broad role first — a central midfielder's
-  // anchor (col 2) sits right next to a wing-back's (also col 2), so letting the greedy match run globally
-  // across every role at once could let a real CDM "steal" a defensive slot from an actual defender purely
-  // because of that column overlap, cascading until a genuine striker gets bumped into defense with nobody
-  // ever actually being short a defender. Keeping each role's own players matched to its own slots first
-  // rules that out entirely; only a genuine numeric shortfall in a role reaches the cross-role fallback below.
-  const cellMap = {};
-  const assignGreedy = (slotList, playerList) => {
-    const remSlots = [...slotList];
-    const remPlayers = [...playerList];
-    while (remSlots.length && remPlayers.length) {
-      let bestSi = 0, bestPi = 0, bestFit = -1, bestOverall = -1;
-      remSlots.forEach((slot, si) => {
-        const [col, row] = slot.id.split("-").map(Number);
-        remPlayers.forEach((p, pi) => {
-          const f = effectivePositionFit(p, col, row);
-          const o = effectiveOverall(p);
-          if (f > bestFit || (f === bestFit && o > bestOverall)) { bestFit = f; bestOverall = o; bestSi = si; bestPi = pi; }
-        });
-      });
-      cellMap[remSlots[bestSi].id] = remPlayers[bestPi].id;
-      remSlots.splice(bestSi, 1);
-      remPlayers.splice(bestPi, 1);
-    }
-  };
-  Object.keys(neededByRole).forEach(role => {
-    assignGreedy(slots.filter(s => s.role === role), chosenByRole[role]);
-  });
-  const unfilledSlots = slots.filter(s => !cellMap[s.id]);
-  if (unfilledSlots.length) {
-    // A genuine crisis (several defenders out at once, say) still needs 11 names out — but who fills the
-    // gap matters. Handing every remaining available player to the fit-based assignment (rather than
-    // pre-picking whoever rates highest overall) finds the most sensible emergency cover — a midfielder
-    // pressed into a back four — instead of blindly grabbing the best-rated player regardless of position,
-    // which could land a winger at right-back.
-    const usedIds = new Set(Object.values(cellMap));
-    const leftover = pool.filter(p => p.pos !== "MV" && !usedIds.has(p.id));
-    assignGreedy(unfilledSlots, leftover);
-  }
+  const cellMap = buildAiLineupCells(slots, pool);
   const xi = Object.values(cellMap).map(id => squad.find(p => p.id === id)).filter(Boolean);
   const fitScore = teamPositionFit(cellMap, squad);
   const tacticalStyle = club?.tacticalStyle || oppTacticalStyle(club);
