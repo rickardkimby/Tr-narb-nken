@@ -296,6 +296,14 @@ function effectivePositionFit(player, col, row) {
   const bonus = player?.trainedPositions?.[targetCode] || 0;
   return clamp(base + bonus, 0, 1);
 }
+// How far training can ever close the gap depends on how big a leap the target position already is from
+// the player's natural fit. A position that's already close (a CDM polishing up to CM) can be trained
+// nearly all the way to a perfect fit, but a genuinely distant one (a center-back retraining as a striker,
+// a winger retraining as a center-back) only ever becomes a passable emergency option at best — the
+// ceiling itself gets lower the further away the position is, not just the pace of getting there.
+function positionTrainingCeiling(baseFit) {
+  return clamp((baseFit - 0.3) * 0.7, 0.05, 0.35);
+}
 // Position training: a player can be actively trained toward a nearby-but-currently-weak ("red") position,
 // gradually gaining a genuine fit bonus there plus a small attribute nudge — represents deliberate positional
 // coaching, distinct from natural age-based development.
@@ -304,9 +312,11 @@ function tickPositionTraining(p) {
   const { position } = p.trainingTarget;
   const anchor = SPECIFIC_POSITION_LOOKUP[position];
   if (!anchor) return { ...p, trainingTarget: null };
+  const base = positionFit(p.specificPosition, anchor.col, anchor.row);
+  const ceiling = positionTrainingCeiling(base);
   const currentBonus = p.trainedPositions?.[position] || 0;
-  const gain = rnd(0.01, 0.025);
-  const newBonus = clamp(currentBonus + gain, 0, 0.35);
+  const gain = rnd(0.005, 0.012);
+  const newBonus = clamp(currentBonus + gain, 0, ceiling);
   let attack = p.attack, defense = p.defense;
   if (Math.random() < 0.35) {
     // Forward/attacking anchors (higher col) lean the nudge toward attack; defensive anchors toward defense.
@@ -12231,25 +12241,39 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
           return (
             <PaperCard>
               <div className="text-xs uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Positionsträning</div>
-              {active ? (
+              {active ? (() => {
+                const activeAnchor = SPECIFIC_POSITION_LOOKUP[active.position];
+                const activeCeiling = positionTrainingCeiling(positionFit(player.specificPosition, activeAnchor.col, activeAnchor.row));
+                const activeBonus = player.trainedPositions?.[active.position] || 0;
+                return (
+                  <>
+                    <div className="text-sm font-semibold">Tränar mot {active.position}</div>
+                    <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Passform-bonus hittills: +{Math.round(activeBonus * 100)}% av max +{Math.round(activeCeiling * 100)}% · {round - active.startedRound} omgångar in</div>
+                    <div style={{ height: 6, borderRadius: 3, background: "rgba(30,42,34,0.08)", overflow: "hidden", marginTop: 6 }}>
+                      <div style={{ height: "100%", width: `${clamp((activeBonus / activeCeiling) * 100, 2, 100)}%`, background: C.gold }} />
+                    </div>
+                    {activeCeiling <= 0.15 && (
+                      <div className="text-10 mt-1.5" style={{ color: C.inkSoft }}>En så pass avlägsen position kommer aldrig bli mer än en nödlösning, oavsett hur länge träningen fortsätter.</div>
+                    )}
+                    <button onClick={() => onCancelTraining(player.id)} className="w-full mt-2.5 py-2 rounded-xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.inkSoft }}>Avbryt träning</button>
+                  </>
+                );
+              })() : (
                 <>
-                  <div className="text-sm font-semibold">Tränar mot {active.position}</div>
-                  <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Passform-bonus hittills: +{Math.round((player.trainedPositions?.[active.position] || 0) * 100)}% · {round - active.startedRound} omgångar in</div>
-                  <div style={{ height: 6, borderRadius: 3, background: "rgba(30,42,34,0.08)", overflow: "hidden", marginTop: 6 }}>
-                    <div style={{ height: "100%", width: `${clamp(((player.trainedPositions?.[active.position] || 0) / 0.35) * 100, 2, 100)}%`, background: C.gold }} />
-                  </div>
-                  <button onClick={() => onCancelTraining(player.id)} className="w-full mt-2.5 py-2 rounded-xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.inkSoft }}>Avbryt träning</button>
-                </>
-              ) : (
-                <>
-                  <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Träna spelaren för att öka passform och relevanta egenskaper — antingen genom att perfektionera en position de redan behärskar väl, eller lära in en helt ny.</div>
+                  <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Träna spelaren för att öka passform och relevanta egenskaper — antingen genom att perfektionera en position de redan behärskar väl, eller lära in en helt ny. Hur mycket passformen kan öka begränsas av hur avlägsen positionen är — siffran inom parentes är taket för hur bra det någonsin kan bli.</div>
                   <div className="flex flex-wrap gap-1.5">
                     {eligible
-                      .map(code => { const anchor = SPECIFIC_POSITION_LOOKUP[code]; return { code, fit: effectivePositionFit(player, anchor.col, anchor.row) }; })
-                      .sort((a, b) => b.fit - a.fit)
-                      .map(({ code, fit }) => {
+                      .map(code => {
+                        const anchor = SPECIFIC_POSITION_LOOKUP[code];
+                        const fit = effectivePositionFit(player, anchor.col, anchor.row);
+                        const base = positionFit(player.specificPosition, anchor.col, anchor.row);
+                        const ceilingFit = clamp(base + positionTrainingCeiling(base), 0, 1);
+                        return { code, fit, ceilingFit };
+                      })
+                      .sort((a, b) => b.ceilingFit - a.ceilingFit)
+                      .map(({ code, fit, ceilingFit }) => {
                         const isPolish = fit >= 0.68;
-                        return <button key={code} onClick={() => onStartTraining(player.id, code)} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg" style={isPolish ? { background: "rgba(201,154,62,0.18)", border: `1px solid ${C.gold}`, color: "#B8862E" } : { background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>{code} ({Math.round(fit * 100)}%)</button>;
+                        return <button key={code} onClick={() => onStartTraining(player.id, code)} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg" style={isPolish ? { background: "rgba(201,154,62,0.18)", border: `1px solid ${C.gold}`, color: "#B8862E" } : { background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>{code} ({Math.round(fit * 100)}% → max {Math.round(ceilingFit * 100)}%)</button>;
                       })}
                   </div>
                 </>
