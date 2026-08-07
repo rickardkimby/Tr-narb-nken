@@ -1205,6 +1205,23 @@ function generateManager(clubCountry, division) {
 function computeWage(value, attack, defense) {
   return Math.max(4, Math.round(value * 0.011 + ((attack + defense) / 2) * 0.15));
 }
+// Transfer value prices roughly linearly across the normal quality range — this multiplier stays at 1x
+// all the way up to a genuinely elite peak, so ordinary squad economics are untouched. Past that point it
+// bends sharply upward: a scarcity premium for players who are actually among the best in the game, not
+// just "quite good" — the same idea youthProspectValue already applies to potential, applied here to
+// current first-team ability instead. Without this, every value formula in the game was flat-linear
+// against a 1-99 scale, which put an absolute ceiling around £900k-1M on ANY player regardless of quality
+// — a genuine world-class superstar cost about the same as a solid squad player.
+// Driven by the HIGHER of attack/defense, not their average — a pure specialist (a world-class goalkeeper
+// or an out-and-out poacher) has one of those two numbers sitting low by design, since it barely applies
+// to their job. Averaging it in would wash out exactly the players this exists to correctly price: the
+// best goalkeeper or striker in the game would otherwise look "merely decent" on the diluted average and
+// stay cheap forever, no matter how convex the curve is.
+function eliteValueMultiplier(attack, defense) {
+  const peak = Math.max(attack, defense);
+  if (peak <= 75) return 1;
+  return 1 + Math.pow(clamp((peak - 75) / 24, 0, 1), 2.4) * 11;
+}
 const PERSONALITIES = ["Balanserad", "Balanserad", "Balanserad", "Balanserad", "Balanserad", "Ledare", "Lojal", "Ambitiös", "Problemspelare"];
 const PERSONALITY_DESC = {
   Balanserad: "Inga särskilda utmärkande drag.",
@@ -1226,7 +1243,7 @@ function makePlayer(pos, homeCountry, forcedSpecificPosition, archetype, divisio
   attack = clamp(attack + shift, 15, 96);
   defense = clamp(defense + shift, 15, 96);
   if (youthSlot) { attack = clamp(Math.round(attack * 0.82), 15, 90); defense = clamp(Math.round(defense * 0.82), 15, 90); }
-  const value = Math.round((((attack + defense) / 2) * 8 + rndInt(-25, 35)) * 1.1);
+  const value = Math.round((((attack + defense) / 2) * 8 + rndInt(-25, 35)) * 1.1 * eliteValueMultiplier(attack, defense));
   const nationality = homeCountry ? randomDomesticNationality(homeCountry) : pick(NATIONALITY_KEYS);
   const age = youthSlot ? rndInt(18, 21) : rndInt(18, 33);
   const finalValue = Math.max(40, value);
@@ -1338,7 +1355,7 @@ function makeScoutPlayer(pos, region, rating, clubs) {
   else { attack = rndInt(60, 84); defense = rndInt(22, 45); }
   attack = clamp(Math.round((attack + bias.attack) * scale), 20, 97);
   defense = clamp(Math.round((defense + bias.defense) * scale), 20, 97);
-  const value = Math.max(60, Math.round((((attack + defense) / 2) * 8 * bias.priceMult + rndInt(-25, 35)) * 1.1));
+  const value = Math.max(60, Math.round((((attack + defense) / 2) * 8 * bias.priceMult + rndInt(-25, 35)) * 1.1 * eliteValueMultiplier(attack, defense)));
   const nationality = bias.nationality || pick(EUROPEAN_NATIONALITIES);
   const age = rndInt(19, 31);
   const clubId = clubs ? pickOwningClub(clubs, (attack + defense) / 2) : null;
@@ -1362,7 +1379,7 @@ function generateWorldPoolPlayer(region) {
   else { attack = clamp(Math.round(tierBase * 1.1), 15, 92); defense = clamp(Math.round(tierBase * 0.4), 15, 70); }
   attack = clamp(Math.round(attack + bias.attack), 15, 95);
   defense = clamp(Math.round(defense + bias.defense), 15, 95);
-  const value = Math.max(50, Math.round((((attack + defense) / 2) * 7.5 * bias.priceMult + rndInt(-20, 30)) * 1.05));
+  const value = Math.max(50, Math.round((((attack + defense) / 2) * 7.5 * bias.priceMult + rndInt(-20, 30)) * 1.05 * eliteValueMultiplier(attack, defense)));
   const nationality = bias.nationality || pick(EUROPEAN_NATIONALITIES);
   const age = rndInt(18, 32);
   const player = { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition: randomSpecificPosition(pos), attack, defense, value, wage: computeWage(value, attack, defense), region, contractYears: rndInt(1, 4), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, apps: 0, goals: 0, assists: 0, ratingSum: 0 };
@@ -7207,7 +7224,7 @@ function excelRowsToWorld(clubRows, playerRows, youthRows) {
     // with what the player actually is (a database has turned up with an inverse correlation between
     // Overall and Värde). Derive both from attack/defense the same way a freshly generated player's are
     // — the sheet's own numbers only survive as a fallback when attack/defense are missing.
-    const value = (attack !== undefined && defense !== undefined) ? Math.max(40, Math.round(((attack + defense) / 2) * 8.8)) : num(row.Värde);
+    const value = (attack !== undefined && defense !== undefined) ? Math.max(40, Math.round(((attack + defense) / 2) * 8.8 * eliteValueMultiplier(attack, defense))) : num(row.Värde);
     world[clubId].squad.push({
       id: String(row.SpelarID || "").trim(), name: String(row.Namn || "").trim(), number: num(row.Nummer),
       age: num(row.Ålder), pos: String(row.Position || "").trim(), specificPosition: String(row.SpecifikPosition || "").trim(),
@@ -7300,7 +7317,7 @@ function excelRowsToWorldPool(rows) {
     // completely different scale than the rest of the game (seen in an imported database: Övriga världen
     // players priced at 100-200M vs. an 11M storklubb budget). Derive both from attack/defense the same
     // way a freshly generated world-pool player's are — the sheet's own numbers only survive as a fallback.
-    const value = (attack !== undefined && defense !== undefined) ? Math.max(40, Math.round(((attack + defense) / 2) * 8.8)) : num(row.Värde);
+    const value = (attack !== undefined && defense !== undefined) ? Math.max(40, Math.round(((attack + defense) / 2) * 8.8 * eliteValueMultiplier(attack, defense))) : num(row.Värde);
     pool[region].push({
       id: String(row.SpelarID || "").trim() || uid(), name: String(row.Namn || "").trim(),
       age: num(row.Ålder), pos: String(row.Position || "").trim(), specificPosition: String(row.SpecifikPosition || "").trim(),
