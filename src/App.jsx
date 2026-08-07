@@ -11968,6 +11968,99 @@ function ContractsView({ squad, onBack, onSelectPlayer }) {
     </div>
   );
 }
+const SQUAD_STATS_SORT_OPTIONS = [
+  { key: "goals", label: "Mål" },
+  { key: "assists", label: "Assist" },
+  { key: "apps", label: "Matcher" },
+  { key: "cards", label: "Kort" },
+  { key: "rating", label: "Betyg" },
+  { key: "form", label: "Form" },
+];
+function SquadStatsView({ squad, onBack, onSelectPlayer }) {
+  const [posFilter, setPosFilter] = useState(null);
+  const [sortBy, setSortBy] = useState("goals");
+  const [sortDir, setSortDir] = useState("desc");
+
+  function toggleSort(key) {
+    if (sortBy === key) { setSortDir(d => d === "asc" ? "desc" : "asc"); return; }
+    setSortBy(key);
+    setSortDir("desc");
+  }
+
+  const ratingColor = r => r >= 7.2 ? C.win : r >= 6 ? C.inkSoft : C.loss;
+  const rows = squad.map(p => {
+    const recentList = p.recentRatings || [];
+    return {
+      p, apps: p.apps || 0, goals: p.goals || 0, assists: p.assists || 0, cards: p.yellowCards || 0,
+      rating: p.apps ? p.ratingSum / p.apps : null,
+      form: recentList.length ? recentList.reduce((s, r) => s + r, 0) / recentList.length : null,
+    };
+  });
+  const filtered = posFilter ? rows.filter(r => r.p.pos === posFilter) : rows;
+  const sorted = [...filtered].sort((a, b) => {
+    const av = a[sortBy] ?? -1, bv = b[sortBy] ?? -1;
+    return sortDir === "asc" ? av - bv : bv - av;
+  });
+
+  return (
+    <div className="rise-in space-y-2.5">
+      <button onClick={onBack} style={{ position: "fixed", bottom: 14, right: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Bakåt</button>
+      <div>
+        <div className="text-xs uppercase tracking-wide font-semibold mb-2 px-1" style={{ color: C.paperDim }}>Position</div>
+        <div className="flex flex-wrap gap-2">
+          {[null, ...POS_ORDER].map(pos => {
+            const active = posFilter === pos;
+            return (
+              <button key={pos || "alla"} onClick={() => setPosFilter(pos)} className="px-3 py-1.5 rounded-full text-11 font-semibold"
+                style={active ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>
+                {pos ? POS_LABEL[pos] : "Alla"}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div>
+        <div className="text-xs uppercase tracking-wide font-semibold mb-2 px-1" style={{ color: C.paperDim }}>Sortera efter</div>
+        <div className="flex flex-wrap gap-2">
+          {SQUAD_STATS_SORT_OPTIONS.map(opt => {
+            const active = sortBy === opt.key;
+            return (
+              <button key={opt.key} onClick={() => toggleSort(opt.key)} className="px-3 py-1.5 rounded-full text-11 font-semibold flex items-center gap-1"
+                style={active ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.08)", color: C.paperDim }}>
+                {opt.label}{active && <span>{sortDir === "asc" ? "↑" : "↓"}</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <PaperCard style={{ padding: 0 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.8fr 0.55fr 0.55fr 0.55fr 0.55fr 0.7fr 0.7fr" }} className="px-3 pt-3 pb-2 text-9 uppercase font-semibold">
+          <span style={{ color: C.inkSoft }}>Spelare</span>
+          <span className="text-center" style={{ color: sortBy === "apps" ? C.gold : C.inkSoft }}>M</span>
+          <span className="text-center" style={{ color: sortBy === "goals" ? C.gold : C.inkSoft }}>Mål</span>
+          <span className="text-center" style={{ color: sortBy === "assists" ? C.gold : C.inkSoft }}>Ass</span>
+          <span className="text-center" style={{ color: sortBy === "cards" ? C.gold : C.inkSoft }}>🟨</span>
+          <span className="text-center" style={{ color: sortBy === "rating" ? C.gold : C.inkSoft }}>Betyg</span>
+          <span className="text-center" style={{ color: sortBy === "form" ? C.gold : C.inkSoft }}>Form</span>
+        </div>
+        {sorted.map(({ p, apps, goals, assists, cards, rating, form }) => (
+          <button key={p.id} onClick={() => onSelectPlayer(p.id)} className="w-full text-left player-row" style={{ borderTop: `1px solid rgba(30,42,34,0.08)`, display: "block" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1.8fr 0.55fr 0.55fr 0.55fr 0.55fr 0.7fr 0.7fr" }} className="px-3 py-2.5 items-center text-sm font-mono">
+              <span className="font-sans font-medium truncate min-w-0 flex items-center gap-1.5" style={{ color: C.ink }}><PlayerAvatar player={p} size={20} /><span><span style={{ color: C.inkSoft }}>#{p.number}</span> {p.name} <span className="text-9" style={{ color: C.inkSoft }}>{p.specificPosition}</span></span></span>
+              <span className="text-center" style={{ color: C.inkSoft }}>{apps}</span>
+              <span className="text-center font-semibold" style={{ color: goals > 0 ? C.win : C.inkSoft }}>{goals}</span>
+              <span className="text-center" style={{ color: C.inkSoft }}>{assists}</span>
+              <span className="text-center" style={{ color: cards >= 4 ? C.loss : C.inkSoft }}>{cards}</span>
+              <span className="text-center font-semibold" style={{ color: rating != null ? ratingColor(rating) : C.inkSoft }}>{rating != null ? rating.toFixed(1) : "–"}</span>
+              <span className="text-center" style={{ color: form != null ? ratingColor(form) : C.inkSoft }}>{form != null ? form.toFixed(1) : "–"}</span>
+            </div>
+          </button>
+        ))}
+        {!sorted.length && <div className="px-3 py-4 text-sm text-center" style={{ color: C.inkSoft }}>Inga spelare matchar filtret.</div>}
+      </PaperCard>
+    </div>
+  );
+}
 
 
 function TacticsPanel({ squad, startingXI, tactic, onTactic, tacticalSettings, onSetTactical, spelide, onSetSpelide, captainId, onSetCaptain, onBack }) {
@@ -12049,11 +12142,16 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
   const [showSetPieces, setShowSetPieces] = useState(false);
   const [showTactics, setShowTactics] = useState(false);
   const [showAkademi, setShowAkademi] = useState(false);
+  const [showStatistik, setShowStatistik] = useState(false);
   useEffect(() => {
     if (pendingSelectedPlayerId) { setSelectedId(pendingSelectedPlayerId); onClearPendingSelection?.(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingSelectedPlayerId]);
-  useEffect(() => { onSubViewChange?.(!!selectedId || showContracts || showSetPieces || showTactics || showAkademi); }, [selectedId, showContracts, showSetPieces, showTactics, showAkademi]);
+  useEffect(() => { onSubViewChange?.(!!selectedId || showContracts || showSetPieces || showTactics || showAkademi || showStatistik); }, [selectedId, showContracts, showSetPieces, showTactics, showAkademi, showStatistik]);
+
+  if (showStatistik) {
+    return <SquadStatsView squad={squad} onBack={() => setShowStatistik(false)} onSelectPlayer={id => { setShowStatistik(false); setSelectedId(id); }} />;
+  }
 
   if (showTactics) {
     return <TacticsPanel squad={squad} startingXI={startingXI} tactic={tactic} onTactic={onTactic} tacticalSettings={tacticalSettings} onSetTactical={onSetTactical}
@@ -12095,14 +12193,15 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
   }, 0) / startingXIPlayers.length) : squadOverallRating(squad);
   return (
     <div className="rise-in space-y-2.5">
-      <div className="grid grid-cols-4 gap-1.5">
-        <button onClick={() => setShowContracts(true)} className="py-1 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim, position: "relative" }}>
+      <div className="grid grid-cols-5 gap-1">
+        <button onClick={() => setShowContracts(true)} className="py-1 px-0.5 rounded-lg text-9 font-semibold truncate" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim, position: "relative" }}>
           Kontrakt
           {squad.filter(p => p.contractYears <= 1).length > 0 && <span style={{ position: "absolute", top: -4, right: -4, width: 9, height: 9, borderRadius: "50%", background: "#D9534F", border: `1.5px solid ${C.turfDeep}` }} />}
         </button>
-        <button onClick={() => setShowTactics(true)} className="py-1 rounded-lg text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Taktik</button>
-        <button onClick={() => setShowAkademi(true)} className="py-1 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim }}>Akademi</button>
-        <button onClick={() => setShowSetPieces(true)} className="py-1 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim }}>Standard</button>
+        <button onClick={() => setShowTactics(true)} className="py-1 px-0.5 rounded-lg text-9 font-semibold truncate" style={{ background: C.gold, color: C.turfDeep }}>Taktik</button>
+        <button onClick={() => setShowAkademi(true)} className="py-1 px-0.5 rounded-lg text-9 font-semibold truncate" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim }}>Akademi</button>
+        <button onClick={() => setShowSetPieces(true)} className="py-1 px-0.5 rounded-lg text-9 font-semibold truncate" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim }}>Standard</button>
+        <button onClick={() => setShowStatistik(true)} className="py-1 px-0.5 rounded-lg text-9 font-semibold truncate" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paperDim }}>Statistik</button>
       </div>
       {outgoingLoans && outgoingLoans.length > 0 && (
         <PaperCard>
@@ -12228,6 +12327,57 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
 
       {profileTab === "oversikt" && (
         <>
+        <PaperCard>
+          <div className="text-9 uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Egenskaper</div>
+          <div className="grid grid-cols-3 gap-1.5">
+            {Object.entries(labels).map(([key, label]) => <AttributeGridCard key={key} attrKey={key} label={label} value={attrs[key]} />)}
+          </div>
+          <div className="text-9 uppercase tracking-wide font-semibold mt-3 mb-1.5" style={{ color: C.inkSoft }}>Ytterligare egenskaper</div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
+              <div className="flex items-center justify-between">
+                <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: "rgba(201,154,62,0.13)" }}>🦶</span>
+                <div className="flex gap-0.5">{[1, 2, 3, 4, 5].map(n => <Star key={n} size={9} fill={n <= weakFoot(player) ? C.gold : "none"} color={n <= weakFoot(player) ? C.gold : C.paperDim} />)}</div>
+              </div>
+              <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Svag fot</div>
+            </div>
+            <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
+              <div className="flex items-center justify-between">
+                <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: `${attrQualityColor(headingAbility(player))}22` }}>🎯</span>
+                <span className="font-mono text-11 font-bold" style={{ color: C.ink }}>{headingAbility(player)}</span>
+              </div>
+              <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Huvudspel</div>
+            </div>
+            <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
+              <div className="flex items-center justify-between">
+                <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: injuryProneness(player) === "Skör" ? "rgba(180,68,59,0.15)" : injuryProneness(player) === "Robust" ? "rgba(63,143,107,0.15)" : "rgba(92,107,96,0.12)" }}>🩹</span>
+              </div>
+              <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Skaderisk</div>
+              <div className="text-10 font-bold mt-0.5" style={{ color: injuryProneness(player) === "Skör" ? C.loss : injuryProneness(player) === "Robust" ? C.win : C.inkSoft }}>{injuryProneness(player)}</div>
+            </div>
+            <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
+              <div className="flex items-center justify-between">
+                <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: clutchFactor(player) >= 0.6 ? "rgba(63,143,107,0.15)" : clutchFactor(player) <= -0.6 ? "rgba(180,68,59,0.15)" : "rgba(92,107,96,0.12)" }}>🔥</span>
+              </div>
+              <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Storform</div>
+              <div className="text-10 font-bold mt-0.5" style={{ color: clutchFactor(player) >= 0.6 ? C.win : clutchFactor(player) <= -0.6 ? C.loss : C.inkSoft }}>{clutchLabel(clutchFactor(player))}</div>
+            </div>
+            <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
+              <div className="flex items-center justify-between">
+                <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: `${attrQualityColor(endurance(player))}22` }}>🔋</span>
+                <span className="font-mono text-11 font-bold" style={{ color: C.ink }}>{endurance(player)}</span>
+              </div>
+              <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Uthållighet</div>
+            </div>
+            <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
+              <div className="flex items-center justify-between">
+                <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: `${attrQualityColor(determination(player))}22` }}>🎓</span>
+                <span className="font-mono text-11 font-bold" style={{ color: C.ink }}>{determination(player)}</span>
+              </div>
+              <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Beslutsamhet</div>
+            </div>
+          </div>
+        </PaperCard>
         {(() => {
           const interested = computeInterestedClubs(player, clubs, userClubId, round);
           const recentlyHinted = player.hintedSaleRound != null && (round - player.hintedSaleRound) <= 10;
@@ -12317,55 +12467,6 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
             {milestones.map((m, i) => <span key={i} className="text-9 font-semibold px-2 py-1 rounded-full" style={{ background: "rgba(201,154,62,0.18)", color: C.gold }}>{m}</span>)}
           </div>
         )}
-        <div className="text-9 uppercase tracking-wide font-semibold mt-3 mb-1.5" style={{ color: C.inkSoft }}>Egenskaper</div>
-        <div className="grid grid-cols-3 gap-1.5">
-          {Object.entries(labels).map(([key, label]) => <AttributeGridCard key={key} attrKey={key} label={label} value={attrs[key]} />)}
-        </div>
-        <div className="text-9 uppercase tracking-wide font-semibold mt-3 mb-1.5" style={{ color: C.inkSoft }}>Ytterligare egenskaper</div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
-            <div className="flex items-center justify-between">
-              <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: "rgba(201,154,62,0.13)" }}>🦶</span>
-              <div className="flex gap-0.5">{[1, 2, 3, 4, 5].map(n => <Star key={n} size={9} fill={n <= weakFoot(player) ? C.gold : "none"} color={n <= weakFoot(player) ? C.gold : C.paperDim} />)}</div>
-            </div>
-            <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Svag fot</div>
-          </div>
-          <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
-            <div className="flex items-center justify-between">
-              <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: `${attrQualityColor(headingAbility(player))}22` }}>🎯</span>
-              <span className="font-mono text-11 font-bold" style={{ color: C.ink }}>{headingAbility(player)}</span>
-            </div>
-            <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Huvudspel</div>
-          </div>
-          <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
-            <div className="flex items-center justify-between">
-              <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: injuryProneness(player) === "Skör" ? "rgba(180,68,59,0.15)" : injuryProneness(player) === "Robust" ? "rgba(63,143,107,0.15)" : "rgba(92,107,96,0.12)" }}>🩹</span>
-            </div>
-            <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Skaderisk</div>
-            <div className="text-10 font-bold mt-0.5" style={{ color: injuryProneness(player) === "Skör" ? C.loss : injuryProneness(player) === "Robust" ? C.win : C.inkSoft }}>{injuryProneness(player)}</div>
-          </div>
-          <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
-            <div className="flex items-center justify-between">
-              <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: clutchFactor(player) >= 0.6 ? "rgba(63,143,107,0.15)" : clutchFactor(player) <= -0.6 ? "rgba(180,68,59,0.15)" : "rgba(92,107,96,0.12)" }}>🔥</span>
-            </div>
-            <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Storform</div>
-            <div className="text-10 font-bold mt-0.5" style={{ color: clutchFactor(player) >= 0.6 ? C.win : clutchFactor(player) <= -0.6 ? C.loss : C.inkSoft }}>{clutchLabel(clutchFactor(player))}</div>
-          </div>
-          <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
-            <div className="flex items-center justify-between">
-              <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: `${attrQualityColor(endurance(player))}22` }}>🔋</span>
-              <span className="font-mono text-11 font-bold" style={{ color: C.ink }}>{endurance(player)}</span>
-            </div>
-            <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Uthållighet</div>
-          </div>
-          <div className="rounded-lg p-1.5" style={{ background: "#fff", border: "1px solid rgba(30,42,34,0.08)" }}>
-            <div className="flex items-center justify-between">
-              <span className="w-4 h-4 rounded-full flex items-center justify-center text-9 shrink-0" style={{ background: `${attrQualityColor(determination(player))}22` }}>🎓</span>
-              <span className="font-mono text-11 font-bold" style={{ color: C.ink }}>{determination(player)}</span>
-            </div>
-            <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Beslutsamhet</div>
-          </div>
-        </div>
         </PaperCard>
         </>
       )}
@@ -13093,30 +13194,8 @@ function ScoutedPlayerProfile({ player, club, transferHistory, onNegotiate, onBa
         {suspended && <div className="mt-2 text-11 font-semibold px-2.5 py-1.5 rounded-lg text-center" style={{ background: "rgba(180,68,59,0.15)", color: C.loss }}>Avstängd — {player.suspendedMatches} omgångar kvar</div>}
       </PaperCard>
 
-      {(player.scoutReports && player.scoutReports.length > 0) ? (
-        [...player.scoutReports].reverse().map((r, i) => (
-          <PaperCard key={i}>
-            <div className="flex items-center justify-between mb-1">
-              <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{r.source === "scout" ? "Scoutrapport" : "Ass. tränarens omdöme"}</div>
-              <div className="text-10" style={{ color: C.inkSoft }}>Säsong {r.season}</div>
-            </div>
-            <div className="text-11" style={{ color: C.ink }}>{r.comment}</div>
-          </PaperCard>
-        ))
-      ) : (
-        <PaperCard>
-          <div className="text-xs uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Ass. tränarens omdöme</div>
-          <div className="text-11" style={{ color: C.ink }}>{scoutComment(player)}</div>
-        </PaperCard>
-      )}
-
       <PaperCard>
-        <div className="grid grid-cols-3 gap-1.5 text-center">
-          <div><div className="font-display text-lg">{careerApps}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Matcher (karriär)</div></div>
-          <div><div className="font-display text-lg">{careerGoals}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Mål (karriär)</div></div>
-          <div><div className="font-display text-lg">{careerAssists}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Assist (karriär)</div></div>
-        </div>
-        <div className="text-9 uppercase tracking-wide font-semibold mt-3 mb-1.5" style={{ color: C.inkSoft }}>Egenskaper</div>
+        <div className="text-9 uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Egenskaper</div>
         <div className="grid grid-cols-3 gap-1.5">
           {Object.entries(labels).map(([key, label]) => <AttributeGridCard key={key} attrKey={key} label={label} value={attrs[key]} />)}
         </div>
@@ -13164,6 +13243,31 @@ function ScoutedPlayerProfile({ player, club, transferHistory, onNegotiate, onBa
             </div>
             <div className="text-9 font-semibold truncate mt-0.5" style={{ color: C.ink }}>Beslutsamhet</div>
           </div>
+        </div>
+      </PaperCard>
+
+      {(player.scoutReports && player.scoutReports.length > 0) ? (
+        [...player.scoutReports].reverse().map((r, i) => (
+          <PaperCard key={i}>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{r.source === "scout" ? "Scoutrapport" : "Ass. tränarens omdöme"}</div>
+              <div className="text-10" style={{ color: C.inkSoft }}>Säsong {r.season}</div>
+            </div>
+            <div className="text-11" style={{ color: C.ink }}>{r.comment}</div>
+          </PaperCard>
+        ))
+      ) : (
+        <PaperCard>
+          <div className="text-xs uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Ass. tränarens omdöme</div>
+          <div className="text-11" style={{ color: C.ink }}>{scoutComment(player)}</div>
+        </PaperCard>
+      )}
+
+      <PaperCard>
+        <div className="grid grid-cols-3 gap-1.5 text-center">
+          <div><div className="font-display text-lg">{careerApps}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Matcher (karriär)</div></div>
+          <div><div className="font-display text-lg">{careerGoals}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Mål (karriär)</div></div>
+          <div><div className="font-display text-lg">{careerAssists}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Assist (karriär)</div></div>
         </div>
       </PaperCard>
 
