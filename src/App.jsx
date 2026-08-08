@@ -3506,41 +3506,6 @@ function distributeMatchStats(squad, goalCount, playingIds) {
   const available = ticked.filter(p => p.injuryWeeks === 0 && p.suspendedMatches === 0 && !p.internationalDuty);
   const outfield = available.filter(p => p.pos !== "MV");
   if (!outfield.length) return ticked;
-  const scorerWeighted = [];
-  outfield.forEach(p => {
-    const posMult = p.pos === "AN" ? 2.2 : p.pos === "MF" ? 1.1 : 0.22;
-    const shooting = getAttrs(p).shooting;
-    const weight = Math.max(0, Math.round((shooting / 12) * posMult));
-    for (let i = 0; i < weight; i++) scorerWeighted.push(p.id);
-  });
-  const assistWeighted = [];
-  outfield.forEach(p => {
-    const posMult = p.pos === "MF" ? 2.4 : p.pos === "AN" ? 1.3 : 0.6;
-    const passing = getAttrs(p).passing;
-    const weight = Math.max(0, Math.round((passing / 14) * posMult));
-    for (let i = 0; i < weight; i++) assistWeighted.push(p.id);
-  });
-  const goalInc = {}, assistInc = {};
-  for (let i = 0; i < goalCount; i++) {
-    const scorerId = scorerWeighted.length ? pick(scorerWeighted) : pick(outfield).id;
-    goalInc[scorerId] = (goalInc[scorerId] || 0) + 1;
-    if (Math.random() < 0.78) {
-      const assisterId = assistWeighted.length ? pick(assistWeighted) : pick(outfield).id;
-      if (assisterId !== scorerId) assistInc[assisterId] = (assistInc[assisterId] || 0) + 1;
-    }
-  }
-  const yellowInc = new Set(), redInc = new Set();
-  available.forEach(p => {
-    if (p.pos === "MV") return; // goalkeepers essentially never pick up cards in open play
-    // Defenders and physical, duel-heavy players realistically rack up more cards than attackers —
-    // scaled by both position (more tackling/duels) and physical intensity.
-    const posMult = p.pos === "FÖ" ? 1.5 : p.pos === "MF" ? 1.15 : 0.7;
-    const physicalMult = 0.75 + (getAttrs(p).physical / 100) * 0.5;
-    const cardMult = posMult * physicalMult;
-    const roll = Math.random();
-    if (roll < 0.003 * cardMult) redInc.add(p.id);
-    else if (roll < 0.05 * cardMult) yellowInc.add(p.id);
-  });
   // The starting XI is normally the one selectAiLineup already picked for this exact match (formation,
   // fitness/form and real position fit all baked in) — the same lineup the scouting report shows and the
   // one that decided the scoreline. Falls back to a plain fitness/form-ranked top-11 only when no lineup
@@ -3551,6 +3516,51 @@ function distributeMatchStats(squad, goalCount, playingIds) {
     ? available.filter(p => (playingIds.has ? playingIds.has(p.id) : playingIds.includes(p.id)))
     : [keeper, ...rankedOutfield.slice(0, 10)].filter(Boolean);
   const playedIds = new Set(playedPlayers.map(p => p.id));
+  // Goals, assists and cards must only ever land on someone who actually took the pitch this match — a
+  // bench player who never left the dugout used to be just as eligible to "score" as the two strikers who
+  // actually started, since this was drawn from the whole fit squad (15-18 players) rather than the XI
+  // that actually played (~10 outfield). That diluted every club's real top scorer down toward a flat
+  // split across the whole squad instead of concentrating on whoever's actually nailed on up front.
+  const playedOutfield = playedPlayers.filter(p => p.pos !== "MV");
+  const scorerWeighted = [];
+  playedOutfield.forEach(p => {
+    // Sharpened toward forwards specifically (not just "more than defenders") — a flatter split still let
+    // a genuine nailed-on striker's chances get eaten into by four attacking midfielders each taking a
+    // real bite, which is exactly what kept a season's top scorer stuck around 8-10 goals instead of the
+    // 20-30 a real top-flight #9 nets.
+    const posMult = p.pos === "AN" ? 3.2 : p.pos === "MF" ? 0.85 : 0.12;
+    const shooting = getAttrs(p).shooting;
+    const weight = Math.max(0, Math.round((shooting / 12) * posMult));
+    for (let i = 0; i < weight; i++) scorerWeighted.push(p.id);
+  });
+  const assistWeighted = [];
+  playedOutfield.forEach(p => {
+    const posMult = p.pos === "MF" ? 2.4 : p.pos === "AN" ? 1.3 : 0.6;
+    const passing = getAttrs(p).passing;
+    const weight = Math.max(0, Math.round((passing / 14) * posMult));
+    for (let i = 0; i < weight; i++) assistWeighted.push(p.id);
+  });
+  const goalInc = {}, assistInc = {};
+  for (let i = 0; i < goalCount; i++) {
+    const scorerId = scorerWeighted.length ? pick(scorerWeighted) : pick(playedOutfield.length ? playedOutfield : outfield).id;
+    goalInc[scorerId] = (goalInc[scorerId] || 0) + 1;
+    if (Math.random() < 0.78) {
+      const assisterId = assistWeighted.length ? pick(assistWeighted) : pick(playedOutfield.length ? playedOutfield : outfield).id;
+      if (assisterId !== scorerId) assistInc[assisterId] = (assistInc[assisterId] || 0) + 1;
+    }
+  }
+  const yellowInc = new Set(), redInc = new Set();
+  playedPlayers.forEach(p => {
+    if (p.pos === "MV") return; // goalkeepers essentially never pick up cards in open play
+    // Defenders and physical, duel-heavy players realistically rack up more cards than attackers —
+    // scaled by both position (more tackling/duels) and physical intensity.
+    const posMult = p.pos === "FÖ" ? 1.5 : p.pos === "MF" ? 1.15 : 0.7;
+    const physicalMult = 0.75 + (getAttrs(p).physical / 100) * 0.5;
+    const cardMult = posMult * physicalMult;
+    const roll = Math.random();
+    if (roll < 0.003 * cardMult) redInc.add(p.id);
+    else if (roll < 0.05 * cardMult) yellowInc.add(p.id);
+  });
   // Same injury-risk shape as the user's own in-match roll (see finalizeMatch's baselineChance) — a
   // physically weaker, more injury-prone ("Skör" vs "Robust"), or already-tired player is genuinely more
   // likely to go down, not a single flat number for the whole league. No physio/difficulty discount since
@@ -3564,29 +3574,25 @@ function distributeMatchStats(squad, goalCount, playingIds) {
   return ticked.map(p => {
     const played = playedIds.has(p.id);
     const gotRed = redInc.has(p.id);
-    const hasStatChange = goalInc[p.id] || assistInc[p.id] || yellowInc.has(p.id) || gotRed;
     // Same recovery every unused player on the user's own bench gets between matches (see finalizeMatch) —
     // AI squads live under the identical stamina economy, not a frozen number. An international-duty
     // absence (see the availability filter above) lasts exactly this one match, then clears like the
     // user's own returning internationals.
-    if (!played && !hasStatChange) return { ...p, stamina: clamp((p.stamina ?? 100) + rndInt(28, 36), 0, 100), internationalDuty: false };
-    const rating = played ? clamp(6.1 + (goalInc[p.id] || 0) * 0.7 + (assistInc[p.id] || 0) * 0.4 - (gotRed ? 1.2 : 0) - (yellowInc.has(p.id) ? 0.15 : 0) + rnd(-0.5, 0.5), 3, 10) : 0;
+    if (!played) return { ...p, stamina: clamp((p.stamina ?? 100) + rndInt(28, 36), 0, 100), internationalDuty: false };
+    const rating = clamp(6.1 + (goalInc[p.id] || 0) * 0.7 + (assistInc[p.id] || 0) * 0.4 - (gotRed ? 1.2 : 0) - (yellowInc.has(p.id) ? 0.15 : 0) + rnd(-0.5, 0.5), 3, 10);
     // Same per-match depletion formula as the user's own starting XI (see finalizeMatch), minus the
-    // fitness-coach discount since AI clubs don't run a backroom staff of their own. A stat-only
-    // contribution from someone outside the notional XI (an impact sub) still recovers like a bench player.
-    const newStamina = played
-      ? clamp((p.stamina ?? 100) - Math.max(1, rndInt(4, 8) * enduranceMult(p)), 0, 100)
-      : clamp((p.stamina ?? 100) + rndInt(28, 36), 0, 100);
+    // fitness-coach discount since AI clubs don't run a backroom staff of their own.
+    const newStamina = clamp((p.stamina ?? 100) - Math.max(1, rndInt(4, 8) * enduranceMult(p)), 0, 100);
     // Same 5-yellow-cards-bans-you-a-match rule the user's own squad already lives under (see
     // finalizeMatch) — without this an AI player could rack up cards all season and never sit one out.
     let yellowCards = p.yellowCards || 0, suspendedMatches = p.suspendedMatches;
     if (gotRed) suspendedMatches += rndInt(1, 2);
     else if (yellowInc.has(p.id)) { yellowCards += 1; if (yellowCards >= 5) { suspendedMatches += 1; yellowCards -= 5; } }
     // Same match-by-match development as the user's own squad (see finalizeMatch's developmentDeltas
-    // call) — an AI player who actually played and rated well nudges up toward their potential a little
-    // each week, and a poor run nudges down, instead of only ever changing once a season at the age-based
+    // call) — an AI player who played and rated well nudges up toward their potential a little each
+    // week, and a poor run nudges down, instead of only ever changing once a season at the age-based
     // reshuffle.
-    const { attackDelta, defenseDelta } = played ? developmentDeltas(p, rating) : { attackDelta: 0, defenseDelta: 0 };
+    const { attackDelta, defenseDelta } = developmentDeltas(p, rating);
     return {
       ...p,
       attack: clamp(p.attack + attackDelta, 15, 99),
@@ -3599,9 +3605,9 @@ function distributeMatchStats(squad, goalCount, playingIds) {
       assists_league: (p.assists_league || 0) + (assistInc[p.id] || 0),
       seasonYellowCards_league: (p.seasonYellowCards_league || 0) + (yellowInc.has(p.id) ? 1 : 0),
       seasonRedCards_league: (p.seasonRedCards_league || 0) + (gotRed ? 1 : 0),
-      recentRatings: played ? [...(p.recentRatings || []), rating].slice(-5) : p.recentRatings,
+      recentRatings: [...(p.recentRatings || []), rating].slice(-5),
       stamina: newStamina,
-      apps: (p.apps || 0) + (played ? 1 : 0),
+      apps: (p.apps || 0) + 1,
       ratingSum: (p.ratingSum || 0) + rating,
       injuryWeeks: newInjuryWeeks[p.id] ?? p.injuryWeeks,
       yellowCards,
