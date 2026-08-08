@@ -3308,23 +3308,6 @@ function computeStandings(schedule, clubIds) {
   }));
   return Object.values(table).sort((x, y) => (y.pts - x.pts) || ((y.gf - y.ga) - (x.gf - x.ga)) || (y.gf - x.gf));
 }
-function instantSeasonTable(clubIds, clubs) {
-  const table = {};
-  clubIds.forEach(id => { table[id] = { id, played: 0, won: 0, drawn: 0, lost: 0, gf: 0, ga: 0, pts: 0 }; });
-  for (let i = 0; i < clubIds.length; i++) {
-    for (let j = 0; j < clubIds.length; j++) {
-      if (i === j) continue;
-      const home = clubs[clubIds[i]], away = clubs[clubIds[j]];
-      const hAdv = homeAdvantageMult(home);
-      const [hg, ag] = poissonScorePair(expectedGoals(home.strength, away.strength, true, hAdv), expectedGoals(away.strength, home.strength, false, hAdv));
-      const h = table[clubIds[i]], a = table[clubIds[j]];
-      h.played++; a.played++; h.gf += hg; h.ga += ag; a.gf += ag; a.ga += hg;
-      if (hg > ag) { h.won++; h.pts += 3; a.lost++; } else if (hg < ag) { a.won++; a.pts += 3; h.lost++; } else { h.drawn++; a.drawn++; h.pts++; a.pts++; }
-    }
-  }
-  return Object.values(table).sort((x, y) => (y.pts - x.pts) || ((y.gf - y.ga) - (x.gf - x.ga)) || (y.gf - x.gf));
-}
-
 // Fatigued players don't just get a worse post-match rating narrative — they genuinely underperform
 // on the pitch. This scales a player's effective attack/defense down as their stamina drops, feeding
 // directly into the actual match simulation (goals scored), not just cosmetic commentary afterward.
@@ -3400,8 +3383,11 @@ function pickScorerDetailed(squad, count, setPieceTakers) {
     // Weighted by actual finishing quality (position-aware — a defender's "shooting" is already
     // dampened relative to a striker's, since scoring chances mostly come from being in the right
     // areas with the composure to finish, not raw attack rating alone), further scaled by how often
-    // that position realistically gets those chances in the first place.
-    const posMult = p.pos === "AN" ? 2.2 : p.pos === "MF" ? 1.1 : 0.22;
+    // that position realistically gets those chances in the first place. Sharpened specifically toward
+    // forwards (see distributeMatchStats) — a flatter split let two or three attacking midfielders each
+    // take a real bite out of a nailed striker's chances, which is how a season's top scorer ended up a
+    // midfielder with single digits instead of a striker with 20-30.
+    const posMult = p.pos === "AN" ? 3.2 : p.pos === "MF" ? 0.85 : 0.12;
     const shooting = getAttrs(p).shooting;
     const weight = Math.max(0, Math.round((shooting / 12) * posMult));
     for (let i = 0; i < weight; i++) openPlayWeighted.push(p);
@@ -4976,6 +4962,14 @@ function setupCup(type, base) {
       if (worldItem) pushNews(worldItem.text, worldItem.category);
     }
 
+    // Every club simulated below plays out its own fixture this round too — same stamina/recovery
+    // clock as the user's division rivals (see tickSquadFatigue), so a club met later in a cup tie
+    // isn't frozen at full fitness while everyone else's squad has been living a real season. Computed
+    // once here (rather than separately inside setG below) so the season-end standings snapshot and the
+    // schedule actually persisted afterward are reading the exact same simulated result for this round —
+    // computing it twice independently would let this round's scorelines land differently between "what
+    // decided continental qualification" and "what's shown in the table afterward".
+    const otherDivisions = simulateOtherDivisionsRound(g.allSchedules, listingClubs, g.round, `${g.leagueId}_d${userClub.division}`);
     let cups = { ...g.cups };
     const qualifiedCupTypes = g.qualifiedCupTypes || [];
     let lastSeasonSummary = g.lastSeasonSummary, seasonEndSnapshot = g.seasonEndSnapshot, leaguePrizeThisRound = 0;
@@ -4985,7 +4979,13 @@ function setupCup(type, base) {
         worldStandings[country.id] = {};
         [1, 2, 3].forEach(div => {
           const ids = clubsInPool(country.id, div, updatedClubs).map(c => c.id);
-          worldStandings[country.id][div] = (country.id === g.leagueId && div === userClub.division) ? computeStandings(finalSchedule, ids) : instantSeasonTable(ids, updatedClubs);
+          // Real accumulated results from the actual simulated schedule for every division, not a
+          // freshly random-rerolled instant table — that used to throw away an entire season's worth
+          // of real other-division results, so the club that finished (say) 3rd all season could lose
+          // its continental spot to a completely different, randomly-decided "3rd place" that had no
+          // relation to what actually happened. The user's own league/division still comes from
+          // finalSchedule specifically since it's tracked there rather than in allSchedules.
+          worldStandings[country.id][div] = (country.id === g.leagueId && div === userClub.division) ? computeStandings(finalSchedule, ids) : computeStandings(otherDivisions.schedules[`${country.id}_d${div}`], ids);
         });
       });
       const otherCupWinners = {};
@@ -5134,10 +5134,6 @@ function setupCup(type, base) {
           const buyerClub = updatedClubs[sale.buyerId];
           return { id: uid(), season: g.season, round: newRound, playerId: sale.playerId, playerName: soldPlayer?.name, playerPos: soldPlayer?.specificPosition, fromClubId: g.userClubId, fromClubName: userClub.name, fromColor: userClub.color, toClubId: sale.buyerId, toClubName: buyerClub?.name, toColor: buyerClub?.color, fee: sale.fee, leagueId: g.leagueId };
         });
-      // Every club simulated below plays out its own fixture this round too — same stamina/recovery
-      // clock as the user's division rivals (see tickSquadFatigue), so a club met later in a cup tie
-      // isn't frozen at full fitness while everyone else's squad has been living a real season.
-      const otherDivisions = simulateOtherDivisionsRound(prev.allSchedules, listingClubs, g.round, `${g.leagueId}_d${userClub.division}`);
       return {
         ...prev, clubs: { ...listingClubs, ...otherDivisions.clubs, [g.userClubId]: { ...listingClubs[g.userClubId], squad: finalSquad, youthSquad: finalYouthSquad } }, schedule: finalSchedule, squad: finalSquad,
         startingXI: prev.startingXI.filter(id => finalSquad.some(p => p.id === id)),
