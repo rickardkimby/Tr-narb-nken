@@ -433,11 +433,14 @@ const ARCHETYPES = {
   akademiklubb: { tierMin: 55, tierMax: 68, incomeMult: 0.85, growth: 0.25, startBudget: 2000, startDev: { arena: 1, akademi: 3, scouting: 2, sponsring: 1 }, repAdj: -3, fanAdj: -6 },
   utmanare: { tierMin: 60, tierMax: 74, incomeMult: 1.08, growth: 0.32, startBudget: 4600, startDev: { arena: 1, akademi: 2, scouting: 2, sponsring: 1 }, repAdj: 7, fanAdj: 2 },
 };
-// Per-club starting budget overrides — takes priority over the archetype's default startBudget formula.
-const CLUB_BUDGET_OVERRIDES = { eng11: 7000, eng_d3_wrex: 3000, eng20: 4000, eng9: 4000, eng5: 4000 }; // Elland Whites (Leeds) £7.0M · Wrexham Dargons £3.0M · Wearside Sunderland £4.0M · Merseyside Toffees (Everton) £4.0M · Millwall Rovers £4.0M
-// Arena stand levels overridden per club so a specific real-world-ish capacity is hit exactly,
-// instead of the usual archetype/division formula. Feeds arenaCapacityForClub / startArenaStands.
-const CLUB_ARENA_STANDS_OVERRIDES = { eng_d3_wrex: { north: 1, south: 1, east: 0, west: 0 } }; // Wrexham Dargons — ~11,000 seats
+// Every club in the database now carries its own researched Startbudget/Arenakapacitet (see
+// club.startBudget / club.baseArenaCapacity), so the manual per-club patch lists that used to fill
+// the gap before that research existed are gone — a leftover override here would silently outrank
+// the database again, exactly the "code and database disagree" problem those fields were wired in
+// to fix. CLUB_BUDGET_OVERRIDES/CLUB_ARENA_STANDS_OVERRIDES are kept as empty objects (rather than
+// deleted outright) so the ?? fallback chains at their call sites don't need touching.
+const CLUB_BUDGET_OVERRIDES = {};
+const CLUB_ARENA_STANDS_OVERRIDES = {};
 const ARCHETYPE_DESC = {
   storklubb: "Stor, anrik klubb med höga förväntningar och bra ekonomi.",
   medelklubb: "Stabil klubb i mitten av tabellen med jämn utveckling.",
