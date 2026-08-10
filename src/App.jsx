@@ -2646,10 +2646,10 @@ function generateStaffOffers(role, homeCountry) {
     return { id: uid(), name: nameForNationality(nationality), nationality, level, wage };
   });
 }
-// Scaled to match player wages (computeWage) rather than a standalone formula: level 1 ≈ £18k/omg
-// (a fringe first-team player), level 5 ≈ £58k/omg (a strong squad player) — previously ran £42k-£130k,
-// well above what most player wages ever reach.
-function staffFairWage(level) { return Math.round(8 + level * 10); }
+// Scaled to match player wages (computeWage) rather than a standalone formula: level 1 ≈ £10k/omg
+// (a fringe first-team player), level 5 ≈ £32k/omg (a strong squad player) — cut ~45% from an earlier
+// pass (£18k-£58k) that still ran noticeably above what a club's actual squad wage bill could absorb.
+function staffFairWage(level) { return Math.round((8 + level * 10) * 0.55); }
 
 // ---------- Board confidence ----------
 function boardTargetLabel(archetype, division) {
@@ -2887,7 +2887,9 @@ function generateAssistantManagerOffers(nationality, orgReady) {
   return Array.from({ length: 2 }, () => {
     const level = rndInt(3, 5);
     const nat = pick(NATIONALITY_KEYS);
-    const baseWage = Math.round((60 + level * 25) * rnd(0.9, 1.1));
+    // Cut ~45% in line with the same reduction applied to staffFairWage — an assistant manager's wage
+    // was running well ahead of the rest of the Personal tab's staff roles for a comparable level.
+    const baseWage = Math.round((60 + level * 25) * rnd(0.9, 1.1) * 0.55);
     const wage = orgReady ? baseWage : Math.round(baseWage * 2.4);
     return { id: uid(), name: nameForNationality(nat), nationality: nat, level, wage };
   });
@@ -14186,6 +14188,7 @@ function ArenaDetail({ club, dev, budget, arenaStands, arenaFacilities, arenaCon
 }
 
 function AkademiDetail({ dev, budget, akademiParts, youthSquad, onUpgrade, onUpgradePart, onSellYouth, onPromoteYouth, onBack }) {
+  const [expandedId, setExpandedId] = useState(null);
   return (
     <div className="rise-in space-y-2.5">
       <button onClick={onBack} style={{ position: "fixed", bottom: 14, right: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Bakåt</button>
@@ -14203,48 +14206,51 @@ function AkademiDetail({ dev, budget, akademiParts, youthSquad, onUpgrade, onUpg
 
       <div className="text-xs uppercase tracking-wide font-semibold px-1 flex items-center gap-1.5" style={{ color: C.paperDim }}><GraduationCap size={13} /> Ungdomsakademin ({youthSquad.length}/8)</div>
       {youthSquad.length === 0 && <PaperCard><div className="text-sm text-center py-2" style={{ color: C.inkSoft }}>Inga spelare i akademin just nu.</div></PaperCard>}
-      <div className="space-y-2">
-        {youthSquad.map(y => {
-          const overall = overallOf(y);
-          const ready = overall >= 58 && y.yearsInAcademy >= 2;
-          const refund = youthProspectValue(y.attack, y.defense, y.potential, y.id);
-          return (
-            <PaperCard key={y.id}>
-              <div className="flex items-center gap-3">
-                <div style={{ position: "relative", width: 36, height: 36, flexShrink: 0 }}>
-                  <PlayerAvatar player={y} size={36} />
-                  <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={overall} size={18} /></div>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between">
-                    <div><div className="font-semibold text-sm">{y.name}</div><div className="font-mono text-11 mt-0.5" style={{ color: C.inkSoft }}>{POS_LABEL[y.pos]} ({specificPositionLabel(y.specificPosition)}) · {y.age} år · {y.yearsInAcademy} år i akademin</div>
-                      {ready ? (
-                        <div className="text-9 font-semibold mt-0.5" style={{ color: C.win }}>✅ Redo att flyttas upp till A-laget</div>
-                      ) : y.yearsInAcademy < 2 ? (
-                        <div className="text-9 font-semibold mt-0.5" style={{ color: C.gold }}>⏳ {2 - y.yearsInAcademy} {2 - y.yearsInAcademy === 1 ? "år" : "år"} kvar innan uppflyttning (minst 2 år krävs)</div>
-                      ) : (
-                        <div className="text-9 font-semibold mt-0.5" style={{ color: C.gold }}>📈 Behöver utvecklas mer — overall {overall}, kräver minst 58</div>
-                      )}
+      {youthSquad.length > 0 && (
+        <PaperCard style={{ padding: 0 }}>
+          <div className="divide-y" style={{ borderColor: C.paperDim }}>
+            {youthSquad.map(y => {
+              const overall = overallOf(y);
+              const ready = overall >= 58 && y.yearsInAcademy >= 2;
+              const refund = youthProspectValue(y.attack, y.defense, y.potential, y.id);
+              const expanded = expandedId === y.id;
+              return (
+                <div key={y.id}>
+                  <button onClick={() => setExpandedId(expanded ? null : y.id)} className="w-full text-left player-row" style={{ display: "block" }}>
+                    <div className="flex items-center gap-2.5 px-3 py-2.5">
+                      <div style={{ position: "relative", width: 28, height: 28, flexShrink: 0 }}>
+                        <PlayerAvatar player={y} size={28} />
+                        <div style={{ position: "absolute", bottom: -3, right: -3 }}><OverallBadge overall={overall} size={15} /></div>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-semibold truncate">{y.name}</div>
+                        <div className="text-10 truncate" style={{ color: C.inkSoft }}>{POS_LABEL[y.pos]} · {y.age} år · {ready ? "✅ Redo" : y.yearsInAcademy < 2 ? `⏳ ${2 - y.yearsInAcademy} år kvar` : `📈 Behöver utvecklas`}</div>
+                      </div>
+                      <div className="flex gap-0.5 shrink-0">{[1,2,3,4,5].map(n=><Star key={n} size={9} fill={n<=potentialStars(y.potential)?C.gold:"none"} color={n<=potentialStars(y.potential)?C.gold:C.paperDim}/>)}</div>
                     </div>
-                    <div className="flex gap-0.5">{[1,2,3,4,5].map(n=><Star key={n} size={11} fill={n<=potentialStars(y.potential)?C.gold:"none"} color={n<=potentialStars(y.potential)?C.gold:C.paperDim}/>)}</div>
-                  </div>
-                  <div className="mt-1"><StarRating rating={overallToStars(overall)} size={7} /></div>
+                  </button>
+                  {expanded && (
+                    <div className="px-3 pb-3">
+                      <div className="font-mono text-11 mb-1.5" style={{ color: C.inkSoft }}>{specificPositionLabel(y.specificPosition)} · {y.yearsInAcademy} år i akademin</div>
+                      <StarRating rating={overallToStars(overall)} size={7} />
+                      <div className="grid grid-cols-2 gap-1.5 mt-2">
+                        <AttributeGridCard attrKey="shooting" label="Anfall" value={y.attack} icon="🎯" />
+                        <AttributeGridCard attrKey="defending" label="Försvar" value={y.defense} icon="🛡️" />
+                      </div>
+                      <div className="flex gap-2 mt-2">
+                        <button onClick={() => onPromoteYouth(y)} disabled={!ready} className="flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1" style={ready ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>
+                          <ArrowUpCircle size={13} /> {ready ? "Flytta upp" : "Ej redo"}
+                        </button>
+                        <button onClick={() => onSellYouth(y)} className="flex-1 py-1.5 rounded-lg text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.loss}`, color: C.loss }}>Sälj ({formatMoney(refund)})</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-              <div className="grid grid-cols-2 gap-1.5 mt-2">
-                <AttributeGridCard attrKey="shooting" label="Anfall" value={y.attack} icon="🎯" />
-                <AttributeGridCard attrKey="defending" label="Försvar" value={y.defense} icon="🛡️" />
-              </div>
-              <div className="flex gap-2 mt-2">
-                <button onClick={() => onPromoteYouth(y)} disabled={!ready} className="flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1" style={ready ? { background: C.turf, color: C.paper } : { background: C.paperDim, color: C.inkSoft, opacity: 0.6 }}>
-                  <ArrowUpCircle size={13} /> {ready ? "Flytta upp" : "Ej redo"}
-                </button>
-                <button onClick={() => onSellYouth(y)} className="flex-1 py-1.5 rounded-lg text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.loss}`, color: C.loss }}>Sälj ({formatMoney(refund)})</button>
-              </div>
-            </PaperCard>
-          );
-        })}
-      </div>
+              );
+            })}
+          </div>
+        </PaperCard>
+      )}
     </div>
   );
 }
