@@ -13372,35 +13372,27 @@ function ScoutListView({ scoutedPlayers, clubs, worldPool, transferHistory, onNe
       {!rows.length ? (
         <PaperCard><div className="text-sm text-center py-3" style={{ color: C.inkSoft }}>Inga spelare scoutade än. Starta ett scoutuppdrag eller scouta en spelare direkt från deras profil.</div></PaperCard>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          {rows.map(({ player: p, club }) => {
+        <PaperCard style={{ padding: 0 }}>
+          {rows.map(({ player: p, club }, i) => {
             const pOverall = overallOf(p);
             return (
-              <PaperCard key={p.id} style={{ padding: 10 }}>
-                <button onClick={() => setViewingId(p.id)} className="w-full flex items-center gap-2.5 text-left">
-                  <div style={{ position: "relative", width: 30, height: 30, flexShrink: 0 }}>
-                    <PlayerAvatar player={p} size={30} />
-                    <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={pOverall} size={16} /></div>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-xs truncate">{p.name}</div>
-                    <div className="font-mono text-9 mt-0.5 truncate" style={{ color: C.inkSoft }}>{POS_LABEL[p.pos]} ({specificPositionLabel(p.specificPosition)}) · {p.age} år</div>
-                    <div className="font-mono text-9 truncate" style={{ color: C.inkSoft }}>{club ? club.name : (p.club || "Fri agent")}</div>
-                  </div>
-                </button>
-                <div className="flex items-center justify-between mt-1.5">
-                  <StarRating rating={overallToStars(pOverall)} size={7} />
-                  <div className="font-mono text-11 font-semibold shrink-0">{formatMoney(p.value)}</div>
+              <button key={p.id} onClick={() => setViewingId(p.id)} className="w-full flex items-center gap-2 text-left" style={{ padding: "8px 10px", borderTop: i ? `1px solid ${C.paperDim}` : "none" }}>
+                <div style={{ position: "relative", width: 26, height: 26, flexShrink: 0 }}>
+                  <PlayerAvatar player={p} size={26} />
                 </div>
-                <div className="grid grid-cols-2 gap-1.5 mt-1.5">
-                  <AttributeGridCard attrKey="shooting" label="Anfall" value={p.attack} icon="🎯" />
-                  <AttributeGridCard attrKey="defending" label="Försvar" value={p.defense} icon="🛡️" />
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-11 truncate">{p.name}</div>
+                  <div className="font-mono text-9 truncate" style={{ color: C.inkSoft }}>{POS_LABEL[p.pos]} · {p.age} år · {club ? club.name : (p.club || "Fri agent")}</div>
                 </div>
-                <button onClick={() => onNegotiate(p, club)} className="mt-1.5 w-full py-1.5 rounded-xl text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Förhandla</button>
-              </PaperCard>
+                <div className="text-right shrink-0">
+                  <div className="font-mono text-11 font-semibold">{formatMoney(p.value)}</div>
+                  <div className="text-9 font-semibold" style={{ color: C.gold }}>Overall {pOverall}</div>
+                </div>
+                <ChevronRight size={14} color={C.inkSoft} className="shrink-0" />
+              </button>
             );
           })}
-        </div>
+        </PaperCard>
       )}
     </div>
   );
