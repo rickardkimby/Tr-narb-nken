@@ -2155,7 +2155,7 @@ function simulateCupMatchFinances(g, isHome, oppStrength, isDerby) {
   // Cup magic: a cup tie draws a bit of extra buzz on its own, separate from league form/table position.
   const cupDraw = 0.08;
   const crowdDraw = Math.min(derbyDraw + oppDraw + cupDraw, 0.45);
-  const attendance = Math.min(arenaCapacityOf(g.dev, g.arenaStands), Math.round((3000 + g.fanbase * 180) * ticketTier.fillMult * (1 + crowdDraw)));
+  const attendance = Math.min(arenaCapacityOf(g.dev, g.arenaStands), Math.round(ticketDemandBase(g.fanbase, g.avgAttendanceBase, g.fanbaseBase) * ticketTier.fillMult * (1 + crowdDraw)));
   const incomeTickets = Math.round(attendance * 0.009 * userArchetype.incomeMult * ticketTier.incomeMult) + Object.values(g.arenaStands).reduce((s, l) => s + l, 0) * 8;
   const incomeRestaurant = g.arenaFacilities.restaurant * 18;
   const incomeShop = g.arenaFacilities.shop * 10;
@@ -2548,7 +2548,29 @@ function constructionSeatDelta(ac) {
 function arenaConstructionDuration(targetLevel) { return clamp(6 + (targetLevel - 1) * 9, 6, 50); }
 function arenaCapacityOf(dev, stands) {
   const s = stands || { north: 1, south: 1, east: 1, west: 1 };
-  return Math.round(4000 + dev.arena * 2000 + Object.values(s).reduce((sum, l) => sum + standCapacity(l), 0));
+  const formulaNow = 4000 + dev.arena * 2000 + Object.values(s).reduce((sum, l) => sum + standCapacity(l), 0);
+  // A club with a researched real starting capacity (dev.arenaBase, set at career start from the club
+  // database's Arenakapacitet) keeps that as its floor — capacity grows from there by whatever the 1-5
+  // stand/arena upgrade levels have added since the club's own starting configuration (dev.arenaBaseline),
+  // rather than being rebuilt from scratch off those same abstract levels. Without this, the same 1-5 scale
+  // used for a 4,000-seat lower-league ground would also have to stretch to a 75,000-seat giant's, which it
+  // structurally can't — a fully maxed-out arena tops out around 45,000 under the level formula alone.
+  if (dev.arenaBase) return Math.round(dev.arenaBase + Math.max(0, formulaNow - (dev.arenaBaseline ?? formulaNow)));
+  return Math.round(formulaNow);
+}
+// Matchday ticket demand before the arena-capacity cap, fill-rate tier and crowd-draw bonuses are applied.
+// A club with a researched real average attendance (avgAttendanceBase, from the club database's
+// Snittpublik) anchors demand to that real number — fanbase still drives how demand moves during the
+// career (a relegation battle or a promotion push should still visibly swing attendance), scaled as a
+// multiplier off the club's OWN starting fanbase rather than the flat archetype-driven formula used when
+// no real attendance figure exists. Clamped so a wild swing in fanbase can't send demand to an implausible
+// multiple of a club's real crowd size in either direction.
+function ticketDemandBase(fanbase, avgAttendanceBase, fanbaseBase) {
+  if (avgAttendanceBase) {
+    const growth = fanbaseBase > 0 ? fanbase / fanbaseBase : 1;
+    return avgAttendanceBase * clamp(growth, 0.6, 1.8);
+  }
+  return 3000 + fanbase * 180;
 }
 function partUpgradeCost(category, level) {
   const base = { arenaStands: 350, arenaFacilities: 300, akademiParts: 380, scoutingParts: 460 }[category];
@@ -4457,8 +4479,17 @@ function TranarbankenApp() {
       arena: Math.max(1, arche.startDev.arena - devReduce), akademi: Math.max(1, arche.startDev.akademi - devReduce),
       scouting: Math.max(1, arche.startDev.scouting - devReduce), sponsring: Math.max(1, arche.startDev.sponsring - devReduce),
     };
-    const reputation = clamp({ 1: 55, 2: 35, 3: 18 }[division] + arche.repAdj, 5, 92);
+    // A researched real-world reputation (see the club-database Rykte column) takes priority over the
+    // generic division+archetype guess — only clubs imported without that data fall back to the old formula.
+    const reputation = club.reputation != null ? clamp(club.reputation, 1, 99) : clamp({ 1: 55, 2: 35, 3: 18 }[division] + arche.repAdj, 5, 92);
     const fanbase = clamp({ 1: 50, 2: 30, 3: 15 }[division] + arche.fanAdj, 5, 90);
+    const startArenaStandsForClub = startArenaStands(club, division);
+    // The arena's live capacity (arenaCapacityOf) is base + however much has been built beyond the starting
+    // stand/level configuration — anchoring "base" to a real researched capacity, rather than reconstructing
+    // the whole number from abstract 1-5 stand levels, is the only way a small club's real 4,000-seat ground
+    // and a giant's real 70,000-seat one can BOTH be represented on the same 1-5 upgrade scale.
+    dev.arenaBase = club.baseArenaCapacity || undefined;
+    dev.arenaBaseline = 4000 + dev.arena * 2000 + Object.values(startArenaStandsForClub).reduce((s, l) => s + standCapacity(l), 0);
     const rating = effectiveScoutRating(dev, reputation);
     const worldPool = previewWorldPool || generateWorldPool();
     const drawEuropa = drawFromWorldPool(worldPool.europa, rating, 4);
@@ -4477,12 +4508,18 @@ function TranarbankenApp() {
     manager.reputation = clamp(manager.reputation + (pressOpt?.managerRepDelta || 0), 5, 99);
     const prestigeScore = (arche.tierMin + arche.tierMax) / 2 - (division - 1) * 8;
     const startPartLevel = (max) => clamp(prestigeScore >= 82 ? 3 : prestigeScore >= 70 ? 2 : 1, 1, max);
-    const startBudget = Math.round(CLUB_BUDGET_OVERRIDES[clubId] ?? (arche.startBudget * divMult));
+    // A researched real-world starting budget (Startbudget) takes priority over the generic archetype
+    // default — CLUB_BUDGET_OVERRIDES stays as a manual last-word for the handful of clubs it lists.
+    const startBudget = Math.round(CLUB_BUDGET_OVERRIDES[clubId] ?? club.startBudget ?? (arche.startBudget * divMult));
     const initial = {
       setupDone: true, leagueId: countryId, userClubId: clubId, season: 1, round: 0, tactic: "balanserad", spelide: "balanserad",
       budget: startBudget, seasonStartBudget: startBudget, lastDelta: 0, dev, reputation, fanbase: startFanbase, lastCup2ChampionId: null,
+      // Anchors matchday ticket demand to a club's real researched average attendance (see ticketDemandBase)
+      // instead of a flat division/archetype guess — fanbase's growth/decline over the career still scales
+      // it up or down proportionally, it just no longer has to invent the starting number from nothing.
+      avgAttendanceBase: club.avgAttendance || undefined, fanbaseBase: startFanbase,
       clubs, schedule: generateSchedule(userPoolIds), allSchedules: generateAllSchedules(clubs), squad: startSquad, startingXI: pickBestXI(startSquad).map(p => p.id), market, worldPool,
-      arenaStands: startArenaStands(club, division), arenaFacilities: { restaurant: startPartLevel(3), shop: startPartLevel(3) },
+      arenaStands: startArenaStandsForClub, arenaFacilities: { restaurant: startPartLevel(3), shop: startPartLevel(3) },
       akademiParts: { tranare: startPartLevel(3), intag: startPartLevel(3) }, scoutingParts: { analys: startPartLevel(3), kontakter: startPartLevel(3) },
       sponsors: { main: null, stadium: null, local: null },
       staff: { assistant: null, physio: null, scout: null, gkCoach: null, analyst: null, fitnessCoach: null }, boardConfidence: startBoardConfidence, boardCrisisWarned: false, economicWarningIssued: false, eliteReputationSeasons: 0, eliteStreakHasTrophy: false, jobOffers: null, plannedSub: null, incomingOffers: [], loans: [], loanOffers: [], transferHistory: [], squadViewPrefs: { rowMode: "detaljerad", showAllBench: false },
@@ -4723,7 +4760,7 @@ function setupCup(type, base) {
       const posNow = computeStandings(g.schedule, leaguePoolIds).findIndex(r => r.id === g.userClubId) + 1;
       const positionDraw = posNow >= 1 && posNow <= 3 ? 0.15 : posNow >= 4 && posNow <= 6 ? 0.07 : 0;
       const crowdDraw = Math.min(derbyDraw + oppDraw + formDraw + positionDraw, 0.45);
-      attendance = Math.min(arenaCapacityOf(g.dev, g.arenaStands), Math.round((3000 + g.fanbase * 180) * ticketTier.fillMult * (1 + crowdDraw)));
+      attendance = Math.min(arenaCapacityOf(g.dev, g.arenaStands), Math.round(ticketDemandBase(g.fanbase, g.avgAttendanceBase, g.fanbaseBase) * ticketTier.fillMult * (1 + crowdDraw)));
       incomeTickets = Math.round(attendance * 0.009 * userArchetype.incomeMult * ticketTier.incomeMult) + Object.values(g.arenaStands).reduce((s, l) => s + l, 0) * 8;
       incomeRestaurant = g.arenaFacilities.restaurant * 18;
       incomeShop += g.arenaFacilities.shop * 18;
@@ -6090,9 +6127,13 @@ function setupCup(type, base) {
         arena: Math.max(1, arche.startDev.arena - devReduce), akademi: Math.max(1, arche.startDev.akademi - devReduce),
         scouting: Math.max(1, arche.startDev.scouting - devReduce), sponsring: Math.max(1, arche.startDev.sponsring - devReduce),
       };
-      const reputationForClub = clamp({ 1: 55, 2: 35, 3: 18 }[division] + arche.repAdj, 5, 92);
+      // Same real-data-first logic as a fresh career start (handleConfirmSetup) — see the comments there.
+      const reputationForClub = targetClub.reputation != null ? clamp(targetClub.reputation, 1, 99) : clamp({ 1: 55, 2: 35, 3: 18 }[division] + arche.repAdj, 5, 92);
       const fanbase = clamp({ 1: 50, 2: 30, 3: 15 }[division] + arche.fanAdj, 5, 90);
-      const budget = Math.round(CLUB_BUDGET_OVERRIDES[clubId] ?? (arche.startBudget * divMult));
+      const targetArenaStands = startArenaStands(targetClub, division);
+      dev.arenaBase = targetClub.baseArenaCapacity || undefined;
+      dev.arenaBaseline = 4000 + dev.arena * 2000 + Object.values(targetArenaStands).reduce((s, l) => s + standCapacity(l), 0);
+      const budget = Math.round(CLUB_BUDGET_OVERRIDES[clubId] ?? targetClub.startBudget ?? (arche.startBudget * divMult));
       const userPoolIds = clubsInPool(targetClub.league, division, prev.clubs).map(c => c.id);
       const startSquad = (targetClub.squad || []).map(p => ({ ...p }));
       const closedStints = (prev.manager.stints || []).map((st, i, arr) => i === arr.length - 1 && st.endSeason == null ? { ...st, endSeason: prev.season } : st);
@@ -6115,8 +6156,9 @@ function setupCup(type, base) {
         ...prev, userClubId: clubId, leagueId: targetClub.league, clubs: newClubs,
         squad: startSquad, startingXI: pickBestXI(startSquad).map(p => p.id), market, worldPool: newWorldPool,
         budget, seasonStartBudget: budget, dev, fanbase, reputation: reputationForClub,
+        avgAttendanceBase: targetClub.avgAttendance || undefined, fanbaseBase: fanbase,
         schedule: generateSchedule(userPoolIds), allSchedules: generateAllSchedules(newClubs),
-        arenaStands: startArenaStands(targetClub, division), arenaFacilities: { restaurant: startPartLevel(3), shop: startPartLevel(3) },
+        arenaStands: targetArenaStands, arenaFacilities: { restaurant: startPartLevel(3), shop: startPartLevel(3) },
         akademiParts: { tranare: startPartLevel(3), intag: startPartLevel(3) }, scoutingParts: { analys: startPartLevel(3), kontakter: startPartLevel(3) },
         sponsors: { main: null, stadium: null, local: null },
         staff: { assistant: null, physio: null, scout: null, gkCoach: null, analyst: null, fitnessCoach: null },
@@ -7173,6 +7215,7 @@ function worldToExcelRows(world) {
       Land: c.league, Division: c.division, KlubbID: c.id, Klubbnamn: c.name, Kortnamn: c.short || shortCodeFrom(c.name),
       Färg: c.color || "", Sekundärfärg: c.secondaryColor || "", Tröjmönster: c.jerseyPattern || "",
       Arketyp: c.archetype, Styrka: Math.round(c.strength), Startbudget: c.startBudget ?? "", Arenakapacitet: c.baseArenaCapacity ?? "",
+      Snittpublik: c.avgAttendance ?? "", Rykte: c.reputation ?? "",
     });
     (c.squad || []).forEach(p => {
       const attrs = getAttrs(p);
@@ -7215,6 +7258,8 @@ function excelRowsToWorld(clubRows, playerRows, youthRows) {
       archetype: String(row.Arketyp || "").trim(), strength: num(row.Styrka),
       startBudget: row.Startbudget === "" || row.Startbudget === undefined ? undefined : num(row.Startbudget),
       baseArenaCapacity: row.Arenakapacitet === "" || row.Arenakapacitet === undefined ? undefined : num(row.Arenakapacitet),
+      avgAttendance: row.Snittpublik === "" || row.Snittpublik === undefined ? undefined : num(row.Snittpublik),
+      reputation: row.Rykte === "" || row.Rykte === undefined ? undefined : num(row.Rykte),
       squad: [], youthSquad: [],
     };
   });
@@ -7989,7 +8034,7 @@ function Onboarding({ world, onConfirm, onCancel }) {
               )}
               <div className="flex items-center justify-between mt-2">
                 <StarRating rating={overallToStars(squadOverall)} size={9} />
-                <span className="font-mono text-11" style={{ color: C.inkSoft }}>Startbudget: {formatMoney(Math.round(CLUB_BUDGET_OVERRIDES[c.id] ?? (arche.startBudget * divMult)))}</span>
+                <span className="font-mono text-11" style={{ color: C.inkSoft }}>Startbudget: {formatMoney(Math.round(CLUB_BUDGET_OVERRIDES[c.id] ?? c.startBudget ?? (arche.startBudget * divMult)))}</span>
               </div>
               <div className="text-10 font-mono mt-1" style={{ color: C.inkSoft }}>Arenakapacitet: {arenaCapacityForClub(c, division).toLocaleString("sv-SE")} åskådare</div>
               {selected && (
