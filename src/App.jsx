@@ -5742,6 +5742,19 @@ function setupCup(type, base) {
     else if (fanDelta < 0) pushNews(`Fansen är skeptiska till värvningen av ${player.name} — dyrt för vad som levererades.`, "Klubben");
     showToast(`${player.name} skrev på för ${formatMoney(agreedPrice)} (${formatMoney(wage)}/omg i lön)!${installmentNote}`);
   }
+  // Shared by every path that actually completes a sale from an incoming offer (straight accept, or a
+  // negotiated price the manager has explicitly confirmed) — keeps the squad/budget/history mutation in
+  // one place instead of tripled across accept/counter/negotiated branches.
+  function completeOfferSale(offer, finalPrice) {
+    const soldPlayer = g.squad.find(p => p.id === offer.playerId);
+    const sellOnCut = soldPlayer?.sellOnPct ? Math.round(finalPrice * soldPlayer.sellOnPct / 100) : 0;
+    const net = finalPrice - sellOnCut;
+    const fanDelta = soldPlayer ? fanSaleReaction(soldPlayer, finalPrice, g.squad, userClub) : 0;
+    setG(prev => { const nextSquad = prev.squad.filter(p => p.id !== offer.playerId); return { ...prev, budget: prev.budget + net, squad: nextSquad, startingXI: prev.startingXI.filter(id => id !== offer.playerId), incomingOffers: prev.incomingOffers.filter(o => o.id !== offer.id), fanbase: clamp(prev.fanbase + fanDelta, 0, 100), clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], squad: nextSquad } }, transferHistory: [{ id: uid(), season: prev.season, round: prev.round, playerId: offer.playerId, playerName: offer.playerName, playerPos: soldPlayer?.specificPosition, fromClubId: prev.userClubId, fromClubName: userClub.name, fromColor: userClub.color, toClubId: offer.buyerId, toClubName: offer.buyerName, toColor: prev.clubs[offer.buyerId]?.color, fee: net, leagueId: prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000) }; });
+    if (fanDelta <= -3) pushNews(`Fansen är upprörda över försäljningen av ${offer.playerName} — en nyckelspelare lämnar klubben.`, "Klubben");
+    else if (fanDelta >= 2) pushNews(`Fansen tycker affären med ${offer.buyerName} för ${offer.playerName} kändes rimlig.`, "Klubben");
+    showToast(sellOnCut ? `${offer.playerName} såldes till ${offer.buyerName} för ${formatMoney(net)} (efter klausul till ${soldPlayer.sellOnClubName})!` : `${offer.playerName} såldes till ${offer.buyerName} för ${formatMoney(finalPrice)}!`);
+  }
   function respondIncomingOffer(offerId, action) {
     const offer = g.incomingOffers.find(o => o.id === offerId);
     if (!offer) return;
@@ -5751,31 +5764,20 @@ function setupCup(type, base) {
       return;
     }
     if (g.squad.length <= 11) { showToast("Du måste ha minst 11 spelare i truppen — kan inte sälja nu."); return; }
-    if (action === "accept") {
-      const soldPlayer = g.squad.find(p => p.id === offer.playerId);
-      const sellOnCut = soldPlayer?.sellOnPct ? Math.round(offer.offer * soldPlayer.sellOnPct / 100) : 0;
-      const net = offer.offer - sellOnCut;
-      const fanDelta = soldPlayer ? fanSaleReaction(soldPlayer, offer.offer, g.squad, userClub) : 0;
-      setG(prev => { const nextSquad = prev.squad.filter(p => p.id !== offer.playerId); return { ...prev, budget: prev.budget + net, squad: nextSquad, startingXI: prev.startingXI.filter(id => id !== offer.playerId), incomingOffers: prev.incomingOffers.filter(o => o.id !== offerId), fanbase: clamp(prev.fanbase + fanDelta, 0, 100), clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], squad: nextSquad } }, transferHistory: [{ id: uid(), season: prev.season, round: prev.round, playerId: offer.playerId, playerName: offer.playerName, playerPos: soldPlayer?.specificPosition, fromClubId: prev.userClubId, fromClubName: userClub.name, fromColor: userClub.color, toClubId: offer.buyerId, toClubName: offer.buyerName, toColor: prev.clubs[offer.buyerId]?.color, fee: net, leagueId: prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000) }; });
-      if (fanDelta <= -3) pushNews(`Fansen är upprörda över försäljningen av ${offer.playerName} — en nyckelspelare lämnar klubben.`, "Klubben");
-      else if (fanDelta >= 2) pushNews(`Fansen tycker affären med ${offer.buyerName} för ${offer.playerName} kändes rimlig.`, "Klubben");
-      showToast(sellOnCut ? `${offer.playerName} såldes till ${offer.buyerName} för ${formatMoney(net)} (efter klausul till ${soldPlayer.sellOnClubName})!` : `${offer.playerName} såldes till ${offer.buyerName} för ${formatMoney(offer.offer)}!`);
-      return;
-    }
-    // counter
-    const higher = Math.round(offer.offer * 1.3);
-    const accepted = Math.random() < clamp(0.35 + g.reputation / 300, 0.2, 0.6);
-    if (accepted) {
-      const soldPlayer2 = g.squad.find(p => p.id === offer.playerId);
-      const fanDelta2 = soldPlayer2 ? fanSaleReaction(soldPlayer2, higher, g.squad, userClub) : 0;
-      setG(prev => { const nextSquad = prev.squad.filter(p => p.id !== offer.playerId); return { ...prev, budget: prev.budget + higher, squad: nextSquad, startingXI: prev.startingXI.filter(id => id !== offer.playerId), incomingOffers: prev.incomingOffers.filter(o => o.id !== offerId), fanbase: clamp(prev.fanbase + fanDelta2, 0, 100), clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], squad: nextSquad } }, transferHistory: [{ id: uid(), season: prev.season, round: prev.round, playerId: offer.playerId, playerName: offer.playerName, playerPos: soldPlayer2?.specificPosition, fromClubId: prev.userClubId, fromClubName: userClub.name, fromColor: userClub.color, toClubId: offer.buyerId, toClubName: offer.buyerName, toColor: prev.clubs[offer.buyerId]?.color, fee: higher, leagueId: prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000) }; });
-      if (fanDelta2 <= -3) pushNews(`Fansen är upprörda över försäljningen av ${offer.playerName} — en nyckelspelare lämnar klubben.`, "Klubben");
-      else if (fanDelta2 >= 2) pushNews(`Fansen tycker affären med ${offer.buyerName} för ${offer.playerName} kändes rimlig.`, "Klubben");
-      showToast(`${offer.buyerName} accepterade ${formatMoney(higher)} för ${offer.playerName}!`);
-    } else {
-      setG(prev => ({ ...prev, incomingOffers: prev.incomingOffers.filter(o => o.id !== offerId) }));
-      showToast(`${offer.buyerName} drog sig ur förhandlingen.`);
-    }
+    if (action === "accept") completeOfferSale(offer, offer.offer);
+  }
+  // Called only once the manager has actively confirmed a negotiated price on the final "Bekräfta
+  // affären" screen — negotiating (asking for more, seeing the buyer's response) never touches game
+  // state on its own, so the manager always has the last word on whether the deal actually happens.
+  function finalizeNegotiatedOffer(offerId, finalPrice) {
+    const offer = g.incomingOffers.find(o => o.id === offerId);
+    if (!offer) return;
+    if (g.squad.length <= 11) { showToast("Du måste ha minst 11 spelare i truppen — kan inte sälja nu."); return; }
+    completeOfferSale(offer, finalPrice);
+  }
+  function withdrawIncomingOffer(offerId, msg) {
+    setG(prev => ({ ...prev, incomingOffers: prev.incomingOffers.filter(o => o.id !== offerId) }));
+    if (msg) showToast(msg);
   }
   function sellPlayer(player) {
     if (player.loanWeeksLeft) { showToast(`${player.name} är bara på lån hos er — kan inte säljas.`); setConfirmSell(null); return; }
@@ -7027,7 +7029,7 @@ function setupCup(type, base) {
               ) : (
                 <TransfersTab market={g.market} budget={g.budget} scoutingLevel={g.dev.scouting} kontakterLevel={g.scoutingParts.kontakter} youthSquad={g.youthSquad} youthMarket={g.youthMarket} round={g.round} season={g.season}
                   clubs={g.clubs} reputation={g.reputation} incomingOffers={g.incomingOffers} clubGoodwill={g.clubGoodwill} blacklistedPlayers={g.blacklistedPlayers} onNegotiationFailed={failNegotiation}
-                  onFinalizeTransfer={finalizeTransfer} onBuyYouth={buyYouth} onRespondOffer={respondIncomingOffer}
+                  onFinalizeTransfer={finalizeTransfer} onBuyYouth={buyYouth} onRespondOffer={respondIncomingOffer} onFinalizeNegotiatedOffer={finalizeNegotiatedOffer} onWithdrawIncomingOffer={withdrawIncomingOffer}
                   scoutMission={g.scoutMission} scoutLevel={g.staff.scout?.level || 0}
                   onStartScoutMission={startScoutMission} onDismissScoutMission={dismissScoutMission} onCancelScoutMission={cancelScoutMission} onFinalizeScoutSignee={finalizeScoutSignee}
                   loanOffers={g.loanOffers} onAcceptLoan={acceptLoanOffer} onDeclineLoan={declineLoanOffer} difficulty={g.difficulty}
@@ -13251,6 +13253,104 @@ function NegotiationView({ player, club, region, budget, reputation, onBack, onF
   );
 }
 
+// Negotiating an INCOMING bid on one of your own players — asking for more is a real back-and-forth
+// (thread of messages, a handful of attempts, real risk the buyer walks) rather than a single click that
+// silently resolves. Whatever price ends up "on the table", nothing is sold until the manager explicitly
+// confirms it on the final screen — accepting a counter is not the same as finalizing the sale.
+function IncomingOfferNegotiationView({ offer, reputation, onBack, onWithdraw, onFinalize }) {
+  const [messages, setMessages] = useState(() => [{ from: "them", text: `${offer.buyerName} bjuder ${formatMoney(offer.offer)} för ${offer.playerName}.` }]);
+  const [currentPrice, setCurrentPrice] = useState(offer.offer);
+  const [attempts, setAttempts] = useState(0);
+  const [agreedPrice, setAgreedPrice] = useState(null);
+  const [walkedAway, setWalkedAway] = useState(false);
+  const attemptsLeft = NEGOTIATION_MAX_ATTEMPTS - attempts;
+  const backBtn = <button onClick={onBack} style={{ position: "fixed", bottom: 14, right: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Bakåt</button>;
+
+  function askForMore(mult, label) {
+    const ask = Math.round(currentPrice * mult);
+    const nextAttempts = attempts + 1;
+    setAttempts(nextAttempts);
+    const greed = mult - 1;
+    const acceptChance = clamp(0.45 - greed * 0.8 + reputation / 350, 0.1, 0.75);
+    setMessages(prev => [...prev, { from: "you", text: `${label}: ${formatMoney(ask)}` }]);
+    if (Math.random() < acceptChance) {
+      setMessages(prev => [...prev, { from: "them", text: negoAcceptLine() }]);
+      setCurrentPrice(ask);
+      return;
+    }
+    const walkChance = clamp(greed * 0.7 + nextAttempts * 0.1, 0.05, 0.55);
+    if (Math.random() < walkChance) {
+      setMessages(prev => [...prev, { from: "them", text: `${negoRejectLine({ name: offer.playerName })} Vi drar oss ur budet helt.` }]);
+      setWalkedAway(true);
+      return;
+    }
+    const counter = Math.round((currentPrice + ask) / 2);
+    setMessages(prev => [...prev, { from: "them", text: negoCounterLine(counter) }]);
+    setCurrentPrice(counter);
+  }
+
+  if (walkedAway) {
+    return (
+      <div className="rise-in space-y-2.5">
+        {backBtn}
+        <PaperCard>
+          <div className="text-center py-2">
+            <div style={{ fontSize: 34 }}>❌</div>
+            <div className="font-display text-lg mt-1" style={{ color: C.loss }}>BUDET DROGS TILLBAKA</div>
+          </div>
+          <div className="text-sm font-semibold" style={{ color: C.loss }}>{offer.buyerName} drog sig ur förhandlingen om {offer.playerName}.</div>
+        </PaperCard>
+        <PaperCard><NegotiationThread messages={messages} /></PaperCard>
+        <button onClick={() => onWithdraw(`${offer.buyerName} drog sig ur förhandlingen om ${offer.playerName}.`)} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Tillbaka till buden</button>
+      </div>
+    );
+  }
+
+  if (agreedPrice !== null) {
+    return (
+      <div className="rise-in space-y-2.5">
+        {backBtn}
+        <PaperCard>
+          <div className="text-xs uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Bekräfta försäljning</div>
+          <div className="text-sm">{offer.playerName} till <span className="font-semibold">{offer.buyerName}</span> för <span className="font-mono font-bold">{formatMoney(agreedPrice)}</span>.</div>
+          <div className="text-11 mt-1.5" style={{ color: C.inkSoft }}>Affären genomförs inte förrän du bekräftar den här.</div>
+        </PaperCard>
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={() => setAgreedPrice(null)} className="py-2.5 rounded-xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Tillbaka</button>
+          <button onClick={() => onFinalize(agreedPrice)} className="py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.turf, color: C.paper }}>Genomför affären</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rise-in space-y-2.5">
+      {backBtn}
+      <PaperCard>
+        <div className="flex items-center justify-between mb-1">
+          <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Förhandling med {offer.buyerName}</div>
+          <span className="text-9 font-mono" style={{ color: C.inkSoft }}>{attemptsLeft} försök kvar</span>
+        </div>
+        <div className="text-sm">Om {offer.playerName}</div>
+      </PaperCard>
+      <PaperCard><NegotiationThread messages={messages} /></PaperCard>
+      <PaperCard>
+        <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Just nu på bordet: <span className="font-mono font-semibold" style={{ color: C.ink }}>{formatMoney(currentPrice)}</span></div>
+        <button onClick={() => setAgreedPrice(currentPrice)} className="w-full py-2.5 rounded-xl text-sm font-semibold mb-2" style={{ background: C.turf, color: C.paper }}>Acceptera {formatMoney(currentPrice)}</button>
+        {attemptsLeft > 0 ? (
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={() => askForMore(1.15, "Begär lite mer")} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.paperDim, color: C.ink }}>Begär lite mer (+15%)</button>
+            <button onClick={() => askForMore(1.35, "Begär betydligt mer")} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Begär betydligt mer (+35%)</button>
+          </div>
+        ) : (
+          <div className="text-10 text-center" style={{ color: C.inkSoft }}>Inga fler förhandlingsförsök kvar.</div>
+        )}
+        <button onClick={() => onWithdraw(`Budet från ${offer.buyerName} avvisades.`)} className="w-full mt-2 py-2 text-11" style={{ color: C.loss }}>Avvisa budet helt</button>
+      </PaperCard>
+    </div>
+  );
+}
+
 // A read-only counterpart to PlayerProfile for players you don't own — scouted opponents, world-pool
 // finds, anyone browsed via the transfer market. PlayerProfile is built entirely around managing your
 // own squad (training, contract renewal, hinting for sale, dressing-room chat), so reusing it directly
@@ -13821,7 +13921,7 @@ function PlayerSearchPanel({ clubs, squad, userClubId, worldPool, scoutedPlayerI
     </div>
   );
 }
-function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSquad, youthMarket, round, season, clubs, reputation, incomingOffers, clubGoodwill, blacklistedPlayers, onNegotiationFailed, onFinalizeTransfer, onBuyYouth, onRespondOffer, scoutMission, scoutLevel, onStartScoutMission, onDismissScoutMission, onCancelScoutMission, onFinalizeScoutSignee, loanOffers, onAcceptLoan, onDeclineLoan, difficulty, squad, savedScoutProfiles, onSaveScoutProfile, onDeleteScoutProfile, userClubId, leagueId, onFinalizeClubBrowseTransfer, onSubViewChange, partnerClubId, onInstantLoanFromPartner, loanRequests, onRespondLoanRequest, transferHistory, scoutedPlayerIds, pendingPlayerScouts, onScoutPlayer, pendingScoutReveal, onClearScoutReveal, worldPool, scoutedPlayers }) {
+function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSquad, youthMarket, round, season, clubs, reputation, incomingOffers, clubGoodwill, blacklistedPlayers, onNegotiationFailed, onFinalizeTransfer, onBuyYouth, onRespondOffer, onFinalizeNegotiatedOffer, onWithdrawIncomingOffer, scoutMission, scoutLevel, onStartScoutMission, onDismissScoutMission, onCancelScoutMission, onFinalizeScoutSignee, loanOffers, onAcceptLoan, onDeclineLoan, difficulty, squad, savedScoutProfiles, onSaveScoutProfile, onDeleteScoutProfile, userClubId, leagueId, onFinalizeClubBrowseTransfer, onSubViewChange, partnerClubId, onInstantLoanFromPartner, loanRequests, onRespondLoanRequest, transferHistory, scoutedPlayerIds, pendingPlayerScouts, onScoutPlayer, pendingScoutReveal, onClearScoutReveal, worldPool, scoutedPlayers }) {
   const [showClubBrowser, setShowClubBrowser] = useState(false);
   const [showOwnHistory, setShowOwnHistory] = useState(false);
   const [showGlobalTransfers, setShowGlobalTransfers] = useState(false);
@@ -13831,6 +13931,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
   const [negotiatingId, setNegotiatingId] = useState(null);
   const [negotiatingScout, setNegotiatingScout] = useState(null);
   const [negotiatingListedPlayer, setNegotiatingListedPlayer] = useState(null);
+  const [negotiatingOfferId, setNegotiatingOfferId] = useState(null);
   const [browseTargetClubId, setBrowseTargetClubId] = useState(null);
   useEffect(() => {
     if (!pendingScoutReveal) return;
@@ -13858,7 +13959,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
     }
     onClearScoutReveal?.();
   }, [pendingScoutReveal]);
-  useEffect(() => { onSubViewChange?.(showClubBrowser || showOwnHistory || showGlobalTransfers || showScoutList || !!negotiatingId || !!negotiatingScout || !!negotiatingListedPlayer); }, [showClubBrowser, showOwnHistory, showGlobalTransfers, showScoutList, negotiatingId, negotiatingScout, negotiatingListedPlayer]);
+  useEffect(() => { onSubViewChange?.(showClubBrowser || showOwnHistory || showGlobalTransfers || showScoutList || !!negotiatingId || !!negotiatingScout || !!negotiatingListedPlayer || !!negotiatingOfferId); }, [showClubBrowser, showOwnHistory, showGlobalTransfers, showScoutList, negotiatingId, negotiatingScout, negotiatingListedPlayer, negotiatingOfferId]);
   const currentTurn = season * 38 + round;
   const list = market[region].filter(p => !blacklistedPlayers?.[p.id] || blacklistedPlayers[p.id] <= currentTurn);
   const locked = scoutingLevel < REGION_UNLOCK[region];
@@ -13877,6 +13978,16 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
     return <NegotiationView player={lp} club={lc ? { ...lc, goodwill: clubGoodwill?.[lc.id] ?? 50 } : syntheticFreeAgentClub(lp)} region={lp.region || "scout"} budget={budget} reputation={reputation} difficulty={difficulty} userClubId={userClubId} clubs={clubs} scoutedPlayerIds={scoutedPlayerIds} pendingPlayerScouts={pendingPlayerScouts} onScoutPlayer={onScoutPlayer} round={round}
       onNegotiationFailed={onNegotiationFailed}
       onBack={() => setNegotiatingListedPlayer(null)} onFinalize={(r, p, price, wage, details) => { onFinalizeScoutSignee(p, price, wage, details); setNegotiatingListedPlayer(null); }} />;
+  }
+
+  if (negotiatingOfferId) {
+    const offer = incomingOffers.find(o => o.id === negotiatingOfferId);
+    if (offer) {
+      return <IncomingOfferNegotiationView offer={offer} reputation={reputation}
+        onBack={() => setNegotiatingOfferId(null)}
+        onWithdraw={msg => { onWithdrawIncomingOffer(offer.id, msg); setNegotiatingOfferId(null); }}
+        onFinalize={finalPrice => { onFinalizeNegotiatedOffer(offer.id, finalPrice); setNegotiatingOfferId(null); }} />;
+    }
   }
 
   if (negotiatingScout && scoutMission?.complete) {
@@ -14024,7 +14135,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
                 <div className="text-sm"><span className="font-semibold">{o.buyerName}</span> bjuder <span className="font-mono font-semibold">{formatMoney(o.offer)}</span> för <span className="font-semibold">{o.playerName}</span>.</div>
                 <div className="flex gap-2 mt-2">
                   <button onClick={() => onRespondOffer(o.id, "accept")} className="flex-1 py-2 rounded-xl text-xs font-semibold" style={{ background: C.turf, color: C.paper }}>Acceptera</button>
-                  <button onClick={() => onRespondOffer(o.id, "counter")} className="flex-1 py-2 rounded-xl text-xs font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Begär mer</button>
+                  <button onClick={() => setNegotiatingOfferId(o.id)} className="flex-1 py-2 rounded-xl text-xs font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Förhandla</button>
                   <button onClick={() => onRespondOffer(o.id, "reject")} className="flex-1 py-2 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.loss}`, color: C.loss }}>Avvisa</button>
                 </div>
               </PaperCard>
