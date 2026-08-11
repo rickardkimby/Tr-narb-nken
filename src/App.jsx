@@ -6927,7 +6927,7 @@ function setupCup(type, base) {
                   else setG(prev => ({ ...prev, view: prev.pendingShootout?.targetView || "home", pendingShootout: null }));
                 }} />
               ) : g.view === "seasonawards" ? (
-                <SeasonAwardsView awards={g.lastSeasonAwards} userClubId={g.userClubId} userAwardWins={g.userAwardWins} userManagerAwardBonus={g.userManagerAwardBonus} onContinue={() => setG(prev => ({ ...prev, view: "home" }))} />
+                <SeasonAwardsView awards={g.lastSeasonAwards} userClubId={g.userClubId} userAwardWins={g.userAwardWins} userManagerAwardBonus={g.userManagerAwardBonus} clubs={g.clubs} onContinue={() => setG(prev => ({ ...prev, view: "home" }))} />
               ) : g.view === "sacked" ? (
                 <SackedView clubName={userClub.name} financialCrisis={g.lastCrisisWasFinancial} onSeeJobs={() => setG(prev => ({ ...prev, view: "jobmarket" }))} />
               ) : g.view === "managercontract" ? (
@@ -6999,7 +6999,7 @@ function setupCup(type, base) {
                   onAdvanceSillySeason={advanceSillySeasonWeek} onFinishSillySeason={finishSillySeason} onOpenTours={openTourOffers} onStartTour={startTour}
                   onGotoTourPlanner={() => setG(prev => ({ ...prev, view: "tourplanner" }))}
                   onGotoTable={() => setG(prev => ({ ...prev, activeTab: "table", view: "tab" }))}
-                  onGotoEconomy={() => setG(prev => ({ ...prev, activeTab: "ekonomi", view: "tab" }))} />
+                  onGotoEconomy={() => setG(prev => ({ ...prev, activeTab: "ekonomi", view: "tab" }))} onScoutOpponent={openScoutView} />
               ) : g.activeTab === "table" ? (
                 <TableTab standings={standings} clubs={g.clubs} userClubId={g.userClubId} division={userClub.division} cup={g.activeCupType ? g.cups[g.activeCupType] : null} nextFixture={nextFixture} allSchedules={g.allSchedules} leagueId={g.leagueId} season={g.season} currentRound={g.round} onSubViewChange={setSubViewOpen} season1Qualifiers={g.season1Qualifiers} schedule={g.schedule} cup1Live={g.cups.cup1} domesticLive={g.cups.domestic} cup2Live={g.cups.cup2} />
               ) : g.activeTab === "fixtures" ? (
@@ -8283,7 +8283,7 @@ function TourPlannerView({ g, onBack, onOpenTours, onStartTour }) {
     </div>
   );
 }
-function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRow, nextFixture, seasonOver, onPlay, onNewSeason, onGotoCup, onSetPlannedSub, onSetTeamTalk, onRestStars, onGotoPrep, onAdvanceSillySeason, onFinishSillySeason, onOpenTours, onStartTour, onGotoTourPlanner, onGotoTable, onGotoEconomy }) {
+function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRow, nextFixture, seasonOver, onPlay, onNewSeason, onGotoCup, onSetPlannedSub, onSetTeamTalk, onRestStars, onGotoPrep, onAdvanceSillySeason, onFinishSillySeason, onOpenTours, onStartTour, onGotoTourPlanner, onGotoTable, onGotoEconomy, onScoutOpponent }) {
   const form = recentForm(g.schedule, g.round, g.userClubId);
   const isHome = nextFixture ? nextFixture.home === g.userClubId : true;
   const n = standings.length;
@@ -8429,11 +8429,19 @@ function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRo
             <span className="text-sm font-medium">{isHome ? "Hemma" : "Borta"}</span>
           </div>
           <span className="font-display text-xl" style={{ color: C.inkSoft }}>VS</span>
-          <div className="flex items-center gap-2">
-            {foreignOpp && <CountryFlag country={oppClub.league} size={16} />}
-            <span className="text-sm font-medium text-right">{oppClub?.name}</span>
-            <ClubJersey club={oppClub} size={36} />
-          </div>
+          {oppClub && onScoutOpponent ? (
+            <button onClick={() => onScoutOpponent(oppClub.id)} className="flex items-center gap-2">
+              {foreignOpp && <CountryFlag country={oppClub.league} size={16} />}
+              <span className="text-sm font-medium text-right">{oppClub?.name}</span>
+              <ClubJersey club={oppClub} size={36} />
+            </button>
+          ) : (
+            <div className="flex items-center gap-2">
+              {foreignOpp && <CountryFlag country={oppClub.league} size={16} />}
+              <span className="text-sm font-medium text-right">{oppClub?.name}</span>
+              <ClubJersey club={oppClub} size={36} />
+            </div>
+          )}
         </div>
         {oppClub && <div className="text-11 mt-2 text-center" style={{ color: C.inkSoft }}>{report.strengthLine}</div>}
         <div className="flex items-center justify-between mt-2 text-10" style={{ color: C.inkSoft }}>
@@ -10459,9 +10467,13 @@ function ManagerCVView({ manager, onBack }) {
     </div>
   );
 }
-function SeasonAwardsView({ awards, userClubId, userAwardWins, userManagerAwardBonus, onContinue }) {
+function SeasonAwardsView({ awards, userClubId, userAwardWins, userManagerAwardBonus, clubs, onContinue }) {
   const [scope, setScope] = useState("global"); // "global" | "eng_d1" etc.
+  const [viewingPlayer, setViewingPlayer] = useState(null);
+  const [viewingClub, setViewingClub] = useState(null);
   const wonSomething = (userAwardWins && userAwardWins.length > 0) || (userManagerAwardBonus > 0);
+  if (viewingClub) return <OpponentScoutView club={viewingClub} onBack={() => setViewingClub(null)} />;
+  if (viewingPlayer) return <ScoutedPlayerProfile player={viewingPlayer.player} club={viewingPlayer.club} onBack={() => setViewingPlayer(null)} />;
   if (!awards) return (
     <div className="rise-in space-y-2.5">
       <PaperCard><div className="text-sm text-center py-4" style={{ color: C.inkSoft }}>Inga utmärkelser registrerade.</div></PaperCard>
@@ -10514,11 +10526,11 @@ function SeasonAwardsView({ awards, userClubId, userAwardWins, userManagerAwardB
                     <PlayerAvatar player={{ id: r.data.manager?.name, age: 48 }} size={28} />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-semibold truncate">{r.data.manager?.name}</div>
-                      <div className="text-9 flex items-center gap-1" style={{ color: C.inkSoft }}><ClubJersey club={{ id: r.data.clubId, color: r.data.clubColor }} size={12} />{r.data.clubName} · Plats {r.data.pos}</div>
+                      <button onClick={() => clubs?.[r.data.clubId] && setViewingClub(clubs[r.data.clubId])} className="text-9 flex items-center gap-1" style={{ color: C.inkSoft }}><ClubJersey club={{ id: r.data.clubId, color: r.data.clubColor }} size={12} />{r.data.clubName} · Plats {r.data.pos}</button>
                     </div>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-2">
+                  <button onClick={() => setViewingPlayer({ player: r.data.player, club: clubs?.[r.data.clubId] || { id: r.data.clubId, color: r.data.clubColor, name: r.data.clubName } })} className="w-full flex items-center gap-2 text-left">
                     <PlayerAvatar player={r.data.player} size={28} />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-semibold truncate">{r.data.player.name}</div>
@@ -10528,7 +10540,7 @@ function SeasonAwardsView({ awards, userClubId, userAwardWins, userManagerAwardB
                       <div className="font-mono text-base font-bold" style={{ color: C.win }}>{r.getValue(r.data)}</div>
                       <div className="text-9" style={{ color: C.inkSoft }}>{r.valueLabel}</div>
                     </div>
-                  </div>
+                  </button>
                 )}
               </div>
             );
@@ -10835,9 +10847,11 @@ function TableTab({ standings, clubs, userClubId, division, cup, nextFixture, al
 function ScheduleBrowserView({ allSchedules, clubs, homeLeagueId, season, seasonBaseYear, onBack }) {
   const [leagueId, setLeagueId] = useState(homeLeagueId);
   const [division, setDivision] = useState(1);
+  const [viewingClub, setViewingClub] = useState(null);
   const key = `${leagueId}_d${division}`;
   const schedule = allSchedules?.[key] || [];
   const leagueName = LEAGUES.find(l => l.id === leagueId)?.name || leagueId;
+  if (viewingClub) return <OpponentScoutView club={viewingClub} onBack={() => setViewingClub(null)} />;
   return (
     <div className="rise-in space-y-2.5">
       <button onClick={onBack} style={{ position: "fixed", bottom: 14, right: 14, display: "inline-block", color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50, backdropFilter: "blur(4px)", boxShadow: "0 2px 10px rgba(0,0,0,0.35)" }}>← Bakåt</button>
@@ -10865,7 +10879,9 @@ function ScheduleBrowserView({ allSchedules, clubs, homeLeagueId, season, season
             return (
               <div key={`${ri}-${fi}`} className="flex items-center justify-between px-3 py-2 text-11">
                 <span className="font-mono w-14 shrink-0" style={{ color: C.inkSoft }}>{formatGameDateShort(roundDate(season, ri, seasonBaseYear))}</span>
-                <span className="flex-1 truncate px-1">{home.name} – {away.name}</span>
+                <span className="flex-1 truncate px-1">
+                  <button onClick={() => setViewingClub(home)} className="font-semibold">{home.name}</button> – <button onClick={() => setViewingClub(away)} className="font-semibold">{away.name}</button>
+                </span>
                 {played ? <span className="font-mono font-semibold shrink-0">{f.homeGoals}–{f.awayGoals}</span> : <span className="font-mono shrink-0" style={{ color: C.inkSoft }}>–</span>}
               </div>
             );
