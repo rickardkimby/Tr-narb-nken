@@ -15071,6 +15071,7 @@ function PersonalTab({ budget, staff, reputation, homeCountry, staffCandidates, 
         <span>Scoutnätverk — nivå {dev.scouting}/5</span>
         <ChevronRight size={18} />
       </button>
+      <button onClick={() => setShowDetail(true)} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Rekrytera / förhandla personal</button>
       {roles.map(r => {
         const member = staff[r.key];
         return (
@@ -15102,7 +15103,6 @@ function PersonalTab({ budget, staff, reputation, homeCountry, staffCandidates, 
           </PaperCard>
         );
       })}
-      <button onClick={() => setShowDetail(true)} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Rekrytera / förhandla personal</button>
     </div>
   );
 }
