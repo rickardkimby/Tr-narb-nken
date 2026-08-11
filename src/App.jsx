@@ -13831,7 +13831,7 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
   if (showOwnHistory) return <OwnTransferHistoryView transferHistory={transferHistory} userClubId={userClubId} currentSeason={season} onBack={() => setShowOwnHistory(false)} />;
   if (showGlobalTransfers) return <GlobalTransfersView transferHistory={transferHistory} userClubId={userClubId} onBack={() => setShowGlobalTransfers(false)} />;
   if (showClubBrowser) return <ClubSquadBrowserView clubs={clubs} userClubId={userClubId} homeLeagueId={leagueId} budget={budget} reputation={reputation} difficulty={difficulty} clubGoodwill={clubGoodwill} partnerClubId={partnerClubId} onNegotiationFailed={onNegotiationFailed} onFinalize={onFinalizeClubBrowseTransfer} onInstantLoanFromPartner={onInstantLoanFromPartner} onBack={() => setShowClubBrowser(false)} scoutedPlayerIds={scoutedPlayerIds} pendingPlayerScouts={pendingPlayerScouts} onScoutPlayer={onScoutPlayer} round={round} initialClubId={browseTargetClubId} transferHistory={transferHistory} />;
-  if (showScoutList) return <ScoutListView scoutedPlayers={scoutedPlayers} clubs={clubs} worldPool={worldPool} transferHistory={transferHistory} onBack={() => setShowScoutList(false)} onNegotiate={(player, club) => setNegotiatingListedPlayer({ player, club })} />;
+  if (showScoutList) return <ScoutListView scoutedPlayers={scoutedPlayers} clubs={clubs} worldPool={worldPool} transferHistory={transferHistory} onBack={() => setShowScoutList(false)} onNegotiate={(player, club) => { setShowScoutList(false); setNegotiatingListedPlayer({ player, club }); }} />;
 
   if (negotiatingListedPlayer) {
     const { player: lp, club: lc } = negotiatingListedPlayer;
