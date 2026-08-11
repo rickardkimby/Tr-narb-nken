@@ -1464,6 +1464,14 @@ function scoutMissionCeiling(scoutLevel, division) {
   const base = scoutLevel ? clamp(58 + scoutLevel * 7, 58, 95) : 62;
   return clamp(base + divAdj, 38, 95);
 }
+// A mission can search several places at once (domestic league squads plus any number of Övriga
+// världen regions) — "league" is the sentinel for the domestic search. Falls back to the old singular
+// worldPoolRegion field for missions saved before multi-region search existed.
+function missionRegions(mission) {
+  if (mission.worldPoolRegions && mission.worldPoolRegions.length) return mission.worldPoolRegions;
+  if (mission.worldPoolRegion) return [mission.worldPoolRegion];
+  return ["league"];
+}
 function findRealScoutCandidates(mission, clubs, userClubId, count, worldPool) {
   const attrFilters = mission.attributeFilters || {};
   const activeAttrKeys = Object.keys(attrFilters).filter(k => attrFilters[k]);
@@ -1480,18 +1488,19 @@ function findRealScoutCandidates(mission, clubs, userClubId, count, worldPool) {
     }
     return true;
   };
+  const regions = missionRegions(mission);
   const candidates = [];
-  if (mission.worldPoolRegion && worldPool) {
-    // Searching "Övriga världen" specifically pulls from the same persistent, depleting pool that's
-    // browsable directly in the Spelare tab — not a separate made-up set of players.
-    const regions = mission.worldPoolRegion === "any" ? Object.keys(worldPool) : [mission.worldPoolRegion];
-    regions.forEach(region => {
-      (worldPool[region] || []).forEach(p => { if (passesFilters(p)) candidates.push({ player: p, clubId: null }); });
-    });
-  } else {
+  if (regions.includes("league")) {
     Object.values(clubs).forEach(club => {
       if (club.id === userClubId || !club.squad) return;
       club.squad.forEach(p => { if (passesFilters(p)) candidates.push({ player: p, clubId: club.id }); });
+    });
+  }
+  if (worldPool) {
+    // Searching "Övriga världen" specifically pulls from the same persistent, depleting pool that's
+    // browsable directly in the Spelare tab — not a separate made-up set of players.
+    regions.filter(r => r !== "league").forEach(region => {
+      (worldPool[region] || []).forEach(p => { if (passesFilters(p)) candidates.push({ player: p, clubId: null }); });
     });
   }
   if (!candidates.length) return [];
@@ -1534,9 +1543,10 @@ function generateScoutCandidates(mission, scoutLevel, clubs, division, userClubI
     results.push(r);
   }
   let guard = 0;
-  // World-pool searches only draw from the real, finite pool — no synthetic backfill, since "make up a
-  // random extra player" would defeat the point of scouting a specific, persistent region.
-  while (results.length < wanted && guard < wanted * 8 && !mission.worldPoolRegion) {
+  // World-pool-only searches draw exclusively from the real, finite pool — no synthetic backfill, since
+  // "make up a random extra player" would defeat the point of scouting a specific, persistent region.
+  // If the domestic league is also part of the search, synthetic backfill still applies to that part.
+  while (results.length < wanted && guard < wanted * 8 && missionRegions(mission).includes("league")) {
     guard++;
     const synth = generateSyntheticScoutCandidate(mission, scoutLevel, clubs, division);
     if (!synth || !passesInterest(synth)) continue;
@@ -5625,7 +5635,10 @@ function setupCup(type, base) {
   function startScoutMission(filters) {
     if (g.scoutMission && !g.scoutMission.complete) { showToast("Scouten är redan ute på uppdrag."); return; }
     const level = g.staff.scout?.level || 0;
-    const roundsTotal = Math.round(scoutMissionDuration(level));
+    const regionCount = Math.max(1, (filters.worldPoolRegions || ["league"]).length);
+    // Searching more places at once takes longer — each extra region beyond the first tacks on time,
+    // same trade-off a real scouting network would face covering more ground simultaneously.
+    const roundsTotal = clamp(Math.round(scoutMissionDuration(level) + (regionCount - 1) * 1.5), 2, 16);
     setG(prev => ({ ...prev, scoutMission: { ...filters, roundsTotal, roundsElapsed: 0, complete: false, result: null } }));
     showToast(`Scouten skickas ut — klart om ca ${roundsTotal} omgångar.`);
   }
@@ -13540,9 +13553,15 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
   const [maxWage, setMaxWage] = useState("");
   const [wantPotential, setWantPotential] = useState(false);
   const [wantInterested, setWantInterested] = useState(false);
-  const [worldPoolRegion, setWorldPoolRegion] = useState(null);
+  const [worldPoolRegions, setWorldPoolRegions] = useState(["league"]);
   const [savingProfileName, setSavingProfileName] = useState(null);
   const inputStyle = { background: "transparent", border: `1px solid ${C.paperDim}`, borderRadius: 10, padding: "8px 10px", color: C.ink, fontSize: 13, width: "100%" };
+  function toggleRegion(key) {
+    setWorldPoolRegions(prev => {
+      const next = prev.includes(key) ? prev.filter(r => r !== key) : [...prev, key];
+      return next.length ? next : prev; // always leave at least one place selected
+    });
+  }
   function applyPreset(preset) {
     setPosFilter(preset.posFilter);
     setSideFilter(preset.sideFilter || null);
@@ -13551,7 +13570,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
     setAgeMax(preset.ageMax ? String(preset.ageMax) : "");
     setWantPotential(!!preset.minPotential);
     setWantInterested(!!preset.interestedOnly);
-    setWorldPoolRegion(preset.worldPoolRegion || null);
+    setWorldPoolRegions(preset.worldPoolRegion ? [preset.worldPoolRegion] : ["league"]);
   }
   function currentFilters() {
     return {
@@ -13561,7 +13580,7 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
       maxValue: maxValue ? parseInt(maxValue) : null, maxWage: maxWage ? parseInt(maxWage) : null,
       minPotential: wantPotential ? 76 : null,
       interestedOnly: wantInterested,
-      worldPoolRegion,
+      worldPoolRegions,
     };
   }
 
@@ -13576,15 +13595,21 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
     if (scoutMission.maxWage) parts.push(`Max ${formatMoney(scoutMission.maxWage)}/omg`);
     if (scoutMission.minPotential) parts.push(`Hög potential (≥${scoutMission.minPotential})`);
     if (scoutMission.interestedOnly) parts.push("Intresserad av klubben");
-    if (scoutMission.worldPoolRegion) parts.push(`Övriga världen — ${REGION_LABELS[scoutMission.worldPoolRegion]}`);
+    const missionRegionList = missionRegions(scoutMission);
+    if (!(missionRegionList.length === 1 && missionRegionList[0] === "league")) {
+      parts.push(`Söker i: ${missionRegionList.map(r => r === "league" ? "Ligaspelare" : REGION_LABELS[r]).join(", ")}`);
+    }
     return (
-      <PaperCard>
-        <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Scouten är ute på uppdrag</div>
-        <div className="text-sm mt-1 font-semibold">{scoutMission.roundsElapsed} av {scoutMission.roundsTotal} omgångar</div>
-        <div className="h-2 rounded-full mt-2" style={{ background: "rgba(0,0,0,0.08)" }}><div style={{ width: `${pct}%`, background: C.gold, height: "100%", borderRadius: 999, transition: "width .5s ease" }} /></div>
-        <div className="text-11 mt-2" style={{ color: C.inkSoft }}>{parts.length ? `Kriterier: ${parts.join(" · ")}` : "Fri sökning, inga specifika kriterier."}</div>
-        <button onClick={onCancel} className="w-full py-2 mt-2.5 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.inkSoft }}>Avbryt uppdraget</button>
-      </PaperCard>
+      <>
+        <PaperCard>
+          <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Scouten är ute på uppdrag</div>
+          <div className="text-sm mt-1 font-semibold">{scoutMission.roundsElapsed} av {scoutMission.roundsTotal} omgångar</div>
+          <div className="h-2 rounded-full mt-2" style={{ background: "rgba(0,0,0,0.08)" }}><div style={{ width: `${pct}%`, background: C.gold, height: "100%", borderRadius: 999, transition: "width .5s ease" }} /></div>
+          <div className="text-11 mt-2" style={{ color: C.inkSoft }}>{parts.length ? `Kriterier: ${parts.join(" · ")}` : "Fri sökning, inga specifika kriterier."}</div>
+          <button onClick={onCancel} className="w-full py-2 mt-2.5 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.inkSoft }}>Avbryt uppdraget</button>
+        </PaperCard>
+        <button onClick={onOpenClubBrowser} className="w-full py-2.5 rounded-xl text-xs font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Bläddra klubbar & truppar direkt</button>
+      </>
     );
   }
 
@@ -13754,18 +13779,23 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
       </PaperCard>
       <PaperCard>
         <div className="text-xs font-semibold mb-1.5">Var ska scouten leta?</div>
+        <div className="text-10 mb-2" style={{ color: C.inkSoft }}>Välj flera ställen samtidigt om ni vill — men ju fler regioner, desto längre tid tar uppdraget.</div>
         <div className="flex flex-wrap gap-1.5">
-          <button onClick={() => setWorldPoolRegion(null)} className="px-2.5 py-1.5 rounded-lg text-9 font-semibold" style={!worldPoolRegion ? { background: C.gold, color: C.turfDeep } : { background: "rgba(30,42,34,0.08)", color: C.ink }}>Ligaspelare</button>
+          <button onClick={() => toggleRegion("league")} className="px-2.5 py-1.5 rounded-lg text-9 font-semibold" style={worldPoolRegions.includes("league") ? { background: C.gold, color: C.turfDeep } : { background: "rgba(30,42,34,0.08)", color: C.ink }}>{worldPoolRegions.includes("league") && "✓ "}Ligaspelare</button>
           {Object.entries(REGION_LABELS).map(([key, label]) => {
             const locked = scoutLevel < REGION_UNLOCK[key];
+            const active = worldPoolRegions.includes(key);
             return (
-              <button key={key} onClick={() => !locked && setWorldPoolRegion(key)} disabled={locked} className="px-2.5 py-1.5 rounded-lg text-9 font-semibold flex items-center gap-1" style={worldPoolRegion === key ? { background: C.gold, color: C.turfDeep } : locked ? { background: "rgba(30,42,34,0.05)", color: C.inkSoft, opacity: 0.7 } : { background: "rgba(30,42,34,0.08)", color: C.ink }}>
-                {locked && <Lock size={9} />}{label}
+              <button key={key} onClick={() => !locked && toggleRegion(key)} disabled={locked} className="px-2.5 py-1.5 rounded-lg text-9 font-semibold flex items-center gap-1" style={active ? { background: C.gold, color: C.turfDeep } : locked ? { background: "rgba(30,42,34,0.05)", color: C.inkSoft, opacity: 0.7 } : { background: "rgba(30,42,34,0.08)", color: C.ink }}>
+                {locked && <Lock size={9} />}{active && "✓ "}{label}
               </button>
             );
           })}
         </div>
-        {worldPoolRegion && <div className="text-10 mt-1.5" style={{ color: C.inkSoft }}>Söker bland de faktiska spelarna i Övriga världen-poolen för {REGION_LABELS[worldPoolRegion]} — samma spelare som syns under Spelare-fliken.</div>}
+        <div className="text-10 mt-1.5" style={{ color: C.inkSoft }}>
+          {worldPoolRegions.length > 1 || worldPoolRegions[0] !== "league" ? `Söker i: ${worldPoolRegions.map(r => r === "league" ? "Ligaspelare" : REGION_LABELS[r]).join(", ")}. ` : ""}
+          Uppskattad tid: ca {clamp(Math.round(scoutMissionDuration(scoutLevel) + (worldPoolRegions.length - 1) * 1.5), 2, 16)} omgångar.
+        </div>
       </PaperCard>
       <PaperCard>
         <button onClick={() => setWantInterested(w => !w)} className="w-full flex items-center justify-between text-left">
