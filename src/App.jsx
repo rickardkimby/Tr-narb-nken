@@ -204,11 +204,11 @@ function teamFormMult(recentResults) {
   const score = recentResults.reduce((s, r) => s + (r === "win" ? 1 : r === "loss" ? -1 : 0), 0) / recentResults.length;
   return 1 + clamp(score * 0.06, -0.08, 0.08);
 }
-const SEASON_BASE_YEAR = 2026; // Season 1 = 2026/2027, matching a real European club season
-function seasonLabel(season) { const y = SEASON_BASE_YEAR + (season - 1); return `${y}/${y + 1}`; }
-function preSeasonStartDate(season) { return new Date(Date.UTC(SEASON_BASE_YEAR + (season - 1), 6, 1)); } // 1 July
-function roundDate(season, round) {
-  const kickoff = new Date(Date.UTC(SEASON_BASE_YEAR + (season - 1), 7, 9)); // 9 August kickoff
+const SEASON_BASE_YEAR = 2026; // Default season 1 = 2026/2027 — overridden per-career by the active database's own start year (see seasonBaseYear on game state)
+function seasonLabel(season, baseYear = SEASON_BASE_YEAR) { const y = baseYear + (season - 1); return `${y}/${y + 1}`; }
+function preSeasonStartDate(season, baseYear = SEASON_BASE_YEAR) { return new Date(Date.UTC(baseYear + (season - 1), 6, 1)); } // 1 July
+function roundDate(season, round, baseYear = SEASON_BASE_YEAR) {
+  const kickoff = new Date(Date.UTC(baseYear + (season - 1), 7, 9)); // 9 August kickoff
   const winterBreakAfterRound = 19; // short winter break, like most European leagues
   let days = round * 7;
   if (round > winterBreakAfterRound) days += 14;
@@ -4194,6 +4194,7 @@ function TranarbankenApp() {
   const [previewWorld, setPreviewWorld] = useState(() => generateWorld());
   const [previewWorldPool, setPreviewWorldPool] = useState(null);
   const [activeDbLabel, setActiveDbLabel] = useState("Standarddatabas");
+  const [previewSeasonBaseYear, setPreviewSeasonBaseYear] = useState(SEASON_BASE_YEAR);
   const season1Qualifiers = useMemo(() => buildSeason1Qualifiers(previewWorld), [previewWorld]);
   const [g, setG] = useState({ setupDone: false });
   const [screen, setScreen] = useState("loading");
@@ -4517,7 +4518,7 @@ function TranarbankenApp() {
     // default — CLUB_BUDGET_OVERRIDES stays as a manual last-word for the handful of clubs it lists.
     const startBudget = Math.round(CLUB_BUDGET_OVERRIDES[clubId] ?? club.startBudget ?? (arche.startBudget * divMult));
     const initial = {
-      setupDone: true, leagueId: countryId, userClubId: clubId, season: 1, round: 0, tactic: "balanserad", spelide: "balanserad",
+      setupDone: true, leagueId: countryId, userClubId: clubId, season: 1, round: 0, seasonBaseYear: previewSeasonBaseYear, tactic: "balanserad", spelide: "balanserad",
       budget: startBudget, seasonStartBudget: startBudget, lastDelta: 0, dev, reputation, fanbase: startFanbase, lastCup2ChampionId: null,
       // Anchors matchday ticket demand to a club's real researched average attendance (see ticketDemandBase)
       // instead of a flat division/archetype guess — fanbase's growth/decline over the career still scales
@@ -4554,7 +4555,7 @@ function TranarbankenApp() {
 
   if (screen === "loading") return <div style={{ background: C.turfDeep, minHeight: "100vh" }} />;
   if (screen === "select") return <SaveSelectView saves={saveIndex} onSelect={switchToSave} onNew={goToNewCareer} onDelete={deleteSave} onExport={exportSave} onImport={importSaveFile} onOpenDatabase={() => setScreen("database")} />;
-  if (screen === "database") return <DatabaseManagerView standardWorld={previewWorld} onUseDatabase={(id, name, clubs, worldPool) => { setPreviewWorld(clubs); setPreviewWorldPool(worldPool || null); setActiveDbLabel(name); setScreen("onboarding"); }} onBack={() => setScreen("select")} />;
+  if (screen === "database") return <DatabaseManagerView standardWorld={previewWorld} onUseDatabase={(id, name, clubs, worldPool, seasonBaseYear) => { setPreviewWorld(clubs); setPreviewWorldPool(worldPool || null); setActiveDbLabel(name); setPreviewSeasonBaseYear(seasonBaseYear || SEASON_BASE_YEAR); setScreen("onboarding"); }} onBack={() => setScreen("select")} />;
   if (screen === "onboarding") return <Onboarding world={previewWorld} onConfirm={handleConfirmSetup} onCancel={() => setScreen("select")} />;
 
   const userClub = g.clubs[g.userClubId];
@@ -6860,7 +6861,7 @@ function setupCup(type, base) {
                   </button>
                 )}
                 <div className="font-mono text-10 mt-0.5" style={{ color: C.paperDim }}>
-                  {countryName} · D{userClub.division} · {seasonLabel(g.season)} · {seasonOver ? "Säsongen avslutad" : `Omg ${g.round + 1}/${totalRounds} · ${formatGameDateShort(roundDate(g.season, g.round))}`} · Plats {userPos || "–"}
+                  {countryName} · D{userClub.division} · {seasonLabel(g.season, g.seasonBaseYear)} · {seasonOver ? "Säsongen avslutad" : `Omg ${g.round + 1}/${totalRounds} · ${formatGameDateShort(roundDate(g.season, g.round, g.seasonBaseYear))}`} · Plats {userPos || "–"}
                 </div>
               </div>
               <div className="text-right shrink-0">
@@ -6994,7 +6995,7 @@ function setupCup(type, base) {
               ) : g.activeTab === "table" ? (
                 <TableTab standings={standings} clubs={g.clubs} userClubId={g.userClubId} division={userClub.division} cup={g.activeCupType ? g.cups[g.activeCupType] : null} nextFixture={nextFixture} allSchedules={g.allSchedules} leagueId={g.leagueId} season={g.season} currentRound={g.round} onSubViewChange={setSubViewOpen} season1Qualifiers={g.season1Qualifiers} schedule={g.schedule} cup1Live={g.cups.cup1} domesticLive={g.cups.domestic} cup2Live={g.cups.cup2} />
               ) : g.activeTab === "fixtures" ? (
-                <FixturesTab schedule={g.schedule} clubs={g.clubs} currentRound={g.round} userClubId={g.userClubId} cup={g.activeCupType ? g.cups[g.activeCupType] : null} season={g.season}
+                <FixturesTab schedule={g.schedule} clubs={g.clubs} currentRound={g.round} userClubId={g.userClubId} cup={g.activeCupType ? g.cups[g.activeCupType] : null} season={g.season} seasonBaseYear={g.seasonBaseYear}
                   budget={g.budget} tourOffers={g.tourOffers} lastTourResult={g.lastTourResult} tourCompletedThisOffseason={g.tourCompletedThisOffseason} onOpenTours={openTourOffers} onStartTour={startTour}
                   allSchedules={g.allSchedules} leagueId={g.leagueId} onSubViewChange={setSubViewOpen} season1Qualifiers={g.season1Qualifiers} cup1Live={g.cups.cup1} domesticLive={g.cups.domestic} cup2Live={g.cups.cup2} />
               ) : g.activeTab === "squad" ? (
@@ -7455,6 +7456,7 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
   const [importBusy, setImportBusy] = useState(false);
   const [namePromptFor, setNamePromptFor] = useState(null); // "create" | "saveas" | { renameId }
   const [nameInput, setNameInput] = useState("");
+  const [yearInput, setYearInput] = useState(String(SEASON_BASE_YEAR));
   const [toast, setToast] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -7474,13 +7476,14 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
 
   async function confirmCreateOrSaveAs(sourceData, sourceWorldPool) {
     const name = nameInput.trim() || "Namnlös databas";
+    const seasonBaseYear = clamp(Number(yearInput) || SEASON_BASE_YEAR, 1900, 2100);
     const id = uid();
     const pool = sourceWorldPool || generateWorldPool();
     await saveDbData(id, sourceData);
     await saveWorldPoolData(id, pool);
-    await persistList([...customDbs, { id, name, createdAt: new Date().toISOString() }]);
+    await persistList([...customDbs, { id, name, seasonBaseYear, createdAt: new Date().toISOString() }]);
     setNamePromptFor(null); setNameInput("");
-    setEditingDb({ id, name, isCustom: true, data: sourceData, worldPool: pool });
+    setEditingDb({ id, name, isCustom: true, data: sourceData, worldPool: pool, seasonBaseYear });
     flash(`"${name}" skapad.`);
   }
   async function deleteDb(id) {
@@ -7493,7 +7496,12 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
     const data = await loadDbData(entry.id);
     if (!data) { flash("Kunde inte läsa databasen."); return; }
     const worldPool = (await loadWorldPoolData(entry.id)) || generateWorldPool();
-    setEditingDb({ id: entry.id, name: entry.name, isCustom: true, data, worldPool });
+    setEditingDb({ id: entry.id, name: entry.name, isCustom: true, data, worldPool, seasonBaseYear: entry.seasonBaseYear ?? SEASON_BASE_YEAR });
+  }
+  async function updateDbYear(id, year) {
+    const seasonBaseYear = clamp(Number(year) || SEASON_BASE_YEAR, 1900, 2100);
+    await persistList(customDbs.map(d => d.id === id ? { ...d, seasonBaseYear } : d));
+    setEditingDb(prev => prev && prev.id === id ? { ...prev, seasonBaseYear } : prev);
   }
   function handleImportFile(file) {
     setImportBusy(true);
@@ -7504,17 +7512,22 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
       if (!valid) { setImportErrors(errors); return; }
       const id = uid();
       const name = file.name.replace(/\.xlsx$/i, "") || `Importerad databas ${customDbs.length + 1}`;
-      saveDbData(id, world).then(() => saveWorldPoolData(id, worldPool)).then(() => persistList([...customDbs, { id, name, createdAt: new Date().toISOString() }])).then(() => flash(`"${name}" importerad och validerad utan fel.`));
+      // Best-effort guess from the filename (e.g. "...2000-01..." or "...2000/01...") — always editable
+      // afterward via the database editor, this just saves a step for the common historical-season case.
+      const yearMatch = name.match(/(19|20)\d{2}/);
+      const seasonBaseYear = yearMatch ? Number(yearMatch[0]) : SEASON_BASE_YEAR;
+      saveDbData(id, world).then(() => saveWorldPoolData(id, worldPool)).then(() => persistList([...customDbs, { id, name, seasonBaseYear, createdAt: new Date().toISOString() }])).then(() => flash(`"${name}" importerad och validerad utan fel.`));
     }).catch(err => { setImportBusy(false); setImportErrors([err.message || "Kunde inte läsa Excel-filen."]); });
   }
 
   if (editingDb) {
-    return <DatabaseView world={editingDb.data} dbName={editingDb.name} isCustom={editingDb.isCustom}
+    return <DatabaseView world={editingDb.data} dbName={editingDb.name} isCustom={editingDb.isCustom} seasonBaseYear={editingDb.seasonBaseYear ?? SEASON_BASE_YEAR}
       onBack={() => setEditingDb(null)}
       onSave={async clubs => { const ok = await saveDbData(editingDb.id, clubs); flash(ok ? `"${editingDb.name}" sparad.` : `Kunde inte spara "${editingDb.name}" — lagringen på den här enheten verkar blockerad (t.ex. privat surfläge eller full lagring). Prova Exportera Excel som säkerhetskopia istället.`); }}
-      onSaveAs={clubs => { setNamePromptFor({ type: "saveas", data: clubs, worldPool: editingDb.worldPool }); setNameInput(`${editingDb.name} (kopia)`); }}
+      onSaveAs={clubs => { setNamePromptFor({ type: "saveas", data: clubs, worldPool: editingDb.worldPool }); setNameInput(`${editingDb.name} (kopia)`); setYearInput(String(editingDb.seasonBaseYear ?? SEASON_BASE_YEAR)); }}
       onExport={(clubs, name) => exportDatabaseToExcel(clubs, `${(name || "databas").replace(/\s+/g, "_")}.xlsx`, editingDb.worldPool)}
-      onSaveAndPlay={clubs => onUseDatabase(editingDb.id, editingDb.name, clubs, editingDb.worldPool)} />;
+      onChangeSeasonBaseYear={editingDb.isCustom ? (year => updateDbYear(editingDb.id, year)) : null}
+      onSaveAndPlay={clubs => onUseDatabase(editingDb.id, editingDb.name, clubs, editingDb.worldPool, editingDb.seasonBaseYear)} />;
   }
 
   return (
@@ -7544,12 +7557,12 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
             <div className="text-sm font-semibold">Standarddatabas</div>
             <div className="text-9" style={{ color: C.paperDim }}>Spelets ursprungliga, slumpmässigt genererade värld. Kan aldrig skrivas över.</div>
           </div>
-          <button onClick={() => setEditingDb({ id: null, name: "Standarddatabas", isCustom: false, data: standardWorld, worldPool: generateWorldPool() })} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg shrink-0" style={{ background: "rgba(255,255,255,0.12)", color: C.paper }}>Visa</button>
+          <button onClick={() => setEditingDb({ id: null, name: "Standarddatabas", isCustom: false, data: standardWorld, worldPool: generateWorldPool(), seasonBaseYear: SEASON_BASE_YEAR })} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg shrink-0" style={{ background: "rgba(255,255,255,0.12)", color: C.paper }}>Visa</button>
         </div>
       </div>
 
       <div style={{ maxWidth: 520 }} className="grid grid-cols-3 gap-2 mb-4">
-        <button onClick={() => { setNamePromptFor({ type: "create", data: standardWorld }); setNameInput(`Min databas ${customDbs.length + 1}`); }} className="py-2.5 rounded-xl text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>➕ Ny databas</button>
+        <button onClick={() => { setNamePromptFor({ type: "create", data: standardWorld }); setNameInput(`Min databas ${customDbs.length + 1}`); setYearInput(String(SEASON_BASE_YEAR)); }} className="py-2.5 rounded-xl text-9 font-semibold" style={{ background: C.gold, color: C.turfDeep }}>➕ Ny databas</button>
         <button onClick={() => fileInputRef.current?.click()} className="py-2.5 rounded-xl text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paper }}>⬆️ Importera Excel</button>
         <button onClick={() => exportDatabaseToExcel(standardWorld, "tranarbanken_databasmall.xlsx")} className="py-2.5 rounded-xl text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.paper }}>📄 Ladda ner mall</button>
       </div>
@@ -7565,7 +7578,7 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
                 <span style={{ fontSize: 20 }}>🗂️</span>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-semibold truncate">{d.name}</div>
-                  <div className="text-9" style={{ color: C.paperDim }}>Skapad {new Date(d.createdAt).toLocaleDateString("sv-SE")}</div>
+                  <div className="text-9" style={{ color: C.paperDim }}>Säsong {seasonLabel(1, d.seasonBaseYear ?? SEASON_BASE_YEAR)} · Skapad {new Date(d.createdAt).toLocaleDateString("sv-SE")}</div>
                 </div>
                 <button onClick={() => openCustomDb(d)} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg shrink-0" style={{ background: "rgba(255,255,255,0.12)", color: C.paper }}>Redigera</button>
                 <button onClick={() => deleteDb(d.id)} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg shrink-0" style={{ background: "rgba(180,68,59,0.2)", color: "#E08A82" }}>Ta bort</button>
@@ -7581,6 +7594,9 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
           <div style={{ position: "fixed", top: "35%", left: 20, right: 20, maxWidth: 400, margin: "0 auto", background: C.paper, color: C.ink, borderRadius: 16, padding: 20, zIndex: 41 }}>
             <div className="font-display text-lg mb-1">{namePromptFor.type === "create" ? "Namnge din nya databas" : "Namnge kopian"}</div>
             <input autoFocus value={nameInput} onChange={e => setNameInput(e.target.value)} className="w-full px-3 py-2 rounded-lg text-sm mt-2 mb-3" style={{ background: C.paperDim, color: C.ink }} placeholder="Databasnamn" />
+            <div className="text-9 uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Säsongens startår</div>
+            <input type="number" value={yearInput} onChange={e => setYearInput(e.target.value)} className="w-full px-3 py-2 rounded-lg text-sm mb-1" style={{ background: C.paperDim, color: C.ink }} placeholder="2026" />
+            <div className="text-9 mb-3" style={{ color: C.inkSoft }}>Styr vilket årtal karriären börjar i — t.ex. 2000 för en databas byggd på säsongen 2000/01.</div>
             <div className="grid grid-cols-2 gap-2">
               <button onClick={() => setNamePromptFor(null)} className="py-2 rounded-xl text-sm font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.inkSoft }}>Avbryt</button>
               <button onClick={() => confirmCreateOrSaveAs(namePromptFor.data, namePromptFor.worldPool)} className="py-2 rounded-xl text-sm font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Skapa</button>
@@ -7591,7 +7607,7 @@ function DatabaseManagerView({ standardWorld, onUseDatabase, onBack }) {
     </div>
   );
 }
-function DatabaseView({ world, dbName, isCustom, onSave, onSaveAs, onExport, onSaveAndPlay, onBack }) {
+function DatabaseView({ world, dbName, isCustom, seasonBaseYear, onChangeSeasonBaseYear, onSave, onSaveAs, onExport, onSaveAndPlay, onBack }) {
   const [clubs, setClubs] = useState(world);
   const [leagueId, setLeagueId] = useState(LEAGUES[0].id);
   const [division, setDivision] = useState(1);
@@ -7790,6 +7806,17 @@ function DatabaseView({ world, dbName, isCustom, onSave, onSaveAs, onExport, onS
       <button onClick={onBack} className="text-sm mb-3" style={{ color: C.goldSoft }}>← Tillbaka till databaslistan</button>
       <div className="font-display text-2xl mb-1" style={{ color: C.goldSoft }}>{dbName || "Databas"}</div>
       <div className="text-11 mb-4" style={{ color: C.paperDim }}>Redigera lag och spelare. {isCustom ? "Spara databasen för att behålla ändringarna permanent, eller fortsätt direkt till klubbval." : "Standarddatabasen kan inte sparas över — spara som en ny databas istället."}</div>
+      {onChangeSeasonBaseYear ? (
+        <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl mb-3" style={{ background: "rgba(255,255,255,0.06)", maxWidth: 480 }}>
+          <div className="flex-1 min-w-0">
+            <div className="text-9 uppercase tracking-wide font-semibold" style={{ color: C.paperDim }}>Säsongens startår</div>
+            <div className="text-9 mt-0.5" style={{ color: C.paperDim }}>Karriären börjar i {seasonLabel(1, seasonBaseYear)}. Ändra om databasen speglar en annan säsong.</div>
+          </div>
+          <input type="number" value={seasonBaseYear} onChange={e => onChangeSeasonBaseYear(e.target.value)} className="w-20 px-2.5 py-2 rounded-lg text-sm font-mono font-semibold text-center shrink-0" style={{ background: C.paper, color: C.ink }} />
+        </div>
+      ) : (
+        <div className="text-9 mb-3" style={{ color: C.paperDim }}>Säsong {seasonLabel(1, seasonBaseYear)} — fast värde för standarddatabasen.</div>
+      )}
       <div className="flex gap-1.5 overflow-x-auto pb-1 mb-2">
         {LEAGUES.map(l => (
           <button key={l.id} onClick={() => setLeagueId(l.id)} className="px-3 py-1.5 rounded-full text-11 font-semibold shrink-0" style={leagueId === l.id ? { background: C.gold, color: C.turfDeep } : { background: "rgba(255,255,255,0.1)", color: C.paperDim }}>{l.name}</button>
@@ -8263,7 +8290,7 @@ function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRo
             <ClubJersey club={userClub} size={34} />
             <div className="min-w-0 flex-1">
               <div className="font-display text-lg truncate">{userClub.name}</div>
-              <div className="text-10" style={{ color: C.inkSoft }}>{countryName} · Försäsong {seasonLabel(g.season)}</div>
+              <div className="text-10" style={{ color: C.inkSoft }}>{countryName} · Försäsong {seasonLabel(g.season, g.seasonBaseYear)}</div>
             </div>
           </div>
         </PaperCard>
@@ -8283,7 +8310,7 @@ function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRo
           <div className="flex items-center gap-2">
             <Landmark size={16} color={C.gold} className="shrink-0" />
             <div className="font-display text-sm">SILLY SEASON</div>
-            <div className="text-9 font-mono" style={{ color: C.gold }}>· {formatGameDate(preSeasonStartDate(g.season))}</div>
+            <div className="text-9 font-mono" style={{ color: C.gold }}>· {formatGameDate(preSeasonStartDate(g.season, g.seasonBaseYear))}</div>
           </div>
           <div className="text-10 mt-1" style={{ color: C.inkSoft, lineHeight: 1.35 }}>Transferfönstret är öppet. Scouta, värva, förhandla kontrakt och bygg upp arena, akademi och organisation innan försäsongen drar igång.</div>
           <div className="flex items-center gap-3 mt-2.5 pt-2.5" style={{ borderTop: `1px dashed ${C.paperDim}` }}>
@@ -8384,7 +8411,7 @@ function HomeTab({ g, userClub, oppClub, countryName, standings, userPos, userRo
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <Swords size={12} color={C.gold} />
-            <span className="text-9 uppercase tracking-wide font-bold" style={{ color: C.gold }}>Seriematch · {countryName} · {formatGameDateShort(roundDate(g.season, g.round))}</span>
+            <span className="text-9 uppercase tracking-wide font-bold" style={{ color: C.gold }}>Seriematch · {countryName} · {formatGameDateShort(roundDate(g.season, g.round, g.seasonBaseYear))}</span>
           </div>
           {isRivalMatch && <div className="text-9 font-bold uppercase tracking-wide px-2 py-0.5 rounded-full" style={{ background: C.gold, color: C.turfDeep }}>Lokal rival!</div>}
         </div>
@@ -8474,7 +8501,7 @@ function MatchPrepView({ g, userClub, oppClub, countryName, isHome, onBack, onSe
       <PaperCard>
         <div className="flex items-center gap-1.5 mb-2">
           <Swords size={12} color={C.gold} />
-          <span className="text-9 uppercase tracking-wide font-bold" style={{ color: C.gold }}>Seriematch · {countryName} · {formatGameDateShort(roundDate(g.season, g.round))}</span>
+          <span className="text-9 uppercase tracking-wide font-bold" style={{ color: C.gold }}>Seriematch · {countryName} · {formatGameDateShort(roundDate(g.season, g.round, g.seasonBaseYear))}</span>
         </div>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -10736,7 +10763,7 @@ function TableTab({ standings, clubs, userClubId, division, cup, nextFixture, al
   );
 }
 
-function ScheduleBrowserView({ allSchedules, clubs, homeLeagueId, season, onBack }) {
+function ScheduleBrowserView({ allSchedules, clubs, homeLeagueId, season, seasonBaseYear, onBack }) {
   const [leagueId, setLeagueId] = useState(homeLeagueId);
   const [division, setDivision] = useState(1);
   const key = `${leagueId}_d${division}`;
@@ -10768,7 +10795,7 @@ function ScheduleBrowserView({ allSchedules, clubs, homeLeagueId, season, onBack
             const played = f.homeGoals !== null;
             return (
               <div key={`${ri}-${fi}`} className="flex items-center justify-between px-3 py-2 text-11">
-                <span className="font-mono w-14 shrink-0" style={{ color: C.inkSoft }}>{formatGameDateShort(roundDate(season, ri))}</span>
+                <span className="font-mono w-14 shrink-0" style={{ color: C.inkSoft }}>{formatGameDateShort(roundDate(season, ri, seasonBaseYear))}</span>
                 <span className="flex-1 truncate px-1">{home.name} – {away.name}</span>
                 {played ? <span className="font-mono font-semibold shrink-0">{f.homeGoals}–{f.awayGoals}</span> : <span className="font-mono shrink-0" style={{ color: C.inkSoft }}>–</span>}
               </div>
@@ -10779,14 +10806,14 @@ function ScheduleBrowserView({ allSchedules, clubs, homeLeagueId, season, onBack
     </div>
   );
 }
-function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, tourOffers, lastTourResult, tourCompletedThisOffseason, onOpenTours, onStartTour, season, allSchedules, leagueId, onSubViewChange, season1Qualifiers, cup1Live, domesticLive, cup2Live }) {
+function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, tourOffers, lastTourResult, tourCompletedThisOffseason, onOpenTours, onStartTour, season, seasonBaseYear, allSchedules, leagueId, onSubViewChange, season1Qualifiers, cup1Live, domesticLive, cup2Live }) {
   const [subView, setSubView] = useState("league");
   const [showBrowser, setShowBrowser] = useState(false);
   const [showCupBrowser, setShowCupBrowser] = useState(false);
   useEffect(() => { onSubViewChange?.(showBrowser || showCupBrowser); }, [showBrowser, showCupBrowser]);
   const rivalId = clubs[userClubId]?.rivalId;
   const showCupTab = cup && !cup.champion && !cup.eliminated;
-  if (showBrowser) return <ScheduleBrowserView allSchedules={allSchedules} clubs={clubs} homeLeagueId={leagueId} season={season} onBack={() => setShowBrowser(false)} />;
+  if (showBrowser) return <ScheduleBrowserView allSchedules={allSchedules} clubs={clubs} homeLeagueId={leagueId} season={season} seasonBaseYear={seasonBaseYear} onBack={() => setShowBrowser(false)} />;
   if (showCupBrowser) return <CupBrowserView clubs={clubs} homeLeagueId={leagueId} season={season} currentRound={currentRound} userClubId={userClubId} season1Qualifiers={season1Qualifiers} cup1Live={cup1Live} domesticLive={domesticLive} cup2Live={cup2Live} onBack={() => setShowCupBrowser(false)} />;
   return (
     <div className="rise-in">
@@ -10820,7 +10847,7 @@ function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, t
               }
               return (
                 <div key={ri} className="flex items-center justify-between px-3 py-2.5 text-sm" style={{ background: isCurrent ? "rgba(201,154,62,0.15)" : "transparent" }}>
-                  <span className="font-mono text-xs w-16 shrink-0" style={{ color: C.inkSoft }}>{formatGameDateShort(roundDate(season, ri))}</span>
+                  <span className="font-mono text-xs w-16 shrink-0" style={{ color: C.inkSoft }}>{formatGameDateShort(roundDate(season, ri, seasonBaseYear))}</span>
                   <span className="flex-1 flex items-center gap-1.5 truncate px-1">{isRival && <Star size={11} fill={C.gold} color={C.gold} className="shrink-0" />}<ClubJersey club={clubs[oppId]} size={16} /><span className="truncate">{userIsHome ? "vs" : "@"} {clubs[oppId].name}</span></span>
                   {played ? (
                     <span className="flex items-center gap-1.5 font-mono">{resultTag && <ResultChip result={resultTag} />}<span>{f.homeGoals} – {f.awayGoals}</span></span>
