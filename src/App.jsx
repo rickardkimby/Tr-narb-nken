@@ -10077,6 +10077,7 @@ function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputat
   const [clubId, setClubId] = useState(initialClubId || null);
   const [negotiatingPlayer, setNegotiatingPlayer] = useState(null);
   const [loanConfigId, setLoanConfigId] = useState(null);
+  const [viewingTransferPlayer, setViewingTransferPlayer] = useState(null);
   const clubOptions = clubsInPool(leagueId, division, clubs);
   const selectedClub = clubId ? clubs[clubId] : null;
   const isPartner = clubId && clubId === partnerClubId;
@@ -10087,6 +10088,8 @@ function ClubSquadBrowserView({ clubs, userClubId, homeLeagueId, budget, reputat
       onNegotiationFailed={onNegotiationFailed}
       onBack={() => setNegotiatingPlayer(null)} onFinalize={(r, p, price, wage, details) => { onFinalize(p, price, wage, details); setNegotiatingPlayer(null); }} />;
   }
+
+  if (viewingTransferPlayer) return <ScoutedPlayerProfile player={viewingTransferPlayer.player} club={viewingTransferPlayer.club} onBack={() => setViewingTransferPlayer(null)} />;
 
   if (selectedClub) {
     return (
@@ -10536,10 +10539,23 @@ function SeasonAwardsView({ awards, userClubId, userAwardWins, userManagerAwardB
     </div>
   );
 }
-function OwnTransferHistoryView({ transferHistory, userClubId, currentSeason, onBack }) {
+function findTransferPlayerAndClub(t, clubs) {
+  const toClub = t.toClubId != null ? clubs[t.toClubId] : null;
+  const fromClub = t.fromClubId != null ? clubs[t.fromClubId] : null;
+  const inTo = toClub?.squad?.find(p => p.id === t.playerId);
+  if (inTo) return { player: inTo, club: toClub };
+  const inFrom = fromClub?.squad?.find(p => p.id === t.playerId);
+  if (inFrom) return { player: inFrom, club: fromClub };
+  return null;
+}
+function OwnTransferHistoryView({ transferHistory, userClubId, currentSeason, clubs, onBack }) {
   const seasonsWithData = [...new Set((transferHistory || []).map(t => t.season))];
   const seasons = [...new Set([currentSeason, ...seasonsWithData])].sort((a, b) => b - a);
   const [season, setSeason] = useState(currentSeason);
+  const [viewing, setViewing] = useState(null);
+  const [viewingClub, setViewingClub] = useState(null);
+  if (viewingClub) return <OpponentScoutView club={viewingClub} onBack={() => setViewingClub(null)} />;
+  if (viewing) return <ScoutedPlayerProfile player={viewing.player} club={viewing.club} onBack={() => setViewing(null)} />;
   const ownTransfers = (transferHistory || []).filter(t => (t.fromClubId === userClubId || t.toClubId === userClubId) && t.season === season);
   const bought = ownTransfers.filter(t => t.toClubId === userClubId);
   const sold = ownTransfers.filter(t => t.fromClubId === userClubId);
@@ -10577,12 +10593,22 @@ function OwnTransferHistoryView({ transferHistory, userClubId, currentSeason, on
           <div className="text-sm text-center py-4" style={{ color: C.inkSoft }}>Inga transfers den här säsongen.</div>
         ) : ownTransfers.map((t, i) => {
           const isBuy = t.toClubId === userClubId;
+          const otherClubId = isBuy ? t.fromClubId : t.toClubId;
+          const otherClub = otherClubId != null ? clubs?.[otherClubId] : null;
+          const found = clubs ? findTransferPlayerAndClub(t, clubs) : null;
           return (
             <div key={t.id} className="flex items-center gap-2.5 px-3 py-2" style={{ borderTop: i === 0 ? "none" : `1px solid ${C.paperDim}` }}>
               <span className="text-9 font-bold uppercase px-1.5 py-0.5 rounded-full shrink-0" style={{ background: isBuy ? "rgba(180,68,59,0.15)" : "rgba(63,138,107,0.15)", color: isBuy ? C.loss : C.win }}>{isBuy ? "Köp" : "Sälj"}</span>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-semibold truncate">{t.playerName}</div>
-                <div className="text-9" style={{ color: C.inkSoft }}>{isBuy ? `från ${t.fromClubName}` : `till ${t.toClubName || "okänd köpare"}`}</div>
+              <div className="flex-1 min-w-0 text-left">
+                {found ? (
+                  <button onClick={() => setViewing(found)} className="text-sm font-semibold truncate text-left" style={{ display: "block" }}>{t.playerName}</button>
+                ) : (
+                  <div className="text-sm font-semibold truncate">{t.playerName}</div>
+                )}
+                <div className="text-9" style={{ color: C.inkSoft }}>
+                  {isBuy ? "från " : "till "}
+                  {otherClub ? <button onClick={() => setViewingClub(otherClub)} className="font-semibold" style={{ color: C.inkSoft }}>{isBuy ? t.fromClubName : (t.toClubName || "okänd köpare")}</button> : (isBuy ? t.fromClubName : (t.toClubName || "okänd köpare"))}
+                </div>
               </div>
               <div className="font-mono text-sm font-bold shrink-0" style={{ color: isBuy ? C.loss : C.win }}>{isBuy ? "-" : "+"}{formatMoney(t.fee)}</div>
             </div>
@@ -10592,11 +10618,15 @@ function OwnTransferHistoryView({ transferHistory, userClubId, currentSeason, on
     </div>
   );
 }
-function GlobalTransfersView({ transferHistory, userClubId, onBack }) {
+function GlobalTransfersView({ transferHistory, userClubId, clubs, onBack }) {
   const [leagueFilter, setLeagueFilter] = useState("all");
   const [detailId, setDetailId] = useState(null);
+  const [viewingPlayer, setViewingPlayer] = useState(null);
+  const [viewingClub, setViewingClub] = useState(null);
   const filtered = (leagueFilter === "all" ? (transferHistory || []) : (transferHistory || []).filter(t => t.leagueId === leagueFilter)).slice(0, 200);
   const detail = filtered.find(t => t.id === detailId);
+  if (viewingClub) return <OpponentScoutView club={viewingClub} onBack={() => setViewingClub(null)} />;
+  if (viewingPlayer) return <ScoutedPlayerProfile player={viewingPlayer.player} club={viewingPlayer.club} onBack={() => setViewingPlayer(null)} />;
   return (
     <div className="rise-in space-y-2.5">
       <button onClick={onBack} style={{ position: "fixed", bottom: 14, right: 14, color: "rgba(255,255,255,0.85)", background: "rgba(19,34,29,0.88)", padding: "6px 13px", borderRadius: 999, fontSize: 11, fontWeight: 600, zIndex: 50 }}>← Bakåt</button>
@@ -10637,10 +10667,13 @@ function GlobalTransfersView({ transferHistory, userClubId, onBack }) {
               <button onClick={() => setDetailId(null)} style={{ width: 22, height: 22, borderRadius: "50%", background: C.paperDim, color: C.ink, fontWeight: 900, fontSize: 12 }}>✕</button>
             </div>
             <div className="text-11 mb-2" style={{ color: C.inkSoft }}>{detail.playerPos} · Säsong {detail.season}</div>
-            <div className="flex items-center gap-2 mb-1.5"><ClubJersey club={{ id: detail.fromClubId, color: detail.fromColor }} size={22} /><span className="text-sm font-semibold">{detail.fromClubName}</span></div>
+            <button onClick={() => clubs?.[detail.fromClubId] && setViewingClub(clubs[detail.fromClubId])} className="flex items-center gap-2 mb-1.5"><ClubJersey club={{ id: detail.fromClubId, color: detail.fromColor }} size={22} /><span className="text-sm font-semibold">{detail.fromClubName}</span></button>
             <div className="text-center text-9 my-1" style={{ color: C.inkSoft }}>↓</div>
-            <div className="flex items-center gap-2 mb-2"><ClubJersey club={{ id: detail.toClubId, color: detail.toColor }} size={22} /><span className="text-sm font-semibold">{detail.toClubName || "Okänd köpare"}</span></div>
+            <button onClick={() => detail.toClubId != null && clubs?.[detail.toClubId] && setViewingClub(clubs[detail.toClubId])} className="flex items-center gap-2 mb-2"><ClubJersey club={{ id: detail.toClubId, color: detail.toColor }} size={22} /><span className="text-sm font-semibold">{detail.toClubName || "Okänd köpare"}</span></button>
             <div className="font-mono text-lg font-bold text-center py-2 rounded-xl" style={{ background: C.paperDim }}>{formatMoney(detail.fee)}</div>
+            {clubs && findTransferPlayerAndClub(detail, clubs) && (
+              <button onClick={() => setViewingPlayer(findTransferPlayerAndClub(detail, clubs))} className="mt-2 w-full py-2 rounded-xl text-11 font-semibold" style={{ background: C.turf, color: C.paper }}>Visa spelarprofil</button>
+            )}
           </div>
         </>
       )}
@@ -11963,9 +11996,11 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
 // current squad state, so what's shown here is exactly what will take the pitch, not a rough estimate.
 function OpponentScoutView({ club, onBack }) {
   const [rowMode, setRowMode] = useState("detaljerad");
+  const [viewingPlayer, setViewingPlayer] = useState(null);
   const lineup = useMemo(() => club ? selectAiLineup(club) : null, [club]);
   if (!club || !lineup) return null;
   const squad = club.squad || [];
+  if (viewingPlayer) return <ScoutedPlayerProfile player={viewingPlayer} club={club} onBack={() => setViewingPlayer(null)} />;
   const starterRows = Object.entries(lineup.cellMap).map(([key, playerId]) => {
     const [col, row] = key.split("-").map(Number);
     return { key, col, row, player: squad.find(p => p.id === playerId) };
@@ -11977,7 +12012,7 @@ function OpponentScoutView({ club, onBack }) {
     const posFitMult = 0.75 + 0.25 * clamp(fit, 0.3, 1);
     return s + clamp(Math.round(effectiveOverall(r.player) * posFitMult), 1, 95);
   }, 0) / starterRows.length) : squadOverallRating(squad);
-  const rowProps = { selectedBenchId: null, onRowTap: () => {}, onSelectPlayer: () => {} };
+  const rowProps = { selectedBenchId: null, onRowTap: id => setViewingPlayer(squad.find(p => p.id === id)), onSelectPlayer: id => setViewingPlayer(squad.find(p => p.id === id)) };
 
   return (
     <div className="rise-in space-y-2.5">
@@ -13872,19 +13907,19 @@ function ScoutMissionPanel({ scoutMission, scoutLevel, budget, squad, savedProfi
 }
 
 
-function LoanOfferCard({ o, onAccept, onDecline }) {
+function LoanOfferCard({ o, onAccept, onDecline, onSelectPlayer, onSelectClub }) {
   const [wageSharePct, setWageSharePct] = useState(null);
   const overall = overallOf(o.player);
   return (
     <PaperCard>
       <div className="flex items-center gap-3">
-        <div style={{ position: "relative", width: 36, height: 36, flexShrink: 0 }}>
+        <button onClick={onSelectPlayer} style={{ position: "relative", width: 36, height: 36, flexShrink: 0 }}>
           <PlayerAvatar player={o.player} size={36} />
           <div style={{ position: "absolute", bottom: -4, right: -4 }}><OverallBadge overall={overall} size={18} /></div>
-        </div>
+        </button>
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-sm truncate">{o.player.name}</div>
-          <div className="text-11" style={{ color: C.inkSoft }}>{POS_LABEL[o.player.pos]} · Lån från {o.fromClubName} · {o.weeksLeft} omgångar</div>
+          <button onClick={onSelectPlayer} className="font-semibold text-sm truncate text-left" style={{ display: "block" }}>{o.player.name}</button>
+          <div className="text-11" style={{ color: C.inkSoft }}>{POS_LABEL[o.player.pos]} · Lån från <button onClick={onSelectClub} className="font-semibold" style={{ color: C.inkSoft }}>{o.fromClubName}</button> · {o.weeksLeft} omgångar</div>
           <div className="text-10 mt-0.5 font-mono" style={{ color: C.inkSoft }}>Lön: {formatMoney(o.player.wage)}/omg</div>
         </div>
       </div>
@@ -13972,6 +14007,8 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
   const [negotiatingListedPlayer, setNegotiatingListedPlayer] = useState(null);
   const [negotiatingOfferId, setNegotiatingOfferId] = useState(null);
   const [browseTargetClubId, setBrowseTargetClubId] = useState(null);
+  const [viewingOfferPlayer, setViewingOfferPlayer] = useState(null);
+  const [viewingOfferClub, setViewingOfferClub] = useState(null);
   useEffect(() => {
     if (!pendingScoutReveal) return;
     // Clicking through from a "scouting complete" news item should drop you straight onto that
@@ -14007,8 +14044,10 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
   const closesIn = roundsUntilWindowCloses(round);
   const opensIn = roundsUntilWindowOpens(round);
 
-  if (showOwnHistory) return <OwnTransferHistoryView transferHistory={transferHistory} userClubId={userClubId} currentSeason={season} onBack={() => setShowOwnHistory(false)} />;
-  if (showGlobalTransfers) return <GlobalTransfersView transferHistory={transferHistory} userClubId={userClubId} onBack={() => setShowGlobalTransfers(false)} />;
+  if (viewingOfferClub) return <OpponentScoutView club={viewingOfferClub} onBack={() => setViewingOfferClub(null)} />;
+  if (viewingOfferPlayer) return <ScoutedPlayerProfile player={viewingOfferPlayer.player} club={viewingOfferPlayer.club} onBack={() => setViewingOfferPlayer(null)} />;
+  if (showOwnHistory) return <OwnTransferHistoryView transferHistory={transferHistory} userClubId={userClubId} currentSeason={season} clubs={clubs} onBack={() => setShowOwnHistory(false)} />;
+  if (showGlobalTransfers) return <GlobalTransfersView transferHistory={transferHistory} userClubId={userClubId} clubs={clubs} onBack={() => setShowGlobalTransfers(false)} />;
   if (showClubBrowser) return <ClubSquadBrowserView clubs={clubs} userClubId={userClubId} homeLeagueId={leagueId} budget={budget} reputation={reputation} difficulty={difficulty} clubGoodwill={clubGoodwill} partnerClubId={partnerClubId} onNegotiationFailed={onNegotiationFailed} onFinalize={onFinalizeClubBrowseTransfer} onInstantLoanFromPartner={onInstantLoanFromPartner} onBack={() => setShowClubBrowser(false)} scoutedPlayerIds={scoutedPlayerIds} pendingPlayerScouts={pendingPlayerScouts} onScoutPlayer={onScoutPlayer} round={round} initialClubId={browseTargetClubId} transferHistory={transferHistory} />;
   if (showScoutList) return <ScoutListView scoutedPlayers={scoutedPlayers} clubs={clubs} worldPool={worldPool} transferHistory={transferHistory} onBack={() => setShowScoutList(false)} onNegotiate={(player, club) => { setShowScoutList(false); setNegotiatingListedPlayer({ player, club }); }} />;
 
@@ -14162,7 +14201,9 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
             <>
               <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Inkommande lån</div>
               <div className="space-y-2 mb-3">
-                {loanOffers.map(o => <LoanOfferCard key={o.id} o={o} onAccept={onAcceptLoan} onDecline={() => onDeclineLoan(o.id)} />)}
+                {loanOffers.map(o => <LoanOfferCard key={o.id} o={o} onAccept={onAcceptLoan} onDecline={() => onDeclineLoan(o.id)}
+                  onSelectPlayer={() => setViewingOfferPlayer({ player: o.player, club: clubs[o.fromClubId] })}
+                  onSelectClub={() => clubs[o.fromClubId] && setViewingOfferClub(clubs[o.fromClubId])} />)}
               </div>
             </>
           )}
@@ -14171,7 +14212,9 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
           <div className="space-y-2">
             {incomingOffers.map(o => (
               <PaperCard key={o.id}>
-                <div className="text-sm"><span className="font-semibold">{o.buyerName}</span> bjuder <span className="font-mono font-semibold">{formatMoney(o.offer)}</span> för <span className="font-semibold">{o.playerName}</span>.</div>
+                <div className="text-sm">
+                  <button onClick={() => clubs[o.buyerId] && setViewingOfferClub(clubs[o.buyerId])} className="font-semibold">{o.buyerName}</button> bjuder <span className="font-mono font-semibold">{formatMoney(o.offer)}</span> för <button onClick={() => { const p = squad.find(sp => sp.id === o.playerId); if (p) setViewingOfferPlayer({ player: p, club: clubs[userClubId] }); }} className="font-semibold">{o.playerName}</button>.
+                </div>
                 <div className="flex gap-2 mt-2">
                   <button onClick={() => onRespondOffer(o.id, "accept")} className="flex-1 py-2 rounded-xl text-xs font-semibold" style={{ background: C.turf, color: C.paper }}>Acceptera</button>
                   <button onClick={() => setNegotiatingOfferId(o.id)} className="flex-1 py-2 rounded-xl text-xs font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Förhandla</button>
@@ -14186,7 +14229,9 @@ function TransfersTab({ market, budget, scoutingLevel, kontakterLevel, youthSqua
               <div className="space-y-2">
                 {loanRequests.map(r => (
                   <PaperCard key={r.id}>
-                    <div className="text-sm"><span className="font-semibold">{r.borrowerName}</span> vill låna <span className="font-semibold">{r.playerName}</span> i {r.weeks} omgångar.</div>
+                    <div className="text-sm">
+                      <button onClick={() => clubs[r.borrowerId] && setViewingOfferClub(clubs[r.borrowerId])} className="font-semibold">{r.borrowerName}</button> vill låna <button onClick={() => { const p = squad.find(sp => sp.id === r.playerId); if (p) setViewingOfferPlayer({ player: p, club: clubs[userClubId] }); }} className="font-semibold">{r.playerName}</button> i {r.weeks} omgångar.
+                    </div>
                     <div className="flex gap-2 mt-2">
                       <button onClick={() => onRespondLoanRequest(r.id, "accept")} className="flex-1 py-2 rounded-xl text-xs font-semibold" style={{ background: C.turf, color: C.paper }}>Acceptera</button>
                       <button onClick={() => onRespondLoanRequest(r.id, "decline")} className="flex-1 py-2 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.loss}`, color: C.loss }}>Avvisa</button>
