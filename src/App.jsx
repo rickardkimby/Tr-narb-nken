@@ -12231,6 +12231,18 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
   }, [pendingSelectedPlayerId]);
   useEffect(() => { onSubViewChange?.(!!selectedId || showContracts || showSetPieces || showTactics || showAkademi || showStatistik); }, [selectedId, showContracts, showSetPieces, showTactics, showAkademi, showStatistik]);
 
+  // Checked before every sub-view below so that opening a player's profile from one of them (Kontrakt,
+  // Statistik, Standard, ...) and pressing back returns to that same sub-view instead of falling all the
+  // way out to the squad list — each sub-view's own onSelectPlayer decides for itself whether to clear
+  // its own "show" flag when handing off to the profile.
+  if (selectedId) {
+    const p = squad.find(x => x.id === selectedId);
+    if (!p) { setSelectedId(null); return null; }
+    return <PlayerProfile player={p} isStarter={startingXI.includes(p.id)} onToggleStarter={() => onToggleStarter(p.id)}
+      onBack={() => setSelectedId(null)} confirmSell={confirmSell} setConfirmSell={setConfirmSell} onSell={p2 => { onSell(p2); setSelectedId(null); }} onToggleListed={onToggleListed} onToggleLoanListed={onToggleLoanListed} onRenew={onRenew} onChat={onChat}
+      clubs={clubs} round={round} squad={squad} chemistryPairs={chemistryPairs} onAssessPlayer={onAssessPlayer} reputation={reputation} budget={budget} transferHistory={transferHistory} userClubId={userClubId} onHintForSale={onHintForSale} onStartTraining={onStartTraining} onCancelTraining={onCancelTraining} manager={manager} onPitchVision={onPitchVision} />;
+  }
+
   if (showStatistik) {
     return <SquadStatsView squad={squad} onBack={() => setShowStatistik(false)} onSelectPlayer={id => { setShowStatistik(false); setSelectedId(id); }} />;
   }
@@ -12245,19 +12257,11 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
   }
 
   if (showContracts) {
-    return <ContractsView squad={squad} clubs={clubs} userClubId={userClubId} round={round} onBack={() => setShowContracts(false)} onSelectPlayer={id => { setShowContracts(false); setSelectedId(id); }} />;
+    return <ContractsView squad={squad} clubs={clubs} userClubId={userClubId} round={round} onBack={() => setShowContracts(false)} onSelectPlayer={id => setSelectedId(id)} />;
   }
 
   if (showSetPieces) {
     return <SetPieceTakersPanel squad={squad} startingXI={startingXI} setPieceTakers={setPieceTakers} onSave={next => { onSetSetPieceTakers(next); setShowSetPieces(false); }} onBack={() => setShowSetPieces(false)} onSelectPlayer={id => { setShowSetPieces(false); setSelectedId(id); }} />;
-  }
-
-  if (selectedId) {
-    const p = squad.find(x => x.id === selectedId);
-    if (!p) { setSelectedId(null); return null; }
-    return <PlayerProfile player={p} isStarter={startingXI.includes(p.id)} onToggleStarter={() => onToggleStarter(p.id)}
-      onBack={() => setSelectedId(null)} confirmSell={confirmSell} setConfirmSell={setConfirmSell} onSell={p2 => { onSell(p2); setSelectedId(null); }} onToggleListed={onToggleListed} onToggleLoanListed={onToggleLoanListed} onRenew={onRenew} onChat={onChat}
-      clubs={clubs} round={round} squad={squad} chemistryPairs={chemistryPairs} onAssessPlayer={onAssessPlayer} reputation={reputation} budget={budget} transferHistory={transferHistory} userClubId={userClubId} onHintForSale={onHintForSale} onStartTraining={onStartTraining} onCancelTraining={onCancelTraining} manager={manager} onPitchVision={onPitchVision} />;
   }
 
   // The badge shown here is what actually takes the pitch — the starting XI's current effective rating
