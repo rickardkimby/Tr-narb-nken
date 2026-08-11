@@ -11983,14 +11983,14 @@ function OpponentScoutView({ club, onBack }) {
     </div>
   );
 }
-function ContractsView({ squad, onBack, onSelectPlayer }) {
-  const [sortBy, setSortBy] = useState("contract");
+function ContractsView({ squad, clubs, userClubId, round, onBack, onSelectPlayer }) {
+  const [sortBy, setSortBy] = useState("position");
   const [sortDir, setSortDir] = useState("asc");
 
   function toggleSort(key) {
     if (sortBy === key) { setSortDir(d => d === "asc" ? "desc" : "asc"); return; }
     setSortBy(key);
-    setSortDir(key === "contract" ? "asc" : "desc");
+    setSortDir(key === "contract" || key === "position" ? "asc" : "desc");
   }
 
   const sorted = [...squad].sort((a, b) => {
@@ -12032,10 +12032,11 @@ function ContractsView({ squad, onBack, onSelectPlayer }) {
         </div>
         {sorted.map(p => {
           const expiring = p.contractYears <= 1;
+          const interestedCount = clubs ? computeInterestedClubs(p, clubs, userClubId, round).length : 0;
           return (
             <button key={p.id} onClick={() => onSelectPlayer(p.id)} className="w-full text-left player-row" style={{ borderTop: `1px solid rgba(30,42,34,0.08)`, display: "block" }}>
               <div style={{ display: "grid", gridTemplateColumns: "2.2fr 0.7fr 0.9fr 1.1fr 1.1fr" }} className="px-3 py-2.5 items-center text-sm font-mono">
-                <span className="font-sans font-medium truncate min-w-0 flex items-center gap-1.5" style={{ color: C.ink }}><PlayerAvatar player={p} size={20} /><span><span style={{ color: C.inkSoft }}>#{p.number}</span> {p.name} <span className="text-9" style={{ color: C.inkSoft }}>{p.specificPosition}</span></span></span>
+                <span className="font-sans font-medium truncate min-w-0 flex items-center gap-1.5" style={{ color: C.ink }}><PlayerAvatar player={p} size={20} /><span><span style={{ color: C.inkSoft }}>#{p.number}</span> {p.name} {interestedCount > 0 && <span className="text-9" title={`${interestedCount} klubb${interestedCount === 1 ? "" : "ar"} bevakar spelaren`} style={{ color: C.gold }}>👀</span>} <span className="text-9" style={{ color: C.inkSoft }}>{p.specificPosition}</span></span></span>
                 <span className="text-center" style={{ color: C.inkSoft }}>{p.age}</span>
                 <span className="text-center font-semibold" style={{ color: expiring ? C.loss : C.inkSoft }}>{p.contractYears} år</span>
                 <span className="text-right" style={{ color: C.inkSoft }}>{formatMoney(p.wage)}/omg</span>
@@ -12244,7 +12245,7 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
   }
 
   if (showContracts) {
-    return <ContractsView squad={squad} onBack={() => setShowContracts(false)} onSelectPlayer={id => { setShowContracts(false); setSelectedId(id); }} />;
+    return <ContractsView squad={squad} clubs={clubs} userClubId={userClubId} round={round} onBack={() => setShowContracts(false)} onSelectPlayer={id => { setShowContracts(false); setSelectedId(id); }} />;
   }
 
   if (showSetPieces) {
