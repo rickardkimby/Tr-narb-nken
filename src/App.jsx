@@ -5898,18 +5898,6 @@ function setupCup(type, base) {
     }));
     showToast(`${player.name} skickas direkt på lån till samarbetsklubben ${partner.name} — ingen förhandling behövdes!`);
   }
-  function sendPlayerOnLoan(playerId, toClubName) {
-    const player = g.squad.find(p => p.id === playerId);
-    if (!player) return;
-    if (player.loanWeeksLeft) { showToast(`${player.name} är bara på lån hos er — kan inte lånas ut vidare.`); return; }
-    if (!transferWindowOpen(g.round)) { showToast("Transferfönstret är stängt just nu."); return; }
-    if (g.squad.length <= 11) { showToast("Du måste ha minst 11 spelare i truppen."); return; }
-    setG(prev => ({
-      ...prev, squad: prev.squad.filter(p => p.id !== playerId), startingXI: prev.startingXI.filter(id => id !== playerId),
-      outgoingLoans: [...(prev.outgoingLoans || []), { player, toClubName, seasonsLeft: 1 }],
-    }));
-    showToast(`${player.name} skickas på lån till ${toClubName} för säsongen.`);
-  }
   function acceptLoanOffer(offerId, wageSharePct = 100) {
     const offer = (g.loanOffers || []).find(o => o.id === offerId);
     if (!offer) return;
@@ -7003,7 +6991,7 @@ function setupCup(type, base) {
               ) : g.activeTab === "squad" ? (
                 <SquadTab squad={g.squad} startingXI={g.startingXI} onToggleStarter={toggleStarter} confirmSell={confirmSell} setConfirmSell={setConfirmSell} onSell={sellPlayer} onToggleListed={toggleTransferListed} onToggleLoanListed={toggleLoanListed} onRenew={renewContract}
                   formationCode={g.formationCode} lineupCells={g.lineupCells} onSaveFormation={saveFormation} onChat={chatWithPlayer}
-                  clubs={g.clubs} round={g.round} onSendLoan={sendPlayerOnLoan} outgoingLoans={g.outgoingLoans}
+                  clubs={g.clubs} round={g.round} outgoingLoans={g.outgoingLoans}
                   setPieceTakers={g.setPieceTakers} onSetSetPieceTakers={setSetPieceTakers} chemistryPairs={g.chemistryPairs} onAssessPlayer={assessPlayer}
                   tactic={g.tactic} onTactic={t => setG(prev => ({ ...prev, tactic: t }))} tacticalSettings={g.tacticalSettings} onSetTactical={setTacticalOption}
                   spelide={g.spelide} onSetSpelide={setSpelide} captainId={g.captainId} onSetCaptain={setCaptain}
@@ -11111,7 +11099,7 @@ function initialLineup(squad, startingXI, formationCode, savedCells) {
   return formationPresetToCells(formationCode || "4-4-2", squad, startingXI);
 }
 
-function FormationView({ squad, startingXI, formationCode, lineupCells, onBack, onSave, onToggleStarter, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, onChat, clubs, round, onSendLoan, chemistryPairs, onAssessPlayer }) {
+function FormationView({ squad, startingXI, formationCode, lineupCells, onBack, onSave, onToggleStarter, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, onChat, clubs, round, chemistryPairs, onAssessPlayer }) {
   const [code, setCode] = useState(formationCode || "4-4-2");
   const [lineup, setLineup] = useState(() => initialLineup(squad, startingXI, formationCode, lineupCells));
   const [selectedCell, setSelectedCell] = useState(null);
@@ -11164,7 +11152,7 @@ function FormationView({ squad, startingXI, formationCode, lineupCells, onBack, 
     return <PlayerProfile player={p} isStarter={Object.values(lineup).includes(p.id)} onToggleStarter={() => onToggleStarter(p.id)}
       onBack={() => setViewingProfileId(null)} confirmSell={confirmSell} setConfirmSell={setConfirmSell}
       onSell={p2 => { onSell(p2); setViewingProfileId(null); }} onToggleListed={onToggleListed} onToggleLoanListed={onToggleLoanListed} onRenew={onRenew} onChat={onChat}
-      clubs={clubs} round={round} onSendLoan={onSendLoan ? (toId, toName) => { onSendLoan(toId, toName); setViewingProfileId(null); } : null} squadSize={squad.length} squad={squad} chemistryPairs={chemistryPairs} onAssessPlayer={onAssessPlayer} />;
+      clubs={clubs} round={round} squad={squad} chemistryPairs={chemistryPairs} onAssessPlayer={onAssessPlayer} />;
   }
 
   if (pickingCell) {
@@ -12229,7 +12217,7 @@ function TacticsPanel({ squad, startingXI, tactic, onTactic, tacticalSettings, o
     </div>
   );
 }
-function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, formationCode, lineupCells, onSaveFormation, onChat, clubs, round, onSendLoan, outgoingLoans, setPieceTakers, onSetSetPieceTakers, chemistryPairs, onAssessPlayer, tactic, onTactic, tacticalSettings, onSetTactical, spelide, onSetSpelide, captainId, onSetCaptain, dev, budget, akademiParts, youthSquad, onUpgrade, onUpgradePart, onSellYouth, onPromoteYouth, onSubViewChange, pendingSelectedPlayerId, onClearPendingSelection, reputation, squadViewPrefs, onSetSquadViewPrefs, transferHistory, userClubId, onHintForSale, onStartTraining, onCancelTraining, manager, onPitchVision }) {
+function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, formationCode, lineupCells, onSaveFormation, onChat, clubs, round, outgoingLoans, setPieceTakers, onSetSetPieceTakers, chemistryPairs, onAssessPlayer, tactic, onTactic, tacticalSettings, onSetTactical, spelide, onSetSpelide, captainId, onSetCaptain, dev, budget, akademiParts, youthSquad, onUpgrade, onUpgradePart, onSellYouth, onPromoteYouth, onSubViewChange, pendingSelectedPlayerId, onClearPendingSelection, reputation, squadViewPrefs, onSetSquadViewPrefs, transferHistory, userClubId, onHintForSale, onStartTraining, onCancelTraining, manager, onPitchVision }) {
   const [selectedId, setSelectedId] = useState(null);
   const [showContracts, setShowContracts] = useState(false);
   const [showSetPieces, setShowSetPieces] = useState(false);
@@ -12268,7 +12256,7 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
     if (!p) { setSelectedId(null); return null; }
     return <PlayerProfile player={p} isStarter={startingXI.includes(p.id)} onToggleStarter={() => onToggleStarter(p.id)}
       onBack={() => setSelectedId(null)} confirmSell={confirmSell} setConfirmSell={setConfirmSell} onSell={p2 => { onSell(p2); setSelectedId(null); }} onToggleListed={onToggleListed} onToggleLoanListed={onToggleLoanListed} onRenew={onRenew} onChat={onChat}
-      clubs={clubs} round={round} onSendLoan={onSendLoan ? (toId, toName) => { onSendLoan(toId, toName); setSelectedId(null); } : null} squadSize={squad.length} squad={squad} chemistryPairs={chemistryPairs} onAssessPlayer={onAssessPlayer} reputation={reputation} budget={budget} transferHistory={transferHistory} userClubId={userClubId} onHintForSale={onHintForSale} onStartTraining={onStartTraining} onCancelTraining={onCancelTraining} manager={manager} onPitchVision={onPitchVision} />;
+      clubs={clubs} round={round} squad={squad} chemistryPairs={chemistryPairs} onAssessPlayer={onAssessPlayer} reputation={reputation} budget={budget} transferHistory={transferHistory} userClubId={userClubId} onHintForSale={onHintForSale} onStartTraining={onStartTraining} onCancelTraining={onCancelTraining} manager={manager} onPitchVision={onPitchVision} />;
   }
 
   // The badge shown here is what actually takes the pitch — the starting XI's current effective rating
@@ -12317,7 +12305,7 @@ function SquadTab({ squad, startingXI, onToggleStarter, confirmSell, setConfirmS
   );
 }
 
-function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, onChat, clubs, round, onSendLoan, squadSize, squad, chemistryPairs, onAssessPlayer, reputation, budget, transferHistory, userClubId, onHintForSale, onStartTraining, onCancelTraining, manager, onPitchVision }) {
+function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell, setConfirmSell, onSell, onToggleListed, onToggleLoanListed, onRenew, onChat, clubs, round, squad, chemistryPairs, onAssessPlayer, reputation, budget, transferHistory, userClubId, onHintForSale, onStartTraining, onCancelTraining, manager, onPitchVision }) {
   const attrs = getAttrs(player);
   const labels = attrLabels(player.pos);
   const overall = overallOf(player);
@@ -12350,16 +12338,7 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
   const [wageOutcome, setWageOutcome] = useState(null);
   const [chatResult, setChatResult] = useState(null);
   const [includeClause, setIncludeClause] = useState(false);
-  const [showLoanPicker, setShowLoanPicker] = useState(false);
   const [showAllPositions, setShowAllPositions] = useState(false);
-  const loanCandidates = useMemo(() => {
-    if (!clubs) return [];
-    const others = Object.values(clubs).filter(c => Math.abs(c.strength - overall) < 22);
-    const pool = others.length >= 3 ? others : Object.values(clubs);
-    const picked = [];
-    for (let i = 0; i < 3 && pool.length; i++) picked.push(pool[Math.floor(Math.random() * pool.length)]);
-    return picked;
-  }, [showLoanPicker]);
   function tryRenewWage(mult) {
     const offerWage = Math.round(target * mult);
     const breakoutRoll = seededRandom(String(player.id) + "breakoutrefuse" + player.contractYears)();
@@ -12718,27 +12697,6 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
             </PaperCard>
           );
         })()}
-        {onSendLoan && (
-          <PaperCard>
-            <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Lån</div>
-            <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Skicka {player.name} på lån för säsongen. Spelaren spelar regelbundet på annat håll och utvecklas, men är otillgänglig för er under tiden.</div>
-            {!showLoanPicker ? (
-              <button onClick={() => setShowLoanPicker(true)} disabled={squadSize <= 11} className="w-full py-2 rounded-xl text-sm font-semibold" style={squadSize <= 11 ? { background: C.paperDim, color: C.inkSoft, opacity: 0.6 } : { background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>
-                {squadSize <= 11 ? "Truppen är för liten för lån" : "Skicka på lån"}
-              </button>
-            ) : (
-              <div className="space-y-1.5">
-                {loanCandidates.map(c => (
-                  <button key={c.id} onClick={() => onSendLoan(player.id, c.name)} className="w-full text-left px-3 py-2 rounded-xl text-sm font-semibold flex items-center justify-between" style={{ background: C.paperDim }}>
-                    <span>{c.name}</span>
-                    <span className="text-10 font-mono" style={{ color: C.inkSoft }}>Div {c.division}</span>
-                  </button>
-                ))}
-                <button onClick={() => setShowLoanPicker(false)} className="w-full py-1.5 text-11" style={{ color: C.inkSoft }}>Avbryt</button>
-              </div>
-            )}
-          </PaperCard>
-        )}
         </>
       )}
 
