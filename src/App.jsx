@@ -9753,7 +9753,7 @@ function CupView({ cup, clubs, userClubId, userTeamName, onPlayDomestic, onConti
 }
 
 const TABLE_COLS = "1.6rem minmax(0,1fr) 1.7rem 1.7rem 1.7rem 1.7rem 2.3rem 3.4rem 2.3rem";
-function CupStandingsPanel({ cup, clubs, userClubId }) {
+function CupStandingsPanel({ cup, clubs, userClubId, onSelectClub }) {
   if (cup.champion) return <PaperCard><div className="text-sm font-semibold text-center py-2" style={{ color: C.gold }}>🏆 Mästare i {cup.label}!</div></PaperCard>;
   if (cup.eliminated) return <PaperCard><div className="text-sm text-center py-2" style={{ color: C.inkSoft }}>Utslagna ur {cup.label} — {cup.roundName}</div></PaperCard>;
 
@@ -9761,15 +9761,18 @@ function CupStandingsPanel({ cup, clubs, userClubId }) {
     const seed = `domesticpair${cup.roundIndex || 1}${cup.teams.join(",")}`;
     const { pairs, byeTeam } = resolveDomesticPairing(cup.teams, seed);
     let oppName = byeTeam === userClubId ? "Ledigt lag (vidare utan match)" : null;
+    let oppClub = null;
     for (const [a, b] of pairs) {
-      if (a === userClubId) { oppName = clubs[b]?.name || "Okänt lag"; break; }
-      if (b === userClubId) { oppName = clubs[a]?.name || "Okänt lag"; break; }
+      if (a === userClubId) { oppClub = clubs[b]; oppName = oppClub?.name || "Okänt lag"; break; }
+      if (b === userClubId) { oppClub = clubs[a]; oppName = oppClub?.name || "Okänt lag"; break; }
     }
     return (
       <PaperCard>
         <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{cup.label} · {cup.roundName}</div>
         <div className="text-sm mt-2">{cup.teams.length} lag kvar i turneringen.</div>
-        {oppName && <div className="text-sm mt-1">Nästa motstånd: <b>{oppName}</b></div>}
+        {oppName && (oppClub && onSelectClub ? (
+          <button onClick={() => onSelectClub(oppClub)} className="text-sm mt-1 block">Nästa motstånd: <b>{oppName}</b></button>
+        ) : <div className="text-sm mt-1">Nästa motstånd: <b>{oppName}</b></div>)}
       </PaperCard>
     );
   }
@@ -9782,10 +9785,11 @@ function CupStandingsPanel({ cup, clubs, userClubId }) {
         <div className="px-3 pt-3 pb-2 text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{cup.label} · Gruppställning · Omgång {cup.groupRound + 1}/{cup.groupSchedule.length}</div>
         {groupStandings.map((row, i) => {
           const t = clubs[row.id]; const isUser = row.id === userClubId;
+          const Row = onSelectClub ? "button" : "div";
           return (
-            <div key={row.id} className="flex items-center justify-between px-3 py-1.5 text-sm font-mono" style={{ background: isUser ? "rgba(201,154,62,0.18)" : "transparent", fontWeight: isUser ? 800 : 400, color: isUser ? C.gold : "inherit", borderLeft: i < 2 ? `3px solid ${C.win}` : "3px solid transparent" }}>
+            <Row key={row.id} onClick={onSelectClub ? () => onSelectClub(t) : undefined} className="flex items-center justify-between px-3 py-1.5 text-sm font-mono w-full text-left" style={{ background: isUser ? "rgba(201,154,62,0.18)" : "transparent", fontWeight: isUser ? 800 : 400, color: isUser ? C.gold : "inherit", borderLeft: i < 2 ? `3px solid ${C.win}` : "3px solid transparent" }}>
               <span>{i + 1}. {t.name}</span><span>{row.played}sp · {row.pts}p</span>
-            </div>
+            </Row>
           );
         })}
         <div className="text-9 px-3 pb-2.5 pt-1" style={{ color: C.paperDim }}>Topp 2 går vidare till slutspelet.</div>
@@ -9799,7 +9803,7 @@ function CupStandingsPanel({ cup, clubs, userClubId }) {
       <PaperCard>
         <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{cup.label} · FINAL</div>
         <div className="text-sm mt-2">{cup.finalArena}</div>
-        <div className="text-sm mt-1">Motstånd: <b>{opp.name}</b></div>
+        {onSelectClub ? <button onClick={() => onSelectClub(opp)} className="text-sm mt-1 block">Motstånd: <b>{opp.name}</b></button> : <div className="text-sm mt-1">Motstånd: <b>{opp.name}</b></div>}
       </PaperCard>
     );
   }
@@ -9810,13 +9814,13 @@ function CupStandingsPanel({ cup, clubs, userClubId }) {
   return (
     <PaperCard>
       <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{cup.label} · {cup.roundName}</div>
-      <div className="text-sm mt-2">Motstånd: <b>{opp.name}</b></div>
+      {onSelectClub ? <button onClick={() => onSelectClub(opp)} className="text-sm mt-2 block">Motstånd: <b>{opp.name}</b></button> : <div className="text-sm mt-2">Motstånd: <b>{opp.name}</b></div>}
       <div className="text-11 mt-1" style={{ color: C.inkSoft }}>{leg1Score ? `Efter match 1: ${leg1Score} · Match 2 återstår` : "Match 1 av 2 återstår"}</div>
     </PaperCard>
   );
 }
 
-function CupFixturesPanel({ cup, clubs, userClubId }) {
+function CupFixturesPanel({ cup, clubs, userClubId, onSelectClub }) {
   if (cup.phase === "groups") {
     return (
       <PaperCard style={{ padding: 0 }}>
@@ -9834,7 +9838,11 @@ function CupFixturesPanel({ cup, clubs, userClubId }) {
             return (
               <div key={ri} className="flex items-center justify-between px-3 py-2.5 text-sm" style={{ background: isCurrent ? "rgba(201,154,62,0.15)" : "transparent" }}>
                 <span className="font-mono text-xs w-16 shrink-0" style={{ color: C.inkSoft }}>Omg {ri + 1}</span>
-                <span className="flex-1 flex items-center gap-1.5 truncate px-1"><ClubJersey club={clubs[oppId]} size={16} /><span className="truncate">{userIsHome ? "vs" : "@"} {clubs[oppId].name}</span></span>
+                {onSelectClub ? (
+                  <button onClick={() => onSelectClub(clubs[oppId])} className="flex-1 flex items-center gap-1.5 truncate px-1 text-left"><ClubJersey club={clubs[oppId]} size={16} /><span className="truncate">{userIsHome ? "vs" : "@"} {clubs[oppId].name}</span></button>
+                ) : (
+                  <span className="flex-1 flex items-center gap-1.5 truncate px-1"><ClubJersey club={clubs[oppId]} size={16} /><span className="truncate">{userIsHome ? "vs" : "@"} {clubs[oppId].name}</span></span>
+                )}
                 {played ? <span className="flex items-center gap-1.5 font-mono">{resultTag && <ResultChip result={resultTag} />}<span>{f.homeGoals} – {f.awayGoals}</span></span> : <span className="font-mono text-xs" style={{ color: C.inkSoft }}>{isCurrent ? "Nästa" : "–"}</span>}
               </div>
             );
@@ -9843,10 +9851,10 @@ function CupFixturesPanel({ cup, clubs, userClubId }) {
       </PaperCard>
     );
   }
-  return <CupStandingsPanel cup={cup} clubs={clubs} userClubId={userClubId} />;
+  return <CupStandingsPanel cup={cup} clubs={clubs} userClubId={userClubId} onSelectClub={onSelectClub} />;
 }
 
-function StandingsTable({ standings, clubs, userClubId, division, nextOppId, hideZones, schedule, round }) {
+function StandingsTable({ standings, clubs, userClubId, division, nextOppId, hideZones, schedule, round, onSelectClub }) {
   const n = standings.length;
   return (
     <PaperCard style={{ padding: 0 }}>
@@ -9872,8 +9880,9 @@ function StandingsTable({ standings, clubs, userClubId, division, nextOppId, hid
         const cup2Zone = !hideZones && division === 1 && i >= 3 && i < 6;
         const diff = row.gf - row.ga;
         const form = schedule && round !== undefined ? recentForm(schedule, round, row.id) : [];
+        const Row = onSelectClub ? "button" : "div";
         return (
-          <div key={row.id} style={{ display: "grid", gridTemplateColumns: TABLE_COLS, columnGap: 4, background: isUser ? "rgba(201,154,62,0.18)" : isNextOpp ? "rgba(201,154,62,0.08)" : i % 2 ? "rgba(0,0,0,0.03)" : "transparent", borderLeft: promoZone ? `3px solid ${C.win}` : relZone ? `3px solid ${C.loss}` : cup1Zone ? `3px solid ${C.gold}` : cup2Zone ? "3px solid #3F74A8" : "3px solid transparent" }}
+          <Row key={row.id} onClick={onSelectClub ? () => onSelectClub(t) : undefined} style={{ display: "grid", gridTemplateColumns: TABLE_COLS, columnGap: 4, background: isUser ? "rgba(201,154,62,0.18)" : isNextOpp ? "rgba(201,154,62,0.08)" : i % 2 ? "rgba(0,0,0,0.03)" : "transparent", borderLeft: promoZone ? `3px solid ${C.win}` : relZone ? `3px solid ${C.loss}` : cup1Zone ? `3px solid ${C.gold}` : cup2Zone ? "3px solid #3F74A8" : "3px solid transparent", width: "100%", textAlign: "left" }}
             className="px-3 py-2 items-center text-sm font-mono">
             <span style={{ color: C.inkSoft }} className="flex items-center gap-0.5">{i + 1}{cup1Zone && <span style={{ fontSize: 8 }}>🏆</span>}{cup2Zone && <span style={{ fontSize: 8 }}>⚔️</span>}</span>
             <span className="flex items-center gap-1.5 font-sans font-medium truncate min-w-0" style={{ fontWeight: isUser ? 800 : isNextOpp ? 700 : 500, color: isUser ? C.gold : "inherit" }}>
@@ -9890,7 +9899,7 @@ function StandingsTable({ standings, clubs, userClubId, division, nextOppId, hid
               )) : <span style={{ color: C.paperDim }}>–</span>}
             </span>
             <span className="text-right font-semibold">{row.pts}</span>
-          </div>
+          </Row>
         );
       })}
       {!hideZones && division === 1 && (
@@ -9909,7 +9918,7 @@ function bracketRoundLabel(n) {
   if (n === 16) return "Åttondelsfinal";
   return `Omgång (${n} lag)`;
 }
-function CupBracketList({ rounds, clubs, revealedRounds, userClubId }) {
+function CupBracketList({ rounds, clubs, revealedRounds, userClubId, onSelectClub }) {
   const shown = revealedRounds !== undefined ? rounds.slice(0, revealedRounds) : rounds;
   return (
     <div className="space-y-2.5">
@@ -9925,9 +9934,17 @@ function CupBracketList({ rounds, clubs, revealedRounds, userClubId }) {
               if (!home) return null;
               return (
                 <div key={mi} className="flex items-center justify-between px-3 py-2 text-11 gap-1.5">
-                  <span className="flex items-center gap-1.5 flex-1 min-w-0"><ClubJersey club={home} size={16} /><span className="truncate" style={{ fontWeight: home.id === userClubId ? 800 : m.winner === m.home ? 700 : 400, color: home.id === userClubId ? C.gold : "inherit" }}>{home.name}</span></span>
+                  {onSelectClub ? (
+                    <button onClick={() => onSelectClub(home)} className="flex items-center gap-1.5 flex-1 min-w-0 text-left"><ClubJersey club={home} size={16} /><span className="truncate" style={{ fontWeight: home.id === userClubId ? 800 : m.winner === m.home ? 700 : 400, color: home.id === userClubId ? C.gold : "inherit" }}>{home.name}</span></button>
+                  ) : (
+                    <span className="flex items-center gap-1.5 flex-1 min-w-0"><ClubJersey club={home} size={16} /><span className="truncate" style={{ fontWeight: home.id === userClubId ? 800 : m.winner === m.home ? 700 : 400, color: home.id === userClubId ? C.gold : "inherit" }}>{home.name}</span></span>
+                  )}
                   <span className="text-9 px-1 shrink-0" style={{ color: C.inkSoft }}>vs</span>
-                  <span className="flex items-center gap-1.5 flex-1 min-w-0 justify-end">{away && <span className="truncate" style={{ fontWeight: away.id === userClubId ? 800 : m.winner === m.away ? 700 : 400, color: away.id === userClubId ? C.gold : "inherit" }}>{away.name}</span>}{away ? <ClubJersey club={away} size={16} /> : <span className="text-inherit">Frilott</span>}</span>
+                  {away && onSelectClub ? (
+                    <button onClick={() => onSelectClub(away)} className="flex items-center gap-1.5 flex-1 min-w-0 justify-end text-left"><span className="truncate" style={{ fontWeight: away.id === userClubId ? 800 : m.winner === m.away ? 700 : 400, color: away.id === userClubId ? C.gold : "inherit" }}>{away.name}</span><ClubJersey club={away} size={16} /></button>
+                  ) : (
+                    <span className="flex items-center gap-1.5 flex-1 min-w-0 justify-end">{away && <span className="truncate" style={{ fontWeight: away.id === userClubId ? 800 : m.winner === m.away ? 700 : 400, color: away.id === userClubId ? C.gold : "inherit" }}>{away.name}</span>}{away ? <ClubJersey club={away} size={16} /> : <span className="text-inherit">Frilott</span>}</span>
+                  )}
                 </div>
               );
             })}
@@ -9937,7 +9954,7 @@ function CupBracketList({ rounds, clubs, revealedRounds, userClubId }) {
     </div>
   );
 }
-function YourRealCupStatus({ cup, clubs, userClubId }) {
+function YourRealCupStatus({ cup, clubs, userClubId, onSelectClub }) {
   if (!cup) return null;
   const oppId = cup.tie?.oppId;
   const opp = oppId ? clubs[oppId] : null;
@@ -9951,7 +9968,9 @@ function YourRealCupStatus({ cup, clubs, userClubId }) {
       ) : (
         <>
           <div className="text-sm font-semibold">{cup.roundName} · {(cup.teams || cup.groups?.flat() || []).length || "?"} lag kvar i turneringen</div>
-          {opp && <div className="text-11 mt-1 flex items-center gap-1.5" style={{ color: C.inkSoft }}>Aktuell motståndare: <ClubJersey club={opp} size={16} />{opp.name}</div>}
+          {opp && (onSelectClub ? (
+            <button onClick={() => onSelectClub(opp)} className="text-11 mt-1 flex items-center gap-1.5" style={{ color: C.inkSoft }}>Aktuell motståndare: <ClubJersey club={opp} size={16} />{opp.name}</button>
+          ) : <div className="text-11 mt-1 flex items-center gap-1.5" style={{ color: C.inkSoft }}>Aktuell motståndare: <ClubJersey club={opp} size={16} />{opp.name}</div>)}
         </>
       )}
     </PaperCard>
@@ -9959,6 +9978,8 @@ function YourRealCupStatus({ cup, clubs, userClubId }) {
 }
 function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId, season1Qualifiers, cup1Live, domesticLive, cup2Live, onBack }) {
   const [selected, setSelected] = useState("domestic");
+  const [viewingClub, setViewingClub] = useState(null);
+  if (viewingClub) return <OpponentScoutView club={viewingClub} onBack={() => setViewingClub(null)} />;
   const domesticField = withSeededRandom(`${homeLeagueId}_domestic_${season}`, () => domesticCupField(homeLeagueId, clubs));
   const domesticDue = cupDueSchedule("domestic", domesticField.length);
   const domesticRevealed = domesticDue.filter(r => currentRound >= r).length;
@@ -10012,8 +10033,8 @@ function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId,
 
       {selected === "domestic" && (
         <>
-          <YourRealCupStatus cup={domesticLive} clubs={clubs} userClubId={userClubId} />
-          <CupBracketList rounds={domesticRounds} clubs={clubs} revealedRounds={domesticRevealed} userClubId={userClubId} />
+          <YourRealCupStatus cup={domesticLive} clubs={clubs} userClubId={userClubId} onSelectClub={setViewingClub} />
+          <CupBracketList rounds={domesticRounds} clubs={clubs} revealedRounds={domesticRevealed} userClubId={userClubId} onSelectClub={setViewingClub} />
         </>
       )}
 
@@ -10024,7 +10045,7 @@ function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId,
               <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.gold }}>Er riktiga grupp — verkliga resultat</div>
               <PaperCard style={{ padding: 0 }}>
                 <div className="px-3 pt-3 pb-2 text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>{cup1Live.label} · Gruppspel</div>
-                <StandingsTable standings={computeStandings(cup1Live.groupSchedule, cup1Live.groups[cup1Live.userGroupIndex])} clubs={clubs} userClubId={userClubId} division={2} nextOppId={null} hideZones />
+                <StandingsTable standings={computeStandings(cup1Live.groupSchedule, cup1Live.groups[cup1Live.userGroupIndex])} clubs={clubs} userClubId={userClubId} division={2} nextOppId={null} hideZones onSelectClub={setViewingClub} />
               </PaperCard>
             </>
           )}
@@ -10032,19 +10053,19 @@ function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId,
           {cup1GroupResults.map((r, gi) => (
             <PaperCard key={gi} style={{ padding: 0 }}>
               <div className="px-3 pt-3 pb-2 text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Grupp {String.fromCharCode(65 + gi)}</div>
-              <StandingsTable standings={r.standings} clubs={clubs} userClubId={userClubId} division={2} nextOppId={null} hideZones />
+              <StandingsTable standings={r.standings} clubs={clubs} userClubId={userClubId} division={2} nextOppId={null} hideZones onSelectClub={setViewingClub} />
             </PaperCard>
           ))}
           <div className="text-xs uppercase tracking-wide font-semibold px-1" style={{ color: C.paperDim }}>Slutspel</div>
-          {cup1Live && cup1Live.phase !== "groups" && <YourRealCupStatus cup={cup1Live} clubs={clubs} userClubId={userClubId} />}
-          <CupBracketList rounds={cup1KnockoutRounds} clubs={clubs} revealedRounds={cup1KoRevealed} userClubId={userClubId} />
+          {cup1Live && cup1Live.phase !== "groups" && <YourRealCupStatus cup={cup1Live} clubs={clubs} userClubId={userClubId} onSelectClub={setViewingClub} />}
+          <CupBracketList rounds={cup1KnockoutRounds} clubs={clubs} revealedRounds={cup1KoRevealed} userClubId={userClubId} onSelectClub={setViewingClub} />
         </div>
       )}
 
       {selected === "cup2" && (
         <>
-          <YourRealCupStatus cup={cup2Live} clubs={clubs} userClubId={userClubId} />
-          <CupBracketList rounds={cup2Rounds} clubs={clubs} revealedRounds={cup2Revealed} userClubId={userClubId} />
+          <YourRealCupStatus cup={cup2Live} clubs={clubs} userClubId={userClubId} onSelectClub={setViewingClub} />
+          <CupBracketList rounds={cup2Rounds} clubs={clubs} revealedRounds={cup2Revealed} userClubId={userClubId} onSelectClub={setViewingClub} />
         </>
       )}
     </div>
@@ -10740,10 +10761,12 @@ function TableTab({ standings, clubs, userClubId, division, cup, nextFixture, al
   const [showBrowser, setShowBrowser] = useState(false);
   const [showCupBrowser, setShowCupBrowser] = useState(false);
   const [showStatsLeague, setShowStatsLeague] = useState(false);
-  useEffect(() => { onSubViewChange?.(showBrowser || showCupBrowser || showStatsLeague); }, [showBrowser, showCupBrowser, showStatsLeague]);
+  const [viewingClub, setViewingClub] = useState(null);
+  useEffect(() => { onSubViewChange?.(showBrowser || showCupBrowser || showStatsLeague || !!viewingClub); }, [showBrowser, showCupBrowser, showStatsLeague, viewingClub]);
   if (showBrowser) return <LeagueBrowserView allSchedules={allSchedules} clubs={clubs} userClubId={userClubId} homeLeagueId={leagueId} onBack={() => setShowBrowser(false)} />;
   if (showCupBrowser) return <CupBrowserView clubs={clubs} homeLeagueId={leagueId} season={season} currentRound={currentRound} userClubId={userClubId} season1Qualifiers={season1Qualifiers} cup1Live={cup1Live} domesticLive={domesticLive} cup2Live={cup2Live} onBack={() => setShowCupBrowser(false)} />;
   if (showStatsLeague) return <StatsLeagueView clubs={clubs} leagueId={leagueId} division={division} userClubId={userClubId} onBack={() => setShowStatsLeague(false)} />;
+  if (viewingClub) return <OpponentScoutView club={viewingClub} onBack={() => setViewingClub(null)} />;
   const n = standings.length;
   const nextOppId = nextFixture ? (nextFixture.home === userClubId ? nextFixture.away : nextFixture.home) : null;
   const showCupTab = cup && !cup.champion && !cup.eliminated;
@@ -10761,13 +10784,13 @@ function TableTab({ standings, clubs, userClubId, division, cup, nextFixture, al
           ))}
         </div>
       )}
-      {subView === "cup" && showCupTab ? <CupStandingsPanel cup={cup} clubs={clubs} userClubId={userClubId} /> : (
+      {subView === "cup" && showCupTab ? <CupStandingsPanel cup={cup} clubs={clubs} userClubId={userClubId} onSelectClub={setViewingClub} /> : (
         <>
           <div className="flex items-center justify-between mb-2 px-1">
             <span className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.paperDim }}>{divisionLabel(leagueId, division)}</span>
-            {nextOppId && <span className="text-11" style={{ color: C.paperDim }}>Nästa: <b style={{ color: C.goldSoft }}>{clubs[nextOppId].name}</b></span>}
+            {nextOppId && <button onClick={() => setViewingClub(clubs[nextOppId])} className="text-11" style={{ color: C.paperDim }}>Nästa: <b style={{ color: C.goldSoft }}>{clubs[nextOppId].name}</b></button>}
           </div>
-          <StandingsTable standings={standings} clubs={clubs} userClubId={userClubId} division={division} nextOppId={nextOppId} schedule={schedule} round={currentRound} />
+          <StandingsTable standings={standings} clubs={clubs} userClubId={userClubId} division={division} nextOppId={nextOppId} schedule={schedule} round={currentRound} onSelectClub={setViewingClub} />
           {division > 1 && <div className="text-10 mt-2 px-1" style={{ color: C.paperDim }}><span style={{ color: C.win }}>■</span> Uppflyttning till {divisionLabel(leagueId, division - 1)}</div>}
           {division < 3 && <div className="text-10 mt-1 px-1" style={{ color: C.paperDim }}><span style={{ color: C.loss }}>■</span> Nedflyttning till {divisionLabel(leagueId, division + 1)}</div>}
         </>
@@ -10823,11 +10846,13 @@ function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, t
   const [subView, setSubView] = useState("league");
   const [showBrowser, setShowBrowser] = useState(false);
   const [showCupBrowser, setShowCupBrowser] = useState(false);
-  useEffect(() => { onSubViewChange?.(showBrowser || showCupBrowser); }, [showBrowser, showCupBrowser]);
+  const [viewingClub, setViewingClub] = useState(null);
+  useEffect(() => { onSubViewChange?.(showBrowser || showCupBrowser || !!viewingClub); }, [showBrowser, showCupBrowser, viewingClub]);
   const rivalId = clubs[userClubId]?.rivalId;
   const showCupTab = cup && !cup.champion && !cup.eliminated;
   if (showBrowser) return <ScheduleBrowserView allSchedules={allSchedules} clubs={clubs} homeLeagueId={leagueId} season={season} seasonBaseYear={seasonBaseYear} onBack={() => setShowBrowser(false)} />;
   if (showCupBrowser) return <CupBrowserView clubs={clubs} homeLeagueId={leagueId} season={season} currentRound={currentRound} userClubId={userClubId} season1Qualifiers={season1Qualifiers} cup1Live={cup1Live} domesticLive={domesticLive} cup2Live={cup2Live} onBack={() => setShowCupBrowser(false)} />;
+  if (viewingClub) return <OpponentScoutView club={viewingClub} onBack={() => setViewingClub(null)} />;
   return (
     <div className="rise-in">
       <div className="grid grid-cols-2 gap-2 mb-2.5">
@@ -10842,7 +10867,7 @@ function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, t
           ))}
         </div>
       )}
-      {subView === "cup" && showCupTab ? <CupFixturesPanel cup={cup} clubs={clubs} userClubId={userClubId} /> : (
+      {subView === "cup" && showCupTab ? <CupFixturesPanel cup={cup} clubs={clubs} userClubId={userClubId} onSelectClub={setViewingClub} /> : (
         <PaperCard style={{ padding: 0, marginTop: showCupTab ? 0 : 10 }}>
           <div className="max-h-70 overflow-y-auto divide-y" style={{ borderColor: C.paperDim }}>
             {schedule.map((round, ri) => {
@@ -10861,7 +10886,7 @@ function FixturesTab({ schedule, clubs, currentRound, userClubId, cup, budget, t
               return (
                 <div key={ri} className="flex items-center justify-between px-3 py-2.5 text-sm" style={{ background: isCurrent ? "rgba(201,154,62,0.15)" : "transparent" }}>
                   <span className="font-mono text-xs w-16 shrink-0" style={{ color: C.inkSoft }}>{formatGameDateShort(roundDate(season, ri, seasonBaseYear))}</span>
-                  <span className="flex-1 flex items-center gap-1.5 truncate px-1">{isRival && <Star size={11} fill={C.gold} color={C.gold} className="shrink-0" />}<ClubJersey club={clubs[oppId]} size={16} /><span className="truncate">{userIsHome ? "vs" : "@"} {clubs[oppId].name}</span></span>
+                  <button onClick={() => setViewingClub(clubs[oppId])} className="flex-1 flex items-center gap-1.5 truncate px-1 text-left">{isRival && <Star size={11} fill={C.gold} color={C.gold} className="shrink-0" />}<ClubJersey club={clubs[oppId]} size={16} /><span className="truncate">{userIsHome ? "vs" : "@"} {clubs[oppId].name}</span></button>
                   {played ? (
                     <span className="flex items-center gap-1.5 font-mono">{resultTag && <ResultChip result={resultTag} />}<span>{f.homeGoals} – {f.awayGoals}</span></span>
                   ) : <span className="font-mono text-xs" style={{ color: C.inkSoft }}>{isCurrent ? "Nästa" : "–"}</span>}
