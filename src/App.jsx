@@ -11090,12 +11090,15 @@ function formationPresetToCells(code, squad, xiIds) {
 }
 function initialLineup(squad, startingXI, formationCode, savedCells) {
   if (savedCells && Object.keys(savedCells).length) {
+    // Keep every saved slot key so the pitch position stays put even when its player is gone (sold, loaned
+    // out) — only the player id is cleared. startingXI shrinks the moment a starter leaves the squad, so it
+    // can't be used as the slot cap below; a formation always has 11 positions regardless of who's out.
     const valid = {};
-    Object.entries(savedCells).forEach(([k, id]) => { if (!id || squad.some(p => p.id === id)) valid[k] = id; });
+    Object.entries(savedCells).forEach(([k, id]) => { valid[k] = (id && squad.some(p => p.id === id)) ? id : null; });
     const entries = Object.entries(valid);
-    const maxSlots = (startingXI && startingXI.length) || 11;
+    const maxSlots = 11;
     if (entries.length > maxSlots) {
-      // More cells than the starting XI can ever fill — almost always a leftover from switching formations
+      // More cells than a formation can ever have — almost always a leftover from switching formations
       // or an older save. Keep filled cells first, then trim any excess empty placeholders.
       entries.sort(([, a], [, b]) => (b ? 1 : 0) - (a ? 1 : 0));
       const trimmed = {};
@@ -11782,7 +11785,16 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
             const { key, col, row, player } = r;
             const leftPct = (row + 0.5) / GRID_ROWS * 100, topPct = (GRID_COLS - 1 - col + 0.5) / GRID_COLS * 100;
             const isSlotSelected = selectedSlotKey === key;
-            if (!player) return null;
+            if (!player) {
+              return (
+                <div key={key} onClick={() => openPositionPicker(key)}
+                  style={{ position: "absolute", left: `${leftPct}%`, top: `${topPct}%`, zIndex: 2, transform: "translate(-50%, -50%)", display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer" }}>
+                  <div style={{ width: 26, height: 26, borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: `2px dashed ${isSlotSelected ? C.gold : "rgba(255,255,255,0.4)"}`, display: "flex", alignItems: "center", justifyContent: "center", animation: isSlotSelected ? "selectPulse 1.1s ease-in-out infinite" : "none" }}>
+                    <span className="font-display" style={{ fontSize: 8, color: "rgba(255,255,255,0.8)" }}>{nearestPositionForCell(col, row)}</span>
+                  </div>
+                </div>
+              );
+            }
             const fit = effectivePositionFit(player, col, row);
             const unavailable = player.injuryWeeks > 0 || player.suspendedMatches > 0 || player.internationalDuty;
             const fitColor = unavailable ? C.loss : fit >= 0.8 ? C.win : fit >= 0.55 ? C.gold : C.loss;
@@ -12715,7 +12727,7 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
             ) : (
               <div className="space-y-1.5">
                 {loanCandidates.map(c => (
-                  <button key={c.id} onClick={() => onSendLoan(c.id, c.name)} className="w-full text-left px-3 py-2 rounded-xl text-sm font-semibold flex items-center justify-between" style={{ background: C.paperDim }}>
+                  <button key={c.id} onClick={() => onSendLoan(player.id, c.name)} className="w-full text-left px-3 py-2 rounded-xl text-sm font-semibold flex items-center justify-between" style={{ background: C.paperDim }}>
                     <span>{c.name}</span>
                     <span className="text-10 font-mono" style={{ color: C.inkSoft }}>Div {c.division}</span>
                   </button>
