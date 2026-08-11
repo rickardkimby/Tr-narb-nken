@@ -12381,6 +12381,26 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
       {profileTab === "oversikt" && (
         <>
         <PaperCard>
+        <div className="grid grid-cols-5 gap-1.5 text-center">
+          <div><div className="font-display text-lg">{careerApps}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Matcher (karriär)</div></div>
+          <div><div className="font-display text-lg">{careerGoals}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Mål (karriär)</div></div>
+          <div><div className="font-display text-lg">{careerAssists}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Assist (karriär)</div></div>
+          <div><div className="font-display text-lg">{recentAvgRating}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Snitt (5)</div></div>
+          <div><div className="font-display text-lg">{avgRating}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Snitt (säsong)</div></div>
+        </div>
+        {/* Career totals above include past seasons (seasonLog) — shown separately here so it's clear
+            why they won't match the current season's Statistikliga table, which only tracks this season. */}
+        <div className="mt-2 text-11 text-center" style={{ color: C.inkSoft }}>Denna säsong: {player.apps || 0} matcher · {player.goals || 0} mål · {player.assists || 0} assist</div>
+        <div className="mt-3 flex items-center justify-between text-11" style={{ color: C.inkSoft }}>
+          <span>Gula kort denna säsong: {player.yellowCards}/5</span>
+        </div>
+        {milestones.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {milestones.map((m, i) => <span key={i} className="text-9 font-semibold px-2 py-1 rounded-full" style={{ background: "rgba(201,154,62,0.18)", color: C.gold }}>{m}</span>)}
+          </div>
+        )}
+        </PaperCard>
+        <PaperCard>
           <div className="text-9 uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Egenskaper</div>
           <div className="grid grid-cols-3 gap-1.5">
             {Object.entries(labels).map(([key, label]) => <AttributeGridCard key={key} attrKey={key} label={label} value={attrs[key]} />)}
@@ -12431,6 +12451,51 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
             </div>
           </div>
         </PaperCard>
+        <div className="grid grid-cols-2 gap-2">
+          <PaperCard style={{ padding: 10 }}>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-9 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Ork</div>
+              <span className="text-10 font-semibold" style={{ color: (player.stamina ?? 100) >= 60 ? C.win : (player.stamina ?? 100) >= 35 ? C.gold : C.loss }}>
+                {(player.stamina ?? 100) >= 75 ? "Pigg" : (player.stamina ?? 100) >= 45 ? "Trött" : "Utsliten"}
+              </span>
+            </div>
+            <StatBar label="" value={player.stamina ?? 100} color={(player.stamina ?? 100) >= 60 ? C.win : (player.stamina ?? 100) >= 35 ? C.gold : C.loss} />
+            {(player.stamina ?? 100) < 45 && <div className="text-9 mt-1.5" style={{ color: C.loss }}>Låg ork ger sämre matchprestation och högre skaderisk.</div>}
+          </PaperCard>
+          <PaperCard style={{ padding: 10 }}>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-9 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Trivsel</div>
+              <span className="text-10 font-semibold" style={{ color: moraleColor }}>{moraleLabel}</span>
+            </div>
+            <StatBar label="" value={player.morale} color={moraleColor} />
+            {!chatResult ? (
+              <div className="mt-2">
+                <div className="text-9 uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Enskilt samtal</div>
+                <div className="grid grid-cols-3 gap-1">
+                  {Object.entries(CHAT_APPROACHES).map(([key, cfg]) => (
+                    <button key={key} onClick={() => doChat(key)} className="py-1.5 rounded-lg text-9 font-semibold border" style={{ background: "transparent", color: C.inkSoft, borderColor: C.paperDim }} title={cfg.desc}>{cfg.label}</button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-2 text-9 font-semibold text-center px-2 py-1.5 rounded-lg" style={{ background: chatResult.delta >= 0 ? "rgba(47,125,90,0.15)" : "rgba(180,68,59,0.15)", color: chatResult.delta >= 0 ? C.win : C.loss }}>
+                {chatResult.delta >= 0 ? `Trivseln steg med ${chatResult.delta}.` : `Trivseln sjönk med ${Math.abs(chatResult.delta)}.`}
+              </div>
+            )}
+          </PaperCard>
+        </div>
+        {(() => {
+          if (!squad || !chemistryPairs) return null;
+          const partners = squad.filter(t => t.id !== player.id).map(t => ({ t, games: chemistryPairs[[player.id, t.id].sort().join("|")] || 0 })).filter(x => x.games > 0).sort((a, b) => b.games - a.games);
+          if (!partners.length) return null;
+          const best = partners[0];
+          return (
+            <PaperCard>
+              <div className="text-xs uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Relation till lagkamrater</div>
+              <div className="text-11" style={{ color: C.inkSoft }}>Bäst inspelad med <span className="font-semibold" style={{ color: C.ink }}>{best.t.name}</span> — {best.games} matcher tillsammans.</div>
+            </PaperCard>
+          );
+        })()}
         {(() => {
           const interested = computeInterestedClubs(player, clubs, userClubId, round);
           const recentlyHinted = player.hintedSaleRound != null && (round - player.hintedSaleRound) <= 10;
@@ -12454,6 +12519,85 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
             </PaperCard>
           );
         })()}
+        <div className="grid grid-cols-2 gap-2">
+          <PaperCard style={{ padding: 10 }}>
+            <div className="flex items-center justify-between">
+              <div className="text-9 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Kontrakt & lön</div>
+            </div>
+            <div className="font-mono text-11 font-semibold mt-0.5" style={{ color: player.contractYears <= 1 ? C.loss : C.ink }}>{player.contractYears} {player.contractYears === 1 ? "år" : "år"} kvar</div>
+            <div className="text-10 mt-1" style={{ color: C.inkSoft }}>Lön: <span className="font-mono font-semibold">{formatMoney(player.wage)}</span>/omg</div>
+            {player.releaseClause && <div className="text-10 mt-1" style={{ color: C.gold }}>Utköp: {formatMoney(player.releaseClause)}</div>}
+            {isBreakoutStar(player, reputation) && <div className="text-9 mt-1.5 font-semibold" style={{ color: C.gold }}>⚠️ Fostrad i akademin och har klart vuxit ur klubbens nivå — risk att {player.name.split(" ")[0]} inte vill förlänga oavsett lön.</div>}
+            {(() => {
+              const activeVisions = (manager?.visions || []).filter(v => !v.resolved && !(v.pitches && v.pitches[player.id]));
+              if (!activeVisions.length) return <div className="text-9 mt-1.5" style={{ color: C.inkSoft }}>Ingen aktiv framtidsvision att sälja in ännu — sätt en under Manager → Framtidsvisionen.</div>;
+              return (
+                <div className="mt-2 space-y-1.5">
+                  {activeVisions.map(v => (
+                    <button key={v.id} onClick={() => onPitchVision(player.id, v.id)} className="w-full text-left px-2 py-1.5 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>
+                      🔮 Sälj in visionen (säsong {v.createdSeason}–{v.targetSeason})
+                      <div className="text-9 font-normal mt-0.5" style={{ color: C.inkSoft }}>{v.goals.map(gl => VISION_GOAL_TYPES[gl.type].label).join(" · ")}</div>
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
+            {player.contractYears <= 2 ? (
+              !wageOutcome ? (
+                <>
+                  <div className="text-9 mt-1" style={{ color: C.inkSoft }}>{player.name.split(" ")[0]} vill ha ett {demand.years}-årskontrakt. Löneanspråk: ca {formatMoney(target)}/omg.</div>
+                  <button onClick={() => setIncludeClause(v => !v)} className="flex items-center gap-1.5 mt-2 text-9">
+                    <span style={{ width: 14, height: 14, borderRadius: 4, border: `1.5px solid ${C.gold}`, background: includeClause ? C.gold : "transparent", flexShrink: 0 }} />
+                    Inkludera utköpsklausul (ca {formatMoney(Math.round(demand.newValue * 1.6))}, sänker löneanspråket ~8%)
+                  </button>
+                  <div className="grid grid-cols-1 gap-1.5 mt-2">
+                    <button onClick={() => tryRenewWage(includeClause ? 0.83 : 0.9)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.paperDim, color: C.ink }}>Lågt ({formatMoney(Math.round(target * (includeClause ? 0.83 : 0.9)))}/omg)</button>
+                    <button onClick={() => tryRenewWage(includeClause ? 0.92 : 1.0)} className="py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Marknadsmässigt ({formatMoney(Math.round(target * (includeClause ? 0.92 : 1.0)))}/omg)</button>
+                  </div>
+                </>
+              ) : wageOutcome.result === "accept" ? (
+                <>
+                  <div className="text-9 mt-1.5 font-semibold" style={{ color: C.win }}>{player.name.split(" ")[0]} accepterar {formatMoney(wageOutcome.offerWage)}/omg!</div>
+                  <button onClick={() => { onRenew(player.id, wageOutcome.offerWage, includeClause); setWageOutcome(null); }} className="mt-2 w-full py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Förläng kontrakt</button>
+                </>
+              ) : wageOutcome.result === "counter" ? (
+                <>
+                  <div className="text-9 mt-1.5" style={{ color: C.ink }}>{player.name.split(" ")[0]} vill ha {formatMoney(wageOutcome.counterWage)}/omg istället.</div>
+                  <div className="flex gap-1.5 mt-2">
+                    <button onClick={() => { onRenew(player.id, wageOutcome.counterWage, includeClause); setWageOutcome(null); }} className="flex-1 py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Acceptera</button>
+                    <button onClick={() => setWageOutcome(null)} className="flex-1 py-1.5 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Avbryt</button>
+                  </div>
+                </>
+              ) : wageOutcome.result === "breakout_refuse" ? (
+                <>
+                  <div className="text-9 mt-1.5 font-semibold" style={{ color: C.loss }}>{player.name.split(" ")[0]} vill inte förlänga — oavsett lön.</div>
+                  <div className="text-9 mt-1" style={{ color: C.inkSoft }}>Fostrad i akademin, men har vuxit ur klubben. {player.name.split(" ")[0]} vill ta nästa steg i karriären på en större scen — pengar löser inte det här.</div>
+                  <button onClick={() => setWageOutcome(null)} className="mt-2 w-full py-1.5 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Stäng</button>
+                </>
+              ) : (
+                <>
+                  <div className="text-9 mt-1.5 font-semibold" style={{ color: C.loss }}>{player.name.split(" ")[0]} tackar nej.</div>
+                  <button onClick={() => setWageOutcome(null)} className="mt-2 w-full py-1.5 rounded-lg text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Försök igen</button>
+                </>
+              )
+            ) : <div className="text-9 mt-1" style={{ color: C.inkSoft }}>Inget behov av förhandling ännu.</div>}
+          </PaperCard>
+          <PaperCard style={{ padding: 10 }}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-9 uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Marknadsvärde</div>
+            </div>
+            <div className="font-mono text-11 font-semibold">{formatMoney(player.value)}</div>
+            {player.sellOnPct > 0 && <div className="text-9 mt-1 mb-1" style={{ color: C.loss }}>Säljklausul: {player.sellOnClubName} får {player.sellOnPct}%</div>}
+            <button onClick={onToggleStarter} disabled={(injured || suspended || player.internationalDuty) && !isStarter} className="w-full py-2 rounded-lg text-9 font-semibold mt-2 mb-2" style={((injured || suspended || player.internationalDuty) && !isStarter) ? { background: C.paperDim, color: C.inkSoft, opacity: 0.6 } : isStarter ? { background: C.turf, color: C.paper } : { background: C.gold, color: C.turfDeep }}>
+              {isStarter ? "Ta bort från startelvan" : injured ? "Skadad" : suspended ? "Avstängd" : player.internationalDuty ? "Landslagsuppdrag" : "Ta ut i startelvan"}
+            </button>
+            <div className="text-9 uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Listning</div>
+            <div className="grid grid-cols-1 gap-1.5">
+              <button onClick={() => onToggleListed(player.id)} className="py-1.5 rounded-lg text-9 font-semibold" style={player.transferListed ? { background: C.win, color: "#fff" } : { background: "transparent", border: `1px solid ${C.loss}`, color: C.loss }}>{player.transferListed ? "✓ Till salu" : "Lista till salu"}</button>
+              <button onClick={() => onToggleLoanListed && onToggleLoanListed(player.id)} className="py-1.5 rounded-lg text-9 font-semibold" style={player.loanListed ? { background: "#3F74A8", color: "#fff" } : { background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>{player.loanListed ? "✓ Går att låna" : "Lista för lån"}</button>
+            </div>
+          </PaperCard>
+        </div>
         {(() => {
           const eligible = eligibleTrainingPositions(player);
           const active = player.trainingTarget;
@@ -12533,26 +12677,27 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
             </PaperCard>
           );
         })()}
-        <PaperCard>
-        <div className="grid grid-cols-5 gap-1.5 text-center">
-          <div><div className="font-display text-lg">{careerApps}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Matcher (karriär)</div></div>
-          <div><div className="font-display text-lg">{careerGoals}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Mål (karriär)</div></div>
-          <div><div className="font-display text-lg">{careerAssists}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Assist (karriär)</div></div>
-          <div><div className="font-display text-lg">{recentAvgRating}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Snitt (5)</div></div>
-          <div><div className="font-display text-lg">{avgRating}</div><div className="text-9 uppercase" style={{ color: C.inkSoft }}>Snitt (säsong)</div></div>
-        </div>
-        {/* Career totals above include past seasons (seasonLog) — shown separately here so it's clear
-            why they won't match the current season's Statistikliga table, which only tracks this season. */}
-        <div className="mt-2 text-11 text-center" style={{ color: C.inkSoft }}>Denna säsong: {player.apps || 0} matcher · {player.goals || 0} mål · {player.assists || 0} assist</div>
-        <div className="mt-3 flex items-center justify-between text-11" style={{ color: C.inkSoft }}>
-          <span>Gula kort denna säsong: {player.yellowCards}/5</span>
-        </div>
-        {milestones.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {milestones.map((m, i) => <span key={i} className="text-9 font-semibold px-2 py-1 rounded-full" style={{ background: "rgba(201,154,62,0.18)", color: C.gold }}>{m}</span>)}
-          </div>
+        {onSendLoan && (
+          <PaperCard>
+            <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Lån</div>
+            <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Skicka {player.name} på lån för säsongen. Spelaren spelar regelbundet på annat håll och utvecklas, men är otillgänglig för er under tiden.</div>
+            {!showLoanPicker ? (
+              <button onClick={() => setShowLoanPicker(true)} disabled={squadSize <= 11} className="w-full py-2 rounded-xl text-sm font-semibold" style={squadSize <= 11 ? { background: C.paperDim, color: C.inkSoft, opacity: 0.6 } : { background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>
+                {squadSize <= 11 ? "Truppen är för liten för lån" : "Skicka på lån"}
+              </button>
+            ) : (
+              <div className="space-y-1.5">
+                {loanCandidates.map(c => (
+                  <button key={c.id} onClick={() => onSendLoan(c.id, c.name)} className="w-full text-left px-3 py-2 rounded-xl text-sm font-semibold flex items-center justify-between" style={{ background: C.paperDim }}>
+                    <span>{c.name}</span>
+                    <span className="text-10 font-mono" style={{ color: C.inkSoft }}>Div {c.division}</span>
+                  </button>
+                ))}
+                <button onClick={() => setShowLoanPicker(false)} className="w-full py-1.5 text-11" style={{ color: C.inkSoft }}>Avbryt</button>
+              </div>
+            )}
+          </PaperCard>
         )}
-        </PaperCard>
         </>
       )}
 
@@ -12663,156 +12808,6 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
         </>
       )}
 
-      {profileTab === "oversikt" && (
-      <>
-      <PaperCard>
-        <div className="flex items-center justify-between mb-1">
-          <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Ork</div>
-          <span className="text-11 font-semibold" style={{ color: (player.stamina ?? 100) >= 60 ? C.win : (player.stamina ?? 100) >= 35 ? C.gold : C.loss }}>
-            {(player.stamina ?? 100) >= 75 ? "Pigg" : (player.stamina ?? 100) >= 45 ? "Måttligt trött" : "Utsliten"}
-          </span>
-        </div>
-        <StatBar label="" value={player.stamina ?? 100} color={(player.stamina ?? 100) >= 60 ? C.win : (player.stamina ?? 100) >= 35 ? C.gold : C.loss} />
-        {(player.stamina ?? 100) < 45 && <div className="text-10 mt-1.5" style={{ color: C.loss }}>Låg ork ger sämre matchprestation och högre skaderisk.</div>}
-      </PaperCard>
-
-      {(() => {
-        if (!squad || !chemistryPairs) return null;
-        const partners = squad.filter(t => t.id !== player.id).map(t => ({ t, games: chemistryPairs[[player.id, t.id].sort().join("|")] || 0 })).filter(x => x.games > 0).sort((a, b) => b.games - a.games);
-        if (!partners.length) return null;
-        const best = partners[0];
-        return (
-          <PaperCard>
-            <div className="text-xs uppercase tracking-wide font-semibold mb-1" style={{ color: C.inkSoft }}>Relation till lagkamrater</div>
-            <div className="text-11" style={{ color: C.inkSoft }}>Bäst inspelad med <span className="font-semibold" style={{ color: C.ink }}>{best.t.name}</span> — {best.games} matcher tillsammans.</div>
-          </PaperCard>
-        );
-      })()}
-
-      <PaperCard>
-        <div className="flex items-center justify-between mb-1">
-          <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Trivsel</div>
-          <span className="text-11 font-semibold" style={{ color: moraleColor }}>{moraleLabel}</span>
-        </div>
-        <StatBar label="" value={player.morale} color={moraleColor} />
-        {!chatResult ? (
-          <div className="mt-3">
-            <div className="text-10 uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Enskilt samtal</div>
-            <div className="grid grid-cols-3 gap-2">
-              {Object.entries(CHAT_APPROACHES).map(([key, cfg]) => (
-                <button key={key} onClick={() => doChat(key)} className="py-2 rounded-xl text-9 font-semibold border" style={{ background: "transparent", color: C.inkSoft, borderColor: C.paperDim }} title={cfg.desc}>{cfg.label}</button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="mt-3 text-11 font-semibold text-center px-2.5 py-1.5 rounded-lg" style={{ background: chatResult.delta >= 0 ? "rgba(47,125,90,0.15)" : "rgba(180,68,59,0.15)", color: chatResult.delta >= 0 ? C.win : C.loss }}>
-            {chatResult.delta >= 0 ? `Samtalet gick bra — trivseln steg med ${chatResult.delta}.` : `Samtalet gick sämre än väntat — trivseln sjönk med ${Math.abs(chatResult.delta)}.`}
-          </div>
-        )}
-      </PaperCard>
-
-      <PaperCard>
-        <div className="flex items-center justify-between">
-          <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Kontrakt & lön</div>
-          <div className="font-mono text-sm font-semibold" style={{ color: player.contractYears <= 1 ? C.loss : C.ink }}>{player.contractYears} {player.contractYears === 1 ? "år" : "år"} kvar</div>
-        </div>
-        <div className="text-11 mt-1" style={{ color: C.inkSoft }}>Nuvarande lön: <span className="font-mono font-semibold">{formatMoney(player.wage)}</span>/omgång</div>
-        {player.releaseClause && <div className="text-11 mt-1" style={{ color: C.gold }}>Utköpsklausul: {formatMoney(player.releaseClause)}</div>}
-        {isBreakoutStar(player, reputation) && <div className="text-11 mt-1.5 font-semibold" style={{ color: C.gold }}>⚠️ Fostrad i akademin och har klart vuxit ur klubbens nivå — risk att {player.name.split(" ")[0]} inte vill förlänga oavsett lön.</div>}
-        {(() => {
-          const activeVisions = (manager?.visions || []).filter(v => !v.resolved && !(v.pitches && v.pitches[player.id]));
-          if (!activeVisions.length) return <div className="text-10 mt-1.5" style={{ color: C.inkSoft }}>Ingen aktiv framtidsvision att sälja in ännu — sätt en under Manager → Framtidsvisionen.</div>;
-          return (
-            <div className="mt-2 space-y-1.5">
-              {activeVisions.map(v => (
-                <button key={v.id} onClick={() => onPitchVision(player.id, v.id)} className="w-full text-left px-3 py-2 rounded-xl text-11 font-semibold" style={{ background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>
-                  🔮 Sälj in visionen (säsong {v.createdSeason}–{v.targetSeason})
-                  <div className="text-9 font-normal mt-0.5" style={{ color: C.inkSoft }}>{v.goals.map(gl => VISION_GOAL_TYPES[gl.type].label).join(" · ")}</div>
-                </button>
-              ))}
-            </div>
-          );
-        })()}
-        {player.contractYears <= 2 ? (
-          !wageOutcome ? (
-            <>
-              <div className="text-11 mt-1" style={{ color: C.inkSoft }}>{player.name.split(" ")[0]} vill ha ett {demand.years}-årskontrakt. Löneanspråk: ca {formatMoney(target)}/omgång.</div>
-              <button onClick={() => setIncludeClause(v => !v)} className="flex items-center gap-2 mt-2 text-11">
-                <span style={{ width: 16, height: 16, borderRadius: 4, border: `1.5px solid ${C.gold}`, background: includeClause ? C.gold : "transparent" }} />
-                Inkludera utköpsklausul (ca {formatMoney(Math.round(demand.newValue * 1.6))}, sänker löneanspråket ~8%)
-              </button>
-              <div className="grid grid-cols-2 gap-2 mt-2">
-                <button onClick={() => tryRenewWage(includeClause ? 0.83 : 0.9)} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.paperDim, color: C.ink }}>Lågt ({formatMoney(Math.round(target * (includeClause ? 0.83 : 0.9)))}/omg)</button>
-                <button onClick={() => tryRenewWage(includeClause ? 0.92 : 1.0)} className="py-2 rounded-xl text-9 font-semibold" style={{ background: C.turf, color: C.paper }}>Marknadsmässigt ({formatMoney(Math.round(target * (includeClause ? 0.92 : 1.0)))}/omg)</button>
-              </div>
-            </>
-          ) : wageOutcome.result === "accept" ? (
-            <>
-              <div className="text-11 mt-1.5 font-semibold" style={{ color: C.win }}>{player.name.split(" ")[0]} accepterar {formatMoney(wageOutcome.offerWage)}/omg!</div>
-              <button onClick={() => { onRenew(player.id, wageOutcome.offerWage, includeClause); setWageOutcome(null); }} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={{ background: C.turf, color: C.paper }}>Förläng kontrakt</button>
-            </>
-          ) : wageOutcome.result === "counter" ? (
-            <>
-              <div className="text-11 mt-1.5" style={{ color: C.ink }}>{player.name.split(" ")[0]} vill ha {formatMoney(wageOutcome.counterWage)}/omg istället.</div>
-              <div className="flex gap-2 mt-2">
-                <button onClick={() => { onRenew(player.id, wageOutcome.counterWage, includeClause); setWageOutcome(null); }} className="flex-1 py-2 rounded-xl text-xs font-semibold" style={{ background: C.turf, color: C.paper }}>Acceptera</button>
-                <button onClick={() => setWageOutcome(null)} className="flex-1 py-2 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Avbryt</button>
-              </div>
-            </>
-          ) : wageOutcome.result === "breakout_refuse" ? (
-            <>
-              <div className="text-11 mt-1.5 font-semibold" style={{ color: C.loss }}>{player.name.split(" ")[0]} vill inte förlänga — oavsett lön.</div>
-              <div className="text-10 mt-1" style={{ color: C.inkSoft }}>Fostrad i akademin, men har vuxit ur klubben. {player.name.split(" ")[0]} vill ta nästa steg i karriären på en större scen — pengar löser inte det här.</div>
-              <button onClick={() => setWageOutcome(null)} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={{ background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>Stäng</button>
-            </>
-          ) : (
-            <>
-              <div className="text-11 mt-1.5 font-semibold" style={{ color: C.loss }}>{player.name.split(" ")[0]} tackar nej.</div>
-              <button onClick={() => setWageOutcome(null)} className="mt-2 w-full py-2 rounded-xl text-xs font-semibold" style={{ background: C.turf, color: C.paper }}>Försök igen</button>
-            </>
-          )
-        ) : <div className="text-11 mt-1" style={{ color: C.inkSoft }}>Inget behov av förhandling ännu.</div>}
-      </PaperCard>
-
-      <PaperCard>
-        <div className="flex items-center justify-between mb-2">
-          <div className="text-xs uppercase tracking-wide font-semibold" style={{ color: C.inkSoft }}>Marknadsvärde</div>
-          <div className="font-mono text-sm font-semibold">{formatMoney(player.value)}</div>
-        </div>
-        {player.sellOnPct > 0 && <div className="text-11 mb-2" style={{ color: C.loss }}>Säljklausul: {player.sellOnClubName} får {player.sellOnPct}% vid vidareförsäljning</div>}
-        <button onClick={onToggleStarter} disabled={(injured || suspended || player.internationalDuty) && !isStarter} className="w-full py-2.5 rounded-xl text-sm font-semibold mb-2" style={((injured || suspended || player.internationalDuty) && !isStarter) ? { background: C.paperDim, color: C.inkSoft, opacity: 0.6 } : isStarter ? { background: C.turf, color: C.paper } : { background: C.gold, color: C.turfDeep }}>
-          {isStarter ? "Ta bort från startelvan" : injured ? "Skadad — kan inte spela" : suspended ? "Avstängd — kan inte spela" : player.internationalDuty ? "Landslagsuppdrag — kan inte spela" : "Ta ut i startelvan"}
-        </button>
-        <div className="text-10 uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Listning — kan vara båda samtidigt</div>
-        <div className="grid grid-cols-2 gap-2">
-          <button onClick={() => onToggleListed(player.id)} className="py-2 rounded-xl text-9 font-semibold" style={player.transferListed ? { background: C.win, color: "#fff" } : { background: "transparent", border: `1px solid ${C.loss}`, color: C.loss }}>{player.transferListed ? "✓ Till salu" : "Lista till salu"}</button>
-          <button onClick={() => onToggleLoanListed && onToggleLoanListed(player.id)} className="py-2 rounded-xl text-9 font-semibold" style={player.loanListed ? { background: "#3F74A8", color: "#fff" } : { background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>{player.loanListed ? "✓ Går att låna" : "Lista för lån"}</button>
-        </div>
-      </PaperCard>
-
-      {onSendLoan && (
-        <PaperCard>
-          <div className="text-xs uppercase tracking-wide font-semibold mb-1.5" style={{ color: C.inkSoft }}>Lån</div>
-          <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Skicka {player.name} på lån för säsongen. Spelaren spelar regelbundet på annat håll och utvecklas, men är otillgänglig för er under tiden.</div>
-          {!showLoanPicker ? (
-            <button onClick={() => setShowLoanPicker(true)} disabled={squadSize <= 11} className="w-full py-2 rounded-xl text-sm font-semibold" style={squadSize <= 11 ? { background: C.paperDim, color: C.inkSoft, opacity: 0.6 } : { background: "transparent", border: `1px solid ${C.inkSoft}`, color: C.inkSoft }}>
-              {squadSize <= 11 ? "Truppen är för liten för lån" : "Skicka på lån"}
-            </button>
-          ) : (
-            <div className="space-y-1.5">
-              {loanCandidates.map(c => (
-                <button key={c.id} onClick={() => onSendLoan(c.id, c.name)} className="w-full text-left px-3 py-2 rounded-xl text-sm font-semibold flex items-center justify-between" style={{ background: C.paperDim }}>
-                  <span>{c.name}</span>
-                  <span className="text-10 font-mono" style={{ color: C.inkSoft }}>Div {c.division}</span>
-                </button>
-              ))}
-              <button onClick={() => setShowLoanPicker(false)} className="w-full py-1.5 text-11" style={{ color: C.inkSoft }}>Avbryt</button>
-            </div>
-          )}
-        </PaperCard>
-      )}
-      </>
-      )}
     </div>
   );
 }
