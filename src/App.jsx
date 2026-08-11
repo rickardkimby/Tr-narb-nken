@@ -12310,6 +12310,7 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
   const [chatResult, setChatResult] = useState(null);
   const [includeClause, setIncludeClause] = useState(false);
   const [showLoanPicker, setShowLoanPicker] = useState(false);
+  const [showAllPositions, setShowAllPositions] = useState(false);
   const loanCandidates = useMemo(() => {
     if (!clubs) return [];
     const others = Object.values(clubs).filter(c => Math.abs(c.strength - overall) < 22);
@@ -12480,8 +12481,8 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
               })() : (
                 <>
                   <div className="text-11 mb-2" style={{ color: C.inkSoft }}>Träna spelaren för att öka passform och relevanta egenskaper — antingen genom att perfektionera en position de redan behärskar väl, eller lära in en helt ny. Hur mycket passformen kan öka begränsas av hur avlägsen positionen är — siffran inom parentes är taket för hur bra det någonsin kan bli.</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {eligible
+                  {(() => {
+                    const sortedPositions = eligible
                       .map(code => {
                         const anchor = SPECIFIC_POSITION_LOOKUP[code];
                         const fit = effectivePositionFit(player, anchor.col, anchor.row);
@@ -12489,12 +12490,44 @@ function PlayerProfile({ player, isStarter, onToggleStarter, onBack, confirmSell
                         const ceilingFit = clamp(base + positionTrainingCeiling(base), 0, 1);
                         return { code, fit, ceilingFit };
                       })
-                      .sort((a, b) => b.ceilingFit - a.ceilingFit)
-                      .map(({ code, fit, ceilingFit }) => {
-                        const isPolish = fit >= 0.68;
-                        return <button key={code} onClick={() => onStartTraining(player.id, code)} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg" style={isPolish ? { background: "rgba(201,154,62,0.18)", border: `1px solid ${C.gold}`, color: "#B8862E" } : { background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>{code} ({Math.round(fit * 100)}% → max {Math.round(ceilingFit * 100)}%)</button>;
-                      })}
-                  </div>
+                      .sort((a, b) => b.ceilingFit - a.ceilingFit);
+                    const PositionPill = ({ code, fit, ceilingFit }) => {
+                      const isPolish = fit >= 0.68;
+                      return <button onClick={() => { onStartTraining(player.id, code); setShowAllPositions(false); }} className="text-9 font-semibold px-2.5 py-1.5 rounded-lg shrink-0" style={isPolish ? { background: "rgba(201,154,62,0.18)", border: `1px solid ${C.gold}`, color: "#B8862E" } : { background: "transparent", border: `1px solid ${C.gold}`, color: "#B8862E" }}>{code} ({Math.round(fit * 100)}% → max {Math.round(ceilingFit * 100)}%)</button>;
+                    };
+                    return (
+                      <>
+                        <div className="flex gap-1.5 overflow-x-auto pb-1">
+                          {sortedPositions.slice(0, 4).map(p => <PositionPill key={p.code} {...p} />)}
+                        </div>
+                        {sortedPositions.length > 4 && (
+                          <button onClick={() => setShowAllPositions(true)} className="w-full mt-2 py-2 rounded-lg text-9 font-semibold" style={{ background: "transparent", border: `1px solid ${C.paperDim}`, color: C.inkSoft }}>Visa alla positioner ({sortedPositions.length})</button>
+                        )}
+                        {showAllPositions && (
+                          <>
+                            <div onClick={() => setShowAllPositions(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 40 }} />
+                            <div style={{ position: "fixed", top: 80, bottom: 80, left: 20, right: 20, maxWidth: 420, margin: "0 auto", background: C.paper, color: C.ink, borderRadius: 16, zIndex: 41, boxShadow: "0 16px 40px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                              <div className="flex items-center justify-between px-4 pt-4 pb-2">
+                                <div className="font-display text-lg">Välj position att träna</div>
+                                <button onClick={() => setShowAllPositions(false)} style={{ width: 24, height: 24, borderRadius: "50%", background: C.paperDim, color: C.ink, fontWeight: 900, fontSize: 12, flexShrink: 0 }}>✕</button>
+                              </div>
+                              <div className="px-2 pb-2" style={{ overflowY: "auto" }}>
+                                {sortedPositions.map(({ code, fit, ceilingFit }) => {
+                                  const isPolish = fit >= 0.68;
+                                  return (
+                                    <button key={code} onClick={() => { onStartTraining(player.id, code); setShowAllPositions(false); }} className="w-full flex items-center justify-between text-left px-3 py-2.5 rounded-lg mx-1 my-0.5" style={isPolish ? { background: "rgba(201,154,62,0.12)" } : {}}>
+                                      <span className="text-sm font-semibold" style={{ color: "#B8862E" }}>{code}</span>
+                                      <span className="text-11 font-mono" style={{ color: C.inkSoft }}>{Math.round(fit * 100)}% → max {Math.round(ceilingFit * 100)}%</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </>
+                    );
+                  })()}
                 </>
               )}
             </PaperCard>
