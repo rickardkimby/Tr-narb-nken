@@ -3413,22 +3413,27 @@ function userStrength(xi, tactic, spelide, tacticalSettings, fitScore, staff, ma
   attack *= 1 + backgroundDeltaAtk; defense *= 1 + backgroundDeltaDef;
   return { attack: clamp(attack, 20, 99), defense: clamp(defense, 20, 99) };
 }
-function pickScorerDetailed(squad, count, setPieceTakers) {
-  const outfield = squad.filter(p => p.pos !== "MV");
-  const openPlayWeighted = [];
-  outfield.forEach(p => {
-    // Weighted by actual finishing quality (position-aware — a defender's "shooting" is already
-    // dampened relative to a striker's, since scoring chances mostly come from being in the right
-    // areas with the composure to finish, not raw attack rating alone), further scaled by how often
-    // that position realistically gets those chances in the first place. Sharpened specifically toward
-    // forwards (see distributeMatchStats) — a flatter split let two or three attacking midfielders each
-    // take a real bite out of a nailed striker's chances, which is how a season's top scorer ended up a
-    // midfielder with single digits instead of a striker with 20-30.
+// Weighted by actual finishing quality (position-aware — a defender's "shooting" is already dampened
+// relative to a striker's, since scoring chances mostly come from being in the right areas with the
+// composure to finish, not raw attack rating alone), further scaled by how often that position
+// realistically gets those chances in the first place. Sharpened specifically toward forwards — a flatter
+// split let midfielders and even defenders take a real bite out of a nailed striker's chances, which is
+// how a striker could go a whole season without a single goal despite starting every match. Shared by
+// both the instant-match scorer pick below and the live, minute-by-minute match engine, so a striker's
+// odds of actually being the one who scores are the same regardless of which way a match gets played out.
+function weightedScorerPick(players) {
+  if (!players || !players.length) return null;
+  const weighted = [];
+  players.forEach(p => {
     const posMult = p.pos === "AN" ? 3.2 : p.pos === "MF" ? 0.85 : 0.12;
     const shooting = getAttrs(p).shooting;
     const weight = Math.max(0, Math.round((shooting / 12) * posMult));
-    for (let i = 0; i < weight; i++) openPlayWeighted.push(p);
+    for (let i = 0; i < weight; i++) weighted.push(p);
   });
+  return weighted.length ? pick(weighted) : pick(players);
+}
+function pickScorerDetailed(squad, count, setPieceTakers) {
+  const outfield = squad.filter(p => p.pos !== "MV");
   const penaltyTakers = ((setPieceTakers && setPieceTakers.penalties) || []).map(id => squad.find(p => p.id === id)).filter(Boolean);
   const freeKickTaker = setPieceTakers && setPieceTakers.freeKick ? squad.find(p => p.id === setPieceTakers.freeKick) : null;
   const results = [];
@@ -3445,7 +3450,7 @@ function pickScorerDetailed(squad, count, setPieceTakers) {
       outfield.forEach(p => { const attrs = getAttrs(p); const w = Math.max(1, Math.round((attrs.physical * 0.6 + attrs.shooting * 0.4) / 14)); for (let j = 0; j < w; j++) setPieceWeighted.push(p); });
       results.push({ player: pick(setPieceWeighted), method: "header" });
     } else {
-      results.push({ player: openPlayWeighted.length ? pick(openPlayWeighted) : pick(outfield.length ? outfield : squad), method: "openplay" });
+      results.push({ player: outfield.length ? weightedScorerPick(outfield) : pick(squad), method: "openplay" });
     }
   }
   return results;
@@ -9385,8 +9390,8 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
     const attackers = xi.filter(p => p.pos !== "MV");
     const oppAttackers = (oppClub.squad || []).filter(p => p.pos !== "MV");
     const scorerIds = [];
-    for (let i = 0; i < segUser; i++) { const scorer = pick(attackers) || xi[0]; if (scorer) scorerIds.push(scorer.id); entries.push({ minute: rndInt(start + 1, end), text: `⚽ MÅL! ${scorer?.name || userClub.name} sätter dit den för ${userClub.name}!`, goal: true, isUser: true }); }
-    for (let i = 0; i < segOpp; i++) { const oppScorer = pick(oppAttackers); entries.push({ minute: rndInt(start + 1, end), text: oppScorer ? `⚽ Mål för ${oppClub.name} — ${oppScorer.name} gör mål.` : `⚽ Mål för ${oppClub.name}.`, goal: true, isUser: false }); }
+    for (let i = 0; i < segUser; i++) { const scorer = weightedScorerPick(attackers) || xi[0]; if (scorer) scorerIds.push(scorer.id); entries.push({ minute: rndInt(start + 1, end), text: `⚽ MÅL! ${scorer?.name || userClub.name} sätter dit den för ${userClub.name}!`, goal: true, isUser: true }); }
+    for (let i = 0; i < segOpp; i++) { const oppScorer = weightedScorerPick(oppAttackers); entries.push({ minute: rndInt(start + 1, end), text: oppScorer ? `⚽ Mål för ${oppClub.name} — ${oppScorer.name} gör mål.` : `⚽ Mål för ${oppClub.name}.`, goal: true, isUser: false }); }
     if (!entries.length) {
       const flavor = pick(["Jämnt spel i mittfältet.", "Inget att notera just nu — bollen cirkulerar.", `${Math.random() < 0.5 ? userClub.name : oppClub.name} testar från distans, utan framgång.`, "Ett par avbrutna anfall, men ingenting farligt."]);
       entries.push({ minute: rndInt(start + 1, end), text: flavor, goal: false });
@@ -10622,6 +10627,8 @@ function GlobalTransfersView({ transferHistory, userClubId, onBack }) {
   );
 }
 function StatsLeagueView({ clubs, leagueId, division, userClubId, onBack }) {
+  const [viewingPlayer, setViewingPlayer] = useState(null);
+  const [viewingClub, setViewingClub] = useState(null);
   const [selectedLeagueId, setSelectedLeagueId] = useState(leagueId);
   const [selectedDivision, setSelectedDivision] = useState(division);
   const [statType, setStatType] = useState("goals");
@@ -10646,6 +10653,9 @@ function StatsLeagueView({ clubs, leagueId, division, userClubId, onBack }) {
   });
   const sortKey = statType === "goals" ? "displayGoals" : statType === "assists" ? "displayAssists" : "cards";
   const sorted = [...players].sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0)).slice(0, 25);
+
+  if (viewingPlayer) return <ScoutedPlayerProfile player={viewingPlayer.player} club={viewingPlayer.club} onBack={() => setViewingPlayer(null)} />;
+  if (viewingClub) return <OpponentScoutView club={viewingClub} onBack={() => setViewingClub(null)} />;
 
   return (
     <div className="rise-in space-y-2.5">
@@ -10679,17 +10689,17 @@ function StatsLeagueView({ clubs, leagueId, division, userClubId, onBack }) {
         {sorted.length === 0 ? (
           <div className="text-sm text-center py-6" style={{ color: C.inkSoft }}>Ingen statistik registrerad ännu den här säsongen.</div>
         ) : sorted.map((p, i) => (
-          <div key={p.id} className="flex items-center gap-2.5 px-3 py-2" style={{ borderTop: i === 0 ? "none" : `1px solid ${C.paperDim}`, background: p.clubId === userClubId ? "rgba(201,154,62,0.12)" : "transparent" }}>
+          <button key={p.id} onClick={() => setViewingPlayer({ player: p, club: p.club })} className="w-full flex items-center gap-2.5 px-3 py-2 text-left" style={{ borderTop: i === 0 ? "none" : `1px solid ${C.paperDim}`, background: p.clubId === userClubId ? "rgba(201,154,62,0.12)" : "transparent" }}>
             <span className="font-mono text-11 shrink-0" style={{ color: C.inkSoft, width: 18 }}>{i + 1}</span>
             <PlayerAvatar player={p} size={26} />
             <div className="flex-1 min-w-0">
               <div className="text-sm font-semibold truncate">{p.name}</div>
-              <div className="text-9 flex items-center gap-1" style={{ color: C.inkSoft }}><ClubJersey club={p.club} size={12} />{p.clubName}</div>
+              <span onClick={e => { e.stopPropagation(); setViewingClub(p.club); }} className="text-9 flex items-center gap-1 w-fit" style={{ color: C.inkSoft }}><ClubJersey club={p.club} size={12} />{p.clubName}</span>
             </div>
             <div className="font-mono text-base font-bold shrink-0" style={{ color: statType === "cards" ? (p.displayRed > 0 ? C.loss : C.gold) : C.win }}>
               {statType === "goals" ? p.displayGoals || 0 : statType === "assists" ? p.displayAssists || 0 : `${p.displayYellow || 0}🟨${p.displayRed ? ` ${p.displayRed}🟥` : ""}`}
             </div>
-          </div>
+          </button>
         ))}
       </PaperCard>
     </div>
@@ -11623,11 +11633,22 @@ function LineupTableView({ squad, startingXI, formationCode, lineupCells, onSave
     if (!sourceId || !targetCellKey) return;
     setLineup(prev => {
       const sourceKey = Object.entries(prev).find(([, pid]) => pid === sourceId)?.[0];
-      const targetPlayerId = prev[targetCellKey] || null;
       if (sourceKey === targetCellKey) return prev;
       const next = { ...prev };
-      if (sourceKey) next[sourceKey] = targetPlayerId;
-      next[targetCellKey] = sourceId;
+      if (targetCellKey in next) {
+        // Dropping onto an existing slot (filled or empty) — plain swap, slot count never changes.
+        const targetPlayerId = next[targetCellKey];
+        next[targetCellKey] = sourceId;
+        if (sourceKey) next[sourceKey] = targetPlayerId;
+      } else if (sourceKey) {
+        // Dragged to a spot that isn't one of the pitch's existing slots — relocate the player's own
+        // slot there instead of adding an extra one, so the pitch always keeps exactly as many slots
+        // as it started with rather than accumulating a new one on every off-grid drop.
+        delete next[sourceKey];
+        next[targetCellKey] = sourceId;
+      } else {
+        next[targetCellKey] = sourceId;
+      }
       return next;
     });
   }
