@@ -4007,6 +4007,14 @@ function eliminationText(cup) {
   if (cup.roundName === "Gruppspelet") return "Utslagna i gruppspelet";
   return `Utslagna ${roundNameWithArticle(cup.roundName)}`;
 }
+// A cup's own live state (won/eliminated) is the source of truth for its result text — used both when
+// finishCup() closes it out and when the league season ends, so a cup decided mid-season (e.g. the
+// domestic cup finishing around round 30 of a 38-round league) isn't lost when isSeasonEnd rebuilds
+// lastSeasonSummary from scratch at the final league round.
+function cupResultText(cup) {
+  if (!cup || (!cup.champion && !cup.eliminated)) return null;
+  return cup.champion ? `Mästare i ${cup.label}!` : eliminationText(cup);
+}
 const CUP1_PRIZES = { participation: 300, quarterfinal: 550, semifinal: 1000, runnerup: 1800, winner: 3500 };
 // League "merit money" for final table position — paid every season regardless of cup results, so
 // genuine improvement (climbing the table) has a reliable, predictable payoff, not just occasional
@@ -5096,7 +5104,11 @@ function setupCup(type, base) {
 
       const leaguePrize = leaguePositionPrize(finalPos, userClub.division, worldStandings[g.leagueId][userClub.division].length);
       leaguePrizeThisRound = leaguePrize;
-      lastSeasonSummary = { season: g.season, pos: finalPos, division: userClub.division, leagueName: countryName, domesticCupResult: null, domesticCupWon: false, domesticCupWinnerId: null, cup1Result: null, cup2Result: null, prizeTotal: leaguePrize, leaguePositionPrize: leaguePrize, boardTargetLabel: target.label, boardTargetMet: target.check(finalPos), seasonAwards, awardManagerRepBonus };
+      // Any of this season's cups may already have been won/exited well before the league's last round
+      // (e.g. the domestic cup final around round 30 of 38) — read their outcome straight from the live
+      // cup objects rather than defaulting to null, so a mid-season trophy isn't lost from the recap.
+      const domesticCupText = cupResultText(cups.domestic), cup1Text = cupResultText(cups.cup1), cup2Text = cupResultText(cups.cup2);
+      lastSeasonSummary = { season: g.season, pos: finalPos, division: userClub.division, leagueName: countryName, domesticCupResult: domesticCupText, domesticCupWon: !!cups.domestic?.champion, domesticCupWinnerId: cups.domestic?.champion ? g.userClubId : null, cup1Result: cup1Text, cup2Result: cup2Text, prizeTotal: leaguePrize, leaguePositionPrize: leaguePrize, boardTargetLabel: target.label, boardTargetMet: target.check(finalPos), seasonAwards, awardManagerRepBonus };
       seasonEndSnapshot = { worldStandings, otherCupWinners };
     } else {
       // Every qualified cup competition activates independently once its own launch round arrives —
@@ -5560,12 +5572,13 @@ function setupCup(type, base) {
       else { summary.cup2Result = text; if (cup.champion) lastCup2ChampionId = prev.userClubId; }
       summary.prizeTotal = (summary.prizeTotal || 0) + prize;
 
-      let newQualified = prev.qualifiedCupTypes || [];
-      if (cup.type === "domestic" && summary.domesticCupWon && summary.cup2Result == null && !newQualified.includes("cup2")) {
-        newQualified = [...newQualified, "cup2"];
-      }
+      // Winning the domestic cup earns a Kimby Cupen (cup2) spot, but — like league-position
+      // qualification — that spot is for NEXT season, not the one still in progress. Adding "cup2" to
+      // qualifiedCupTypes here used to launch it immediately mid-season the moment the current round
+      // passed CUP_LAUNCH_ROUND.cup2, which crashed since cup2's field is built from last season's
+      // final standings. newSeason() below already grants the spot correctly via summary.domesticCupWon.
 
-      return { ...prev, budget: prev.budget + prize, view: "home", activeTab: "home", pendingAfterResult: "home", lastSeasonSummary: summary, activeCupType: null, qualifiedCupTypes: newQualified, lastCup2ChampionId };
+      return { ...prev, budget: prev.budget + prize, view: "home", activeTab: "home", pendingAfterResult: "home", lastSeasonSummary: summary, activeCupType: null, lastCup2ChampionId };
     });
   }
 
@@ -6656,7 +6669,9 @@ function setupCup(type, base) {
       let newCup2ChampionId = prev.lastCup2ChampionId;
       const cupQueue = ["domestic"];
       if (s.division === 1 && s.pos <= 3) cupQueue.push("cup1");
-      if (s.division === 1 && s.pos >= 5 && s.pos <= 6) cupQueue.push("cup2");
+      // Cup2 (Kimby Cupen) qualification: either a top-half-but-not-top-3 league finish, or winning
+      // the domestic cup outright (matches buildContinentalQualifiers' own automatic-entry rule below).
+      if ((s.division === 1 && s.pos >= 5 && s.pos <= 6) || s.domesticCupWon) cupQueue.push("cup2");
       if (!cupQueue.includes("cup2") && s.cup2Result == null && prev.seasonEndSnapshot) {
         // User's club won't play cup2 this cycle — resolve it instantly among the world's other clubs
         // so future qualifier seeding (who was cup2 champion last time) stays consistent.
