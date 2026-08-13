@@ -15209,11 +15209,13 @@ function PersonalTab({ budget, staff, reputation, homeCountry, staffCandidates, 
         <div className="font-display text-xl">Personal</div>
         <div className="text-11 mt-0.5" style={{ color: C.inkSoft }}>Er backroom-personal och vad de faktiskt bidrar med.</div>
       </PaperCard>
-      <button onClick={() => setShowScouting(true)} className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-between px-4" style={{ background: C.gold, color: C.turfDeep, boxShadow: "0 2px 10px rgba(201,154,62,0.35)" }}>
-        <span>Scoutnätverk — nivå {dev.scouting}/5</span>
-        <ChevronRight size={18} />
-      </button>
-      <button onClick={() => setShowDetail(true)} className="w-full py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Rekrytera / förhandla personal</button>
+      <div className="grid grid-cols-2 gap-2">
+        <button onClick={() => setShowScouting(true)} className="py-3 rounded-xl text-sm font-bold flex items-center justify-between px-3" style={{ background: C.gold, color: C.turfDeep, boxShadow: "0 2px 10px rgba(201,154,62,0.35)" }}>
+          <span className="truncate">Scoutnätverk — nivå {dev.scouting}/5</span>
+          <ChevronRight size={18} className="shrink-0" />
+        </button>
+        <button onClick={() => setShowDetail(true)} className="py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.gold, color: C.turfDeep }}>Rekrytera / förhandla personal</button>
+      </div>
       {roles.map(r => {
         const member = staff[r.key];
         return (
