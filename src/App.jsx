@@ -4036,9 +4036,9 @@ function simulateUserDecisiveLeg(oppStrength, squad, tactic, spelide, userIsHome
 function topTwoByStrengthNoise(teamIds, clubs) {
   return [...teamIds].map(id => ({ id, score: clubs[id].strength + rnd(-10, 10) })).sort((a, b) => b.score - a.score).slice(0, 2).map(x => x.id);
 }
-function drawCup1Groups(qualifiers, clubs) {
+function drawCup1Groups(qualifiers, clubs, groupCount = 4) {
   const shuffled = shuffle(qualifiers);
-  const groups = [[], [], [], []];
+  const groups = Array.from({ length: groupCount }, () => []);
   shuffled.forEach(id => {
     const country = clubs[id].league;
     let target = groups.findIndex(g2 => g2.length < 4 && !g2.some(x => clubs[x].league === country));
@@ -4666,7 +4666,10 @@ function setupCup(type, base) {
     }
     const { pendingOtherWinners, tie } = setupKnockoutRound(cup2, base.clubs, base.userClubId);
     const dueRounds = cupDueSchedule("cup2", cup2.length);
-    return { type: "cup2", label: "Kimby Cupen", finalArena: pick(CUP2_ARENAS), phase: "knockout", teams: cup2, roundName: bracketName(16), pendingOtherWinners, tie, pendingReport: null, eliminated: false, champion: null, dueRounds, dueIndex: 0, resultLog: [] };
+    // initialTeams is a permanent snapshot of the full starting field — unlike `teams`, which gets
+    // replaced with whoever's left after each round, this stays put so the Tabell/Matcher cup-browser
+    // preview can always rebuild the real bracket instead of guessing at a different field.
+    return { type: "cup2", label: "Kimby Cupen", finalArena: pick(CUP2_ARENAS), phase: "knockout", teams: cup2, initialTeams: cup2, roundName: bracketName(16), pendingOtherWinners, tie, pendingReport: null, eliminated: false, champion: null, dueRounds, dueIndex: 0, resultLog: [] };
 }
 
   function beginRound() {
@@ -10059,28 +10062,40 @@ function CupBrowserView({ clubs, homeLeagueId, season, currentRound, userClubId,
   const domesticRevealed = domesticDue.filter(r => currentRound >= r).length;
   const domesticRounds = seededResolveBracket(domesticField, clubs, `${homeLeagueId}_domestic_${season}_bracket`, userClubId, domesticLive?.resultLog);
 
-  // Use the real qualifier assignment (season 1) so this preview always matches what's actually
-  // happening — previously this recomputed its own independent "top 16 by raw strength" split that
-  // ignored per-country quotas entirely, so it could show your own club in the wrong cup's bracket.
+  // Use the real qualifier assignment whenever it's known — either the season-1 snapshot, or (once the
+  // competition has actually launched) the live cup's own field — so this preview always matches what's
+  // actually happening. Previously, from season 2 onward this recomputed its own independent "top N by
+  // raw strength" split every time, completely disconnected from the real draw the live cup used — which
+  // could not just get third-party clubs wrong, but genuinely omit the user's own club from the preview,
+  // or place it in a different simulated group than the real one it was actually drawn into.
   let cup1Field, cup2Field;
-  if (season === 1 && season1Qualifiers) {
-    cup1Field = season1Qualifiers.cup1;
-    cup2Field = season1Qualifiers.cup2;
-  } else {
+  if (cup1Live?.groups) cup1Field = cup1Live.groups.flat();
+  else if (season === 1 && season1Qualifiers) cup1Field = season1Qualifiers.cup1;
+  if (cup2Live?.initialTeams) cup2Field = cup2Live.initialTeams;
+  else if (season === 1 && season1Qualifiers) cup2Field = season1Qualifiers.cup2;
+  if (!cup1Field || !cup2Field) {
     const LEAGUE_CUP_COUNTS = { england: { cup1: 4, cup2: 3 }, spain: { cup1: 3, cup2: 4 }, italy: { cup1: 3, cup2: 3 }, germany: { cup1: 3, cup2: 3 }, france: { cup1: 3, cup2: 3 } };
-    cup1Field = []; cup2Field = [];
+    const fallbackCup1 = [], fallbackCup2 = [];
     LEAGUES.forEach(l => {
       const counts = LEAGUE_CUP_COUNTS[l.id] || { cup1: 3, cup2: 3 };
       const sorted = clubsInPool(l.id, 1, clubs).slice().sort((a, b) => b.strength - a.strength);
-      cup1Field.push(...sorted.slice(0, counts.cup1).map(c => c.id));
-      cup2Field.push(...sorted.slice(counts.cup1, counts.cup1 + counts.cup2).map(c => c.id));
+      fallbackCup1.push(...sorted.slice(0, counts.cup1).map(c => c.id));
+      fallbackCup2.push(...sorted.slice(counts.cup1, counts.cup1 + counts.cup2).map(c => c.id));
     });
+    if (!cup1Field) cup1Field = fallbackCup1;
+    if (!cup2Field) cup2Field = fallbackCup2;
   }
-  const cup1Groups = withSeededRandom(`cup1_${season}`, () => drawCup1Groups(cup1Field, clubs));
+  // The user's own group is already shown separately, with real results, in the gold-bordered panel
+  // above — so it's excluded from the field simulated here for "other groups", instead of being
+  // independently re-drawn into a different, contradictory simulated group of its own.
+  const cup1RealGroup = cup1Live?.groups ? cup1Live.groups[cup1Live.userGroupIndex] : null;
+  const cup1SimField = cup1RealGroup ? cup1Field.filter(id => !cup1RealGroup.includes(id)) : cup1Field;
+  const cup1Groups = withSeededRandom(`cup1_${season}`, () => drawCup1Groups(cup1SimField, clubs, cup1RealGroup ? 3 : 4));
   const cup1GroupDue = spreadRounds(3, 24, 6);
   const cup1GroupRevealed = cup1GroupDue.filter(r => currentRound >= r).length;
   const cup1GroupResults = cup1Groups.map((g2, gi) => seededResolveGroup(g2, clubs, `cup1_${season}_group${gi}`, cup1GroupRevealed));
-  const cup1Qualifiers = cup1GroupResults.flatMap(r => r.standings.slice(0, 2).map(row => row.id));
+  const cup1RealQualifiers = cup1RealGroup ? computeStandings(cup1Live.groupSchedule, cup1RealGroup).slice(0, 2).map(row => row.id) : [];
+  const cup1Qualifiers = [...cup1RealQualifiers, ...cup1GroupResults.flatMap(r => r.standings.slice(0, 2).map(row => row.id))];
   const cup1QualifiersShuffled = withSeededRandom(`cup1_${season}_ko`, () => shuffle(cup1Qualifiers));
   const cup1KnockoutRounds = seededResolveBracket(cup1QualifiersShuffled, clubs, `cup1_${season}_ko_bracket`, userClubId, cup1Live?.resultLog);
   const cup1KoDue = cupDueSchedule("cup1knockout", 8);
