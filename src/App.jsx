@@ -3213,12 +3213,52 @@ function seededResolveBracket(teamIds, clubs, seed, userClubId, resultLog) {
   return withSeededRandom(seed, () => {
     const rounds = [];
     let current = [...teamIds];
+    // Every club the user is recorded (via resultLog) to have actually faced, in any round, has to
+    // survive its own simulated ties in every EARLIER round to even be available to meet the user later —
+    // otherwise the simulation could "eliminate" that club against someone else while resultLog insists
+    // it met the user two rounds afterward, making an already-out team resurface out of nowhere.
+    const protectedIds = new Set((resultLog || []).map(r => r.oppId));
+    const protectedDueRound = new Map((resultLog || []).map(r => [r.oppId, r.round]));
     // Once the user's club has been forced out of "current" (either eliminated for real, or the field
     // is past the point resultLog covers), the rest of the bracket goes back to pure strength-based
     // simulation — there's no more real data to reconcile against.
     while (current.length > 1) {
       const roundSizeBefore = current.length;
       const logEntry = userClubId && resultLog ? resultLog.find(r => r.round === roundSizeBefore) : null;
+      // Reconcile the real opponent into the bracket's own pairing structure before resolving the round:
+      // swap it into the slot next to the user (displacing whoever the simulation had paired the user
+      // with into the real opponent's old slot) so every club still appears exactly once this round,
+      // instead of the real opponent getting duplicated into two fixtures at once.
+      if (logEntry) {
+        const uIdx = current.indexOf(userClubId);
+        const oIdx = current.indexOf(logEntry.oppId);
+        if (uIdx !== -1 && oIdx !== -1 && oIdx !== uIdx) {
+          const uPairIdx = uIdx % 2 === 0 ? uIdx + 1 : uIdx - 1;
+          if (uPairIdx !== oIdx) {
+            const tmp = current[uPairIdx];
+            current[uPairIdx] = current[oIdx];
+            current[oIdx] = tmp;
+          }
+        }
+      }
+      // Two clubs the user is separately destined to face in different (later) rounds can't be allowed
+      // to eliminate each other here — whichever one lost would still get force-displayed as the user's
+      // real opponent when its own due round arrives, resurrecting an "already eliminated" club. Swap
+      // one of them into any other pairing this round that isn't already protected, so both stay alive.
+      for (let i = 0; i < current.length; i += 2) {
+        const a = current[i], b = current[i + 1];
+        if (b == null || a === userClubId || b === userClubId) continue;
+        if (!protectedIds.has(a) || !protectedIds.has(b)) continue;
+        for (let j = 0; j < current.length; j += 2) {
+          if (j === i) continue;
+          const c = current[j], d = current[j + 1];
+          if (d == null || c === userClubId || d === userClubId) continue;
+          if (protectedIds.has(c) || protectedIds.has(d)) continue;
+          current[i + 1] = d;
+          current[j + 1] = b;
+          break;
+        }
+      }
       const roundMatches = [];
       const next = [];
       for (let i = 0; i < current.length; i += 2) {
@@ -3226,8 +3266,8 @@ function seededResolveBracket(teamIds, clubs, seed, userClubId, resultLog) {
         if (!b) { next.push(a); roundMatches.push({ home: a, away: null, winner: a }); continue; }
         const involvesUser = logEntry && (a === userClubId || b === userClubId);
         if (involvesUser) {
-          // Trust the real result over the random roll — and if the simulated opponent doesn't match
-          // who the user actually faced, swap in the real opponent so the bracket stays honest about it.
+          // Trust the real result over the random roll — and always show the real opponent from
+          // resultLog itself (not whichever club the pairing swap above could or couldn't reach).
           const realOppId = logEntry.oppId;
           const userIsA = a === userClubId;
           const homeId = userIsA ? userClubId : realOppId;
@@ -3239,8 +3279,19 @@ function seededResolveBracket(teamIds, clubs, seed, userClubId, resultLog) {
         }
         const ca = clubs[a], cb = clubs[b];
         if (!ca || !cb) { next.push(a); roundMatches.push({ home: a, away: b, winner: a }); continue; }
-        const scoreA = ca.strength + rnd(-13, 13), scoreB = cb.strength + rnd(-13, 13);
-        const winner = scoreA >= scoreB ? a : b;
+        const aProtected = protectedIds.has(a), bProtected = protectedIds.has(b);
+        let winner;
+        if (aProtected && !bProtected) winner = a;
+        else if (bProtected && !aProtected) winner = b;
+        else if (aProtected && bProtected) {
+          // Two clubs the user is destined to face in different later rounds have been drawn against
+          // each other early — both can't survive, so favor whichever meets the user sooner (needs to
+          // survive fewer more rounds) rather than leaving the pick to chance.
+          winner = protectedDueRound.get(a) >= protectedDueRound.get(b) ? a : b;
+        } else {
+          const scoreA = ca.strength + rnd(-13, 13), scoreB = cb.strength + rnd(-13, 13);
+          winner = scoreA >= scoreB ? a : b;
+        }
         next.push(winner);
         roundMatches.push({ home: a, away: b, winner });
       }
