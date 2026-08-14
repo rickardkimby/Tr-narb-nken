@@ -3273,27 +3273,40 @@ function seededResolveBracket(teamIds, clubs, seed, userClubId, resultLog) {
           const homeId = userIsA ? userClubId : realOppId;
           const awayId = userIsA ? realOppId : userClubId;
           const winner = logEntry.won ? userClubId : realOppId;
+          // Older saves recorded ties before scores were tracked in resultLog — homeGoals/awayGoals
+          // just stay null in that case, and the bracket view falls back to showing "vs" with no score.
+          const hasRealScore = logEntry.userGoals != null && logEntry.oppGoals != null;
+          const homeGoals = hasRealScore ? (userIsA ? logEntry.userGoals : logEntry.oppGoals) : null;
+          const awayGoals = hasRealScore ? (userIsA ? logEntry.oppGoals : logEntry.userGoals) : null;
           next.push(winner);
-          roundMatches.push({ home: homeId, away: awayId, winner });
+          roundMatches.push({ home: homeId, away: awayId, winner, homeGoals, awayGoals, penalties: logEntry.penalties || null });
           continue;
         }
         const ca = clubs[a], cb = clubs[b];
         if (!ca || !cb) { next.push(a); roundMatches.push({ home: a, away: b, winner: a }); continue; }
         const aProtected = protectedIds.has(a), bProtected = protectedIds.has(b);
-        let winner;
-        if (aProtected && !bProtected) winner = a;
-        else if (bProtected && !aProtected) winner = b;
+        let forcedWinner = null;
+        if (aProtected && !bProtected) forcedWinner = a;
+        else if (bProtected && !aProtected) forcedWinner = b;
         else if (aProtected && bProtected) {
           // Two clubs the user is destined to face in different later rounds have been drawn against
           // each other early — both can't survive, so favor whichever meets the user sooner (needs to
           // survive fewer more rounds) rather than leaving the pick to chance.
-          winner = protectedDueRound.get(a) >= protectedDueRound.get(b) ? a : b;
-        } else {
-          const scoreA = ca.strength + rnd(-13, 13), scoreB = cb.strength + rnd(-13, 13);
-          winner = scoreA >= scoreB ? a : b;
+          forcedWinner = protectedDueRound.get(a) >= protectedDueRound.get(b) ? a : b;
         }
+        // Simulate an actual scoreline (same engine used for AI-vs-AI matches elsewhere) instead of a
+        // bare strength comparison, so the bracket can show a real-looking result, not just who advanced.
+        const lineupA = selectAiLineup(ca), lineupB = selectAiLineup(cb);
+        let [homeGoals, awayGoals] = poissonScorePair(expectedGoals(lineupA.attack, lineupB.defense, true), expectedGoals(lineupB.attack, lineupA.defense, false));
+        if (forcedWinner) {
+          if (forcedWinner === a && homeGoals <= awayGoals) homeGoals = awayGoals + 1;
+          else if (forcedWinner === b && awayGoals <= homeGoals) awayGoals = homeGoals + 1;
+        } else if (homeGoals === awayGoals) {
+          if (Math.random() < 0.5) homeGoals += 1; else awayGoals += 1;
+        }
+        const winner = homeGoals > awayGoals ? a : b;
         next.push(winner);
-        roundMatches.push({ home: a, away: b, winner });
+        roundMatches.push({ home: a, away: b, winner, homeGoals, awayGoals });
       }
       rounds.push(roundMatches);
       current = next;
@@ -5361,7 +5374,7 @@ function setupCup(type, base) {
     const finances = simulateCupMatchFinances(g, p.userIsHome, p.oppStrength, false);
     const cupFinanceRecord = { round: g.round, oppName: p.oppName, userIsHome: p.userIsHome, ticketPrice: g.ticketPrice, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity, income: finances.income, competition: COMPETITION_LABEL_SHORT.domestic };
     const userReport = { oppName: p.oppName, oppColor: g.clubs[p.oppId]?.color, userColor: g.clubs[g.userClubId]?.color, userIsHome: p.userIsHome, userGoals, oppGoals, penalties, result: userWon ? "win" : "loss", ratings, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity };
-    setG(prev => ({ ...prev, budget: prev.budget + finances.income, view: shootout ? "penaltyshootout" : "cup", activeCupType: "domestic", squad: newSquad, clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], squad: newSquad } }, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, domestic: { ...prev.cups.domestic, pendingWinners: winners, userReport, resultLog: [...(prev.cups.domestic.resultLog || []), { round: prev.cups.domestic.teams.length, oppId: p.oppId, oppName: p.oppName, won: userWon }] } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) }));
+    setG(prev => ({ ...prev, budget: prev.budget + finances.income, view: shootout ? "penaltyshootout" : "cup", activeCupType: "domestic", squad: newSquad, clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], squad: newSquad } }, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, domestic: { ...prev.cups.domestic, pendingWinners: winners, userReport, resultLog: [...(prev.cups.domestic.resultLog || []), { round: prev.cups.domestic.teams.length, oppId: p.oppId, oppName: p.oppName, won: userWon, userGoals, oppGoals, penalties }] } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) }));
   }
   function continueDomesticCupRound() {
     const cup = g.cups.domestic;
@@ -5492,6 +5505,7 @@ function setupCup(type, base) {
     const userGoalsAgg = leg1.userGoals + leg2.userGoals, oppGoalsAgg = leg1.oppGoals + leg2.oppGoals;
     const userLegWins = (leg1.userWon ? 1 : 0) + (leg2.userWon ? 1 : 0);
     let advanced, shootoutNote = null;
+    let finalUserAgg = userGoalsAgg, finalOppAgg = oppGoalsAgg, penaltiesNote = null;
     if (userLegWins === 2) advanced = true;
     else if (userLegWins === 0) advanced = false;
     else if (userGoalsAgg > oppGoalsAgg) advanced = true;
@@ -5512,10 +5526,12 @@ function setupCup(type, base) {
         setG(prev => ({ ...prev, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], tie: { ...prev.cups[cupType].tie, extraTime: et } } } }));
       }
       const etUserAgg = userGoalsAgg + et.userGoals, etOppAgg = oppGoalsAgg + et.oppGoals;
+      finalUserAgg = etUserAgg; finalOppAgg = etOppAgg;
       if (etUserAgg > etOppAgg) { advanced = true; showToast(`Efter förlängning (${et.userGoals}-${et.oppGoals}): ${etUserAgg}-${etOppAgg} sammanlagt — ni går vidare!`); }
       else if (etOppAgg > etUserAgg) { advanced = false; showToast(`Efter förlängning (${et.userGoals}-${et.oppGoals}): ${etUserAgg}-${etOppAgg} sammanlagt — ni är utslagna.`); }
       else if (precomputedShootout) {
         advanced = precomputedShootout.userWon;
+        penaltiesNote = precomputedShootout.label;
         shootoutNote = `Lika även efter förlängning (${etUserAgg}-${etOppAgg} sammanlagt) — straffar avgjorde: ${precomputedShootout.label}.`;
       } else {
         const xi = getXI(g.squad, g.startingXI);
@@ -5544,7 +5560,7 @@ function setupCup(type, base) {
         });
       }
     }
-    const tieLogEntry = { round: cup.teams.length, oppId: cup.tie.oppId, oppName: g.clubs[cup.tie.oppId]?.name, won: advanced };
+    const tieLogEntry = { round: cup.teams.length, oppId: cup.tie.oppId, oppName: g.clubs[cup.tie.oppId]?.name, won: advanced, userGoals: finalUserAgg, oppGoals: finalOppAgg, penalties: penaltiesNote, leg1: { userGoals: leg1.userGoals, oppGoals: leg1.oppGoals }, leg2: { userGoals: leg2.userGoals, oppGoals: leg2.oppGoals } };
     if (!advanced) { setG(prev => ({ ...prev, view: "cup", pendingShootout: null, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], eliminated: true, pendingReport: null, resultLog: [...(prev.cups[cupType].resultLog || []), tieLogEntry] } } })); return; }
     const nextTeams = [...cup.pendingOtherWinners, g.userClubId];
     if (nextTeams.length === 2) {
@@ -5602,7 +5618,7 @@ function setupCup(type, base) {
     const finances = simulateCupMatchFinances(g, p.userIsHome, p.oppStrength, false);
     const cupFinanceRecord = { round: g.round, oppName: p.oppName, userIsHome: p.userIsHome, ticketPrice: g.ticketPrice, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity, income: finances.income, competition: `${COMPETITION_LABEL_SHORT[ctx.cupType] || "Cupen"} (final)` };
     const report = { oppName: p.oppName, oppColor: g.clubs[p.oppId]?.color, userColor: g.clubs[g.userClubId]?.color, userIsHome: p.userIsHome, userGoals, oppGoals, penalties, result, ratings, attendance: finances.attendance, arenaCapacity: finances.arenaCapacity };
-    setG(prev => ({ ...prev, budget: prev.budget + finances.income, view: shootout ? "penaltyshootout" : "cup", activeCupType: ctx.cupType, squad: newSquad, clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], squad: newSquad } }, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, [ctx.cupType]: { ...prev.cups[ctx.cupType], pendingReport: report, finalWon: userWon, resultLog: [...(prev.cups[ctx.cupType].resultLog || []), { round: 2, oppId: p.oppId, oppName: p.oppName, won: userWon }] } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) }));
+    setG(prev => ({ ...prev, budget: prev.budget + finances.income, view: shootout ? "penaltyshootout" : "cup", activeCupType: ctx.cupType, squad: newSquad, clubs: { ...prev.clubs, [prev.userClubId]: { ...prev.clubs[prev.userClubId], squad: newSquad } }, pendingRound: null, pendingCupContext: null, pendingShootout: shootout ? { ...shootout, oppId: p.oppId, targetView: "cup" } : null, cups: { ...prev.cups, [ctx.cupType]: { ...prev.cups[ctx.cupType], pendingReport: report, finalWon: userWon, resultLog: [...(prev.cups[ctx.cupType].resultLog || []), { round: 2, oppId: p.oppId, oppName: p.oppName, won: userWon, userGoals, oppGoals, penalties }] } }, recentMatchFinances: [cupFinanceRecord, ...(prev.recentMatchFinances || [])].slice(0, 10) }));
   }
   function continueCupFinal() {
     const cupType = g.activeCupType;
@@ -10009,6 +10025,7 @@ function CupBracketList({ rounds, clubs, revealedRounds, userClubId, onSelectClu
             {round.map((m, mi) => {
               const home = clubs[m.home], away = m.away ? clubs[m.away] : null;
               if (!home) return null;
+              const hasScore = away && m.homeGoals != null && m.awayGoals != null;
               return (
                 <div key={mi} className="flex items-center justify-between px-3 py-2 text-11 gap-1.5">
                   {onSelectClub ? (
@@ -10016,7 +10033,14 @@ function CupBracketList({ rounds, clubs, revealedRounds, userClubId, onSelectClu
                   ) : (
                     <span className="flex items-center gap-1.5 flex-1 min-w-0"><ClubJersey club={home} size={16} /><span className="truncate" style={{ fontWeight: home.id === userClubId ? 800 : m.winner === m.home ? 700 : 400, color: home.id === userClubId ? C.gold : "inherit" }}>{home.name}</span></span>
                   )}
-                  <span className="text-9 px-1 shrink-0" style={{ color: C.inkSoft }}>vs</span>
+                  {hasScore ? (
+                    <span className="flex flex-col items-center shrink-0 px-1">
+                      <span className="font-mono font-bold text-11" style={{ color: C.ink }}>{m.homeGoals} – {m.awayGoals}</span>
+                      {m.penalties && <span className="text-9" style={{ color: C.inkSoft }}>str. {m.penalties}</span>}
+                    </span>
+                  ) : (
+                    <span className="text-9 px-1 shrink-0" style={{ color: C.inkSoft }}>vs</span>
+                  )}
                   {away && onSelectClub ? (
                     <button onClick={() => onSelectClub(away)} className="flex items-center gap-1.5 flex-1 min-w-0 justify-end text-left"><span className="truncate" style={{ fontWeight: away.id === userClubId ? 800 : m.winner === m.away ? 700 : 400, color: away.id === userClubId ? C.gold : "inherit" }}>{away.name}</span><ClubJersey club={away} size={16} /></button>
                   ) : (
