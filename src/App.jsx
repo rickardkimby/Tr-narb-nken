@@ -4758,6 +4758,9 @@ function setupCup(type, base) {
   }
 
   function finalizeMatch(p, secondHalfXiIds, subText, userGoals, oppGoals, lateGameNote, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
+    // Defensive: a double-tap on the live match's "SE MATCHRAPPORT" button (before it disabled itself)
+    // could fire this twice — the second call would arrive after pendingRound was already cleared.
+    if (!p) return;
     const newClubs = g.clubs;
     const staff = g.staff;
     const analystImpactDelta = p.analystImpactDelta || 0;
@@ -5350,6 +5353,8 @@ function setupCup(type, base) {
   }
   function finalizeDomesticCupRound(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
     const p = g.pendingRound, ctx = g.pendingCupContext;
+    // Defensive: see finalizeMatch — a double-tap could re-fire this after pendingRound already cleared.
+    if (!p || !ctx) return;
     const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
     let penalties = null, userWon, shootout = null;
     if (userGoals === oppGoals) {
@@ -5421,6 +5426,8 @@ function setupCup(type, base) {
   }
   function finalizeGroupMatch(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
     const p = g.pendingRound, ctx = g.pendingCupContext;
+    // Defensive: see finalizeMatch — a double-tap could re-fire this after pendingRound already cleared.
+    if (!p || !ctx) return;
     const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
     const result = userGoals > oppGoals ? "win" : userGoals < oppGoals ? "loss" : "draw";
     if (result === "win") {
@@ -5490,6 +5497,8 @@ function setupCup(type, base) {
   }
   function finalizeCupLeg(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
     const p = g.pendingRound, ctx = g.pendingCupContext;
+    // Defensive: see finalizeMatch — a double-tap could re-fire this after pendingRound already cleared.
+    if (!p || !ctx) return;
     const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
     const result = userGoals > oppGoals ? "win" : userGoals < oppGoals ? "loss" : "draw";
     const scorerObjects = (scoredByIds && scoredByIds.length === userGoals)
@@ -5599,6 +5608,8 @@ function setupCup(type, base) {
   }
   function finalizeCupFinal(secondHalfXiIds, subText, userGoals, oppGoals, scoredByIds, sentOffIds = [], refereeStrictness = rnd(0.75, 1.3)) {
     const p = g.pendingRound, ctx = g.pendingCupContext;
+    // Defensive: see finalizeMatch — a double-tap could re-fire this after pendingRound already cleared.
+    if (!p || !ctx) return;
     const xi = g.squad.filter(pl => secondHalfXiIds.includes(pl.id));
     let penalties = null, userWon, shootout = null;
     if (userGoals === oppGoals) {
@@ -9391,6 +9402,7 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
   const [dragBenchId, setDragBenchId] = useState(null);
   const [dragPos, setDragPos] = useState(null);
   const [dropTargetId, setDropTargetId] = useState(null);
+  const [finishing, setFinishing] = useState(false);
   function onBenchPointerDown(e, playerId) {
     e.preventDefault();
     setDragBenchId(playerId);
@@ -9535,6 +9547,11 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
   }
 
   function handleFinish() {
+    // A fast double-tap on "SE MATCHRAPPORT" could fire onFinalize twice before this view unmounts —
+    // the second call would then run against pendingRound/pendingCupContext that the first call already
+    // cleared, crashing on a null read. One tap is enough; ignore any further ones.
+    if (finishing) return;
+    setFinishing(true);
     onFinalize(currentXiIds, subLog.length ? subLog.join("; ") : null, userGoals, oppGoals, null, scoredByIds, sentOffIds, refereeStrictness);
   }
 
@@ -9654,7 +9671,7 @@ function LiveMatchView({ pending, userClub, oppClub, squad, tactic, spelide, tac
               </div>
             </>
           ) : (
-            <button onClick={handleFinish} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep }}>SE MATCHRAPPORT</button>
+            <button onClick={handleFinish} disabled={finishing} className="w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep, opacity: finishing ? 0.7 : 1 }}>SE MATCHRAPPORT</button>
           )}
         </div>
       )}
