@@ -5510,6 +5510,10 @@ function setupCup(type, base) {
   function continueCupLeg(precomputedShootout = null) {
     const cupType = g.activeCupType;
     const cup = g.cups[cupType];
+    // Defensive: a fast double-tap on the penalty shootout's completion button (or any other stray
+    // re-invocation) could call this again after the tie has already been resolved and cleared — bail
+    // out instead of crashing on a null tie.
+    if (!cup || !cup.tie) return;
     if (cup.tie.leg === 1) { setG(prev => ({ ...prev, cups: { ...prev.cups, [cupType]: { ...prev.cups[cupType], tie: { ...prev.cups[cupType].tie, leg: 2 }, pendingReport: null, dueIndex: (prev.cups[cupType].dueIndex ?? 0) + 1 } } })); return; }
     const { leg1, leg2 } = cup.tie;
     const userGoalsAgg = leg1.userGoals + leg2.userGoals, oppGoalsAgg = leg1.oppGoals + leg2.oppGoals;
@@ -9097,6 +9101,7 @@ function TrophyCabinetView({ history, club, season, clubRecords, onBack }) {
 
 function PenaltyShootoutView({ shootout, userClub, oppClub, onComplete }) {
   const [revealed, setRevealed] = useState(1);
+  const [completing, setCompleting] = useState(false);
   const total = shootout.kicks.length;
   const allRevealed = revealed >= total;
   const visibleKicks = shootout.kicks.slice(0, revealed);
@@ -9144,7 +9149,7 @@ function PenaltyShootoutView({ shootout, userClub, oppClub, onComplete }) {
             <div className="font-display text-lg" style={{ color: shootout.userWon ? C.win : C.loss }}>{shootout.userWon ? "NI VINNER STRAFFLÄGGNINGEN!" : "NI FÖRLORAR STRAFFLÄGGNINGEN"}</div>
             <div className="font-mono text-sm mt-1" style={{ color: C.inkSoft }}>Slutresultat: {shootout.label}</div>
           </PaperCard>
-          <button onClick={onComplete} className="pulse-cta w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep }}>FORTSÄTT</button>
+          <button onClick={() => { if (completing) return; setCompleting(true); onComplete(); }} disabled={completing} className="pulse-cta w-full py-2.5 rounded-xl font-display text-sm tracking-wide" style={{ background: C.gold, color: C.turfDeep, opacity: completing ? 0.7 : 1 }}>FORTSÄTT</button>
         </>
       )}
     </div>
