@@ -421,9 +421,9 @@ const CUP1_ARENAS = ["Stadion Aurora", "Parc du Millénium", "Nordkronan Arena",
 const CUP2_ARENAS = ["Arena Meridian", "Stade Solaire", "Silverfältet", "Westtor Arena", "Piazza Grande Arena", "Hamnarenan"];
 
 const DIFFICULTY_SETTINGS = {
-  latt: { label: "Lätt", desc: "Färre skador, lugnare transferfönster, mer tålmodig styrelse.", injuryMult: 0.6, rivalMult: 0.5, boardMult: 0.7 },
-  normal: { label: "Normal", desc: "Standardinställning — balanserad upplevelse.", injuryMult: 1, rivalMult: 1, boardMult: 1 },
-  svar: { label: "Svår", desc: "Fler skador, hårdare konkurrens om spelare, otåligare styrelse.", injuryMult: 1.6, rivalMult: 1.7, boardMult: 1.35 },
+  latt: { label: "Lätt", desc: "Färre skador, lugnare transferfönster, mer tålmodig styrelse, starkare ekonomi.", injuryMult: 0.6, rivalMult: 0.5, boardMult: 0.7, incomeMult: 1.15, inflationMult: 0.65 },
+  normal: { label: "Normal", desc: "Standardinställning — balanserad upplevelse.", injuryMult: 1, rivalMult: 1, boardMult: 1, incomeMult: 1, inflationMult: 1 },
+  svar: { label: "Svår", desc: "Fler skador, hårdare konkurrens om spelare, otåligare styrelse, kärvare ekonomi.", injuryMult: 1.6, rivalMult: 1.7, boardMult: 1.35, incomeMult: 0.85, inflationMult: 1.4 },
 };
 const ARCHETYPES = {
   storklubb: { tierMin: 76, tierMax: 90, incomeMult: 1.4, growth: 0.28, startBudget: 11000, startDev: { arena: 3, akademi: 2, scouting: 3, sponsring: 3 }, repAdj: 18, fanAdj: 16 },
@@ -1207,6 +1207,22 @@ function generateManager(clubCountry, division) {
 }
 function computeWage(value, attack, defense) {
   return Math.max(4, Math.round(value * 0.011 + ((attack + defense) / 2) * 0.15));
+}
+// Football's wage/transfer economy inflates faster than general prices — this compounds a per-season
+// rate (scaled by difficulty) so a squad that felt affordable in season 1 genuinely gets expensive to
+// maintain and to renew by mid-career, instead of the game's economy staying flat forever. Applied at
+// the points money actually changes hands (round wage bill, contract renewals) — see finalizeMatch and
+// contractDemand/wageDemand — rather than baked into every player object at generation time, so it
+// can't silently double-apply or drift out of sync.
+function marketInflationMultiplier(season, difficulty) {
+  const rate = 0.035 * (DIFFICULTY_SETTINGS[difficulty] || DIFFICULTY_SETTINGS.normal).inflationMult;
+  return Math.pow(1 + rate, Math.max(0, (season || 1) - 1));
+}
+// A stronger academy is a real, ongoing cost center (coaching staff, facilities, travel) — not just a
+// one-off upgrade fee. Curved so the top level costs disproportionately more than a modest one, matching
+// how elite academies (La Masia-tier setups) run at a genuinely different cost bracket than a level-1 setup.
+function academyRunningCost(akademiLevel) {
+  return Math.round(7 * Math.pow(Math.max(1, akademiLevel), 1.8));
 }
 // Transfer value prices roughly linearly across the normal quality range — this multiplier stays at 1x
 // all the way up to a genuinely elite peak, so ordinary squad economics are untouched. Past that point it
@@ -2427,12 +2443,12 @@ function selectAiLineup(club, matchContext) {
   return { formationCode: code, cellMap, xi, attack, defense, fitScore, tactic };
 }
 
-function contractDemand(player) {
+function contractDemand(player, inflationMult = 1) {
   const rng = seededRandom(String(player.id) + "contract" + player.contractYears);
   const avgRating = player.apps ? player.ratingSum / player.apps : 6.2;
   const formBonus = clamp((avgRating - 6) * 0.15, -0.15, 0.3);
   const years = player.age < 24 ? (rng() < 0.5 ? 3 : 4) : player.age < 30 ? (rng() < 0.5 ? 2 : 3) : (rng() < 0.5 ? 1 : 2);
-  const newValue = Math.round(player.value * (1.08 + formBonus + rng() * 0.1));
+  const newValue = Math.round(player.value * (1.08 + formBonus + rng() * 0.1) * inflationMult);
   return { years, newValue };
 }
 // A homegrown talent who's clearly outgrown the club that raised them — young, academy-produced, and
@@ -2759,7 +2775,7 @@ function wageBudgetCap(reputation, division, sponsringLevel) {
 }
 function totalWageBill(squad) { return squad.reduce((s, p) => s + effectiveWage(p), 0); }
 function effectiveWage(p) { return p.loanWeeksLeft ? Math.round((p.wage || 0) * (p.loanWageSharePct ?? 100) / 100) : (p.wage || 0); }
-function wageDemand(player, clubReputation = 50, clubBudget = null) {
+function wageDemand(player, clubReputation = 50, clubBudget = null, inflationMult = 1) {
   const rng = seededRandom(String(player.id) + "wage" + player.contractYears);
   const avgRating = player.apps ? player.ratingSum / player.apps : 6.2;
   // Performance: sustained good form pushes demands up, poor form pulls them down — the single biggest lever.
@@ -2776,10 +2792,12 @@ function wageDemand(player, clubReputation = 50, clubBudget = null) {
   // but this alone can't manufacture a demand out of nowhere; it's a moderate multiplier, not the main driver.
   const repFactor = clamp(0.82 + (clubReputation ?? 50) / 250, 0.82, 1.18);
   const budgetFactor = clubBudget != null ? clamp(0.9 + clubBudget / 60000, 0.85, 1.15) : 1;
-  const rawTarget = (overallish * 0.55 + youthPremium) * (1 + formBonus) * ageFactor * repFactor * budgetFactor + rng() * 6;
+  const rawTarget = (overallish * 0.55 + youthPremium) * (1 + formBonus) * ageFactor * repFactor * budgetFactor * inflationMult + rng() * 6;
   // Hard guardrail: without this, a single strong run of form or a lucky roll could double someone's wage
-  // demand overnight. Cap any single renegotiation to a season-reasonable band around the current wage.
-  const capped = clamp(rawTarget, player.wage * 0.75, player.wage * 1.4);
+  // demand overnight. Cap any single renegotiation to a season-reasonable band around the current wage —
+  // scaled by market inflation too, or a long-overdue renewal on an old contract would stay artificially
+  // capped near a wage the market moved past seasons ago.
+  const capped = clamp(rawTarget, player.wage * 0.75 * inflationMult, player.wage * 1.4 * inflationMult);
   return Math.round(Math.max(4, Math.max(player.wage, capped)));
 }
 function negotiateWage(offerWage, targetWage, reputation, sweetenerScore = 0, isDerby = false, negotiationSkill = 50) {
@@ -4876,6 +4894,12 @@ function setupCup(type, base) {
       matchReport.attendance = attendance;
       matchReport.arenaCapacity = arenaCapacityOf(g.dev, g.arenaStands);
     }
+    incomeSponsring = Math.round(incomeSponsring * difficultySettings.incomeMult);
+    incomeSponsorDeals = Math.round(incomeSponsorDeals * difficultySettings.incomeMult);
+    incomeTv = Math.round(incomeTv * difficultySettings.incomeMult);
+    incomeShop = Math.round(incomeShop * difficultySettings.incomeMult);
+    incomeTickets = Math.round(incomeTickets * difficultySettings.incomeMult);
+    incomeRestaurant = Math.round(incomeRestaurant * difficultySettings.incomeMult);
     let income = incomeSponsring + incomeSponsorDeals + incomeTv + incomeShop + incomeTickets + incomeRestaurant;
 
     const counts = {}; matchReport.scorers.forEach(n => { counts[n] = (counts[n] || 0) + 1; });
@@ -4952,11 +4976,13 @@ function setupCup(type, base) {
     });
 
     const staffWages = (staff.assistant?.wage || 0) + (staff.physio?.wage || 0) + (staff.scout?.wage || 0) + (g.manager?.wage || 0) + (g.assistantManager?.wage || 0);
-    const wageBill = totalWageBill(g.squad) + staffWages;
-    const delta = income - wageBill;
+    const inflationMult = marketInflationMultiplier(g.season, g.difficulty);
+    const academyCost = academyRunningCost(g.dev.akademi);
+    const wageBill = Math.round((totalWageBill(g.squad) + staffWages) * inflationMult);
+    const delta = income - wageBill - academyCost;
     matchReport.incomeBreakdown = {
       userIsHome: p.userIsHome, tickets: incomeTickets, restaurant: incomeRestaurant, shop: incomeShop,
-      sponsorsAndTv: incomeSponsring + incomeSponsorDeals + incomeTv, income, wageBill, total: delta,
+      sponsorsAndTv: incomeSponsring + incomeSponsorDeals + incomeTv, income, wageBill, academyCost, total: delta,
     };
     const matchFinanceRecord = {
       round: g.round, oppName: p.oppName, userIsHome: p.userIsHome, ticketPrice: g.ticketPrice,
@@ -5688,9 +5714,11 @@ function setupCup(type, base) {
     const financedAmount = Math.round((plan.financedAmount ?? 0) * scale);
     const signOnBonus = details.signOnBonus || 0;
     const houseCarCost = details.houseCar ? 350 : 0;
-    const totalCashNow = upfrontAmount + signOnBonus + houseCarCost;
+    const agentFee = Math.round(price * 0.03);
+    const totalCashNow = upfrontAmount + signOnBonus + houseCarCost + agentFee;
     if (g.budget < totalCashNow) { showToast("Inte tillräcklig budget för direktkostnaden."); return; }
     if (g.boardConfidence < 40 && totalCashNow > g.budget * 0.4) { showToast("Styrelsen blockerar värvningen — för dyr given det svaga förtroendet just nu."); return; }
+    const agentFeeNote = ` Agentarvode: ${formatMoney(agentFee)}.`;
     const fromClubNameEarly = player.clubId ? (g.clubs[player.clubId]?.name || "en annan klubb") : "fri agent";
     const installmentNoteEarly = financedAmount > 0 ? ` Resten (${formatMoney(financedAmount)}) delbetalas över ${plan.months} månader.` : "";
     const recalcPlan = financedAmount > 0 ? installmentPlan(financedAmount, plan.months) : null;
@@ -5714,7 +5742,7 @@ function setupCup(type, base) {
           transferHistory: [{ id: uid(), season: prev.season, round: prev.round, playerId: player.id, playerName: player.name, playerPos: player.specificPosition, fromClubId: player.clubId || null, fromClubName: fromClubNameEarly, fromColor: player.clubId ? prev.clubs[player.clubId]?.color : null, toClubId: prev.userClubId, toClubName: userClub.name, toColor: userClub.color, fee: price, leagueId: (player.clubId ? prev.clubs[player.clubId]?.league : null) || prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000),
         };
       });
-      showToast(`${player.name} ansluter till er akademi för ${formatMoney(price)}. Minst 2 år i akademin krävs innan uppflyttning.${installmentNoteEarly}`);
+      showToast(`${player.name} ansluter till er akademi för ${formatMoney(price)}. Minst 2 år i akademin krävs innan uppflyttning.${installmentNoteEarly}${agentFeeNote}`);
       return;
     }
     const wage = agreedWage || player.wage;
@@ -5743,7 +5771,7 @@ function setupCup(type, base) {
     if (isDerby) pushNews(`Historisk värvning — ${player.name} lämnar ärkerivalen ${fromClubName} för er! Fansen ${fanDelta >= 6 ? "jublar vilt" : "är kluvna men nyfikna"}.`, "Klubben");
     else if (fanDelta >= 3) pushNews(`Fansen är mycket nöjda med värvningen av ${player.name}.`, "Klubben");
     else if (fanDelta < 0) pushNews(`Fansen är skeptiska till värvningen av ${player.name} — dyrt för vad som levererades.`, "Klubben");
-    showToast(sellOnPct > 0 ? `${player.name} skrev på för ${formatMoney(price)} — ${fromClubName} får ${sellOnPct}% vid en framtida vidareförsäljning.${installmentNote}` : `${player.name} skrev på för ${formatMoney(price)} (${formatMoney(wage)}/omg i lön)!${installmentNote}`);
+    showToast((sellOnPct > 0 ? `${player.name} skrev på för ${formatMoney(price)} — ${fromClubName} får ${sellOnPct}% vid en framtida vidareförsäljning.${installmentNote}` : `${player.name} skrev på för ${formatMoney(price)} (${formatMoney(wage)}/omg i lön)!${installmentNote}`) + agentFeeNote);
   }
   function startScoutMission(filters) {
     if (g.scoutMission && !g.scoutMission.complete) { showToast("Scouten är redan ute på uppdrag."); return; }
@@ -5769,9 +5797,11 @@ function setupCup(type, base) {
     const financedAmount = plan.financedAmount ?? 0;
     const signOnBonus = details.signOnBonus || 0;
     const houseCarCost = details.houseCar ? 350 : 0;
-    const totalCashNow = upfrontAmount + signOnBonus + houseCarCost;
+    const agentFee = Math.round(agreedPrice * 0.03);
+    const totalCashNow = upfrontAmount + signOnBonus + houseCarCost + agentFee;
     if (g.budget < totalCashNow) { showToast("Inte tillräcklig budget för direktkostnaden."); return; }
     if (g.boardConfidence < 40 && totalCashNow > g.budget * 0.4) { showToast("Styrelsen blockerar värvningen — för dyr given det svaga förtroendet just nu."); return; }
+    const agentFeeNote = ` Agentarvode: ${formatMoney(agentFee)}.`;
     const fromClubName = player.clubId ? (g.clubs[player.clubId]?.name || "en annan klubb") : "fri agent";
     const isDerby = player.clubId && g.clubs[player.clubId]?.rivalId === g.userClubId;
     const installmentNote = financedAmount > 0 ? ` Resten (${formatMoney(financedAmount)}) delbetalas över ${plan.months} månader.` : "";
@@ -5792,7 +5822,7 @@ function setupCup(type, base) {
         clubGoodwill: player.clubId ? { ...prev.clubGoodwill, [player.clubId]: clamp((prev.clubGoodwill[player.clubId] ?? 50) + 5, 0, 100) } : prev.clubGoodwill,
         transferHistory: [{ id: uid(), season: prev.season, round: prev.round, playerId: player.id, playerName: player.name, playerPos: player.specificPosition, fromClubId: player.clubId || null, fromClubName, fromColor: player.clubId ? prev.clubs[player.clubId]?.color : null, toClubId: prev.userClubId, toClubName: userClub.name, toColor: userClub.color, fee: agreedPrice, leagueId: (player.clubId ? prev.clubs[player.clubId]?.league : null) || prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000),
       }));
-      showToast(`${player.name} ansluter till er akademi för ${formatMoney(agreedPrice)}. Minst 2 år i akademin krävs innan uppflyttning.${installmentNote}`);
+      showToast(`${player.name} ansluter till er akademi för ${formatMoney(agreedPrice)}. Minst 2 år i akademin krävs innan uppflyttning.${installmentNote}${agentFeeNote}`);
       return;
     }
     const wage = agreedWage || player.wage;
@@ -5812,7 +5842,7 @@ function setupCup(type, base) {
     if (isDerby) pushNews(`Historisk värvning — ${player.name} lämnar ärkerivalen ${fromClubName} för er! Fansen ${fanDelta >= 6 ? "jublar vilt" : "är kluvna men nyfikna"}.`, "Klubben");
     else if (fanDelta >= 3) pushNews(`Fansen är mycket nöjda med värvningen av ${player.name}.`, "Klubben");
     else if (fanDelta < 0) pushNews(`Fansen är skeptiska till värvningen av ${player.name} — dyrt för vad som levererades.`, "Klubben");
-    showToast(`${player.name} skrev på för ${formatMoney(agreedPrice)} (${formatMoney(wage)}/omg i lön)!${installmentNote}`);
+    showToast(`${player.name} skrev på för ${formatMoney(agreedPrice)} (${formatMoney(wage)}/omg i lön)!${installmentNote}${agentFeeNote}`);
   }
   function finalizeScoutSignee(player, agreedPrice, agreedWage, details = {}) {
     if (!player) return;
@@ -5822,9 +5852,11 @@ function setupCup(type, base) {
     const financedAmount = plan.financedAmount ?? 0;
     const signOnBonus = details.signOnBonus || 0;
     const houseCarCost = details.houseCar ? 350 : 0;
-    const totalCashNow = upfrontAmount + signOnBonus + houseCarCost;
+    const agentFee = Math.round(agreedPrice * 0.03);
+    const totalCashNow = upfrontAmount + signOnBonus + houseCarCost + agentFee;
     if (g.budget < totalCashNow) { showToast("Inte tillräcklig budget för direktkostnaden."); return; }
     if (g.boardConfidence < 40 && totalCashNow > g.budget * 0.4) { showToast("Styrelsen blockerar värvningen — för dyr given det svaga förtroendet just nu."); return; }
+    const agentFeeNote = ` Agentarvode: ${formatMoney(agentFee)}.`;
     const fromClubNameEarly = player.clubId ? (g.clubs[player.clubId]?.name || "en annan klubb") : "fri agent";
     const installmentNoteEarly = financedAmount > 0 ? ` Resten (${formatMoney(financedAmount)}) delbetalas över ${plan.months} månader.` : "";
     const recalcPlan = financedAmount > 0 ? installmentPlan(financedAmount, plan.months) : null;
@@ -5842,7 +5874,7 @@ function setupCup(type, base) {
         market: (player.region && prev.market?.[player.region]) ? { ...prev.market, [player.region]: prev.market[player.region].filter(p => p.id !== player.id) } : prev.market,
         transferHistory: [{ id: uid(), season: prev.season, round: prev.round, playerId: player.id, playerName: player.name, playerPos: player.specificPosition, fromClubId: player.clubId || null, fromClubName: fromClubNameEarly, fromColor: player.clubId ? prev.clubs[player.clubId]?.color : null, toClubId: prev.userClubId, toClubName: userClub.name, toColor: userClub.color, fee: agreedPrice, leagueId: (player.clubId ? prev.clubs[player.clubId]?.league : null) || prev.leagueId }, ...(prev.transferHistory || [])].slice(0, 1000),
       }));
-      showToast(`${player.name} ansluter till er akademi för ${formatMoney(agreedPrice)}. Minst 2 år i akademin krävs innan uppflyttning.${installmentNoteEarly}`);
+      showToast(`${player.name} ansluter till er akademi för ${formatMoney(agreedPrice)}. Minst 2 år i akademin krävs innan uppflyttning.${installmentNoteEarly}${agentFeeNote}`);
       return;
     }
     const wage = agreedWage || player.wage;
@@ -5866,7 +5898,7 @@ function setupCup(type, base) {
     if (isDerby) pushNews(`Historisk värvning — ${player.name} lämnar ärkerivalen ${fromClubName} för er! Fansen ${fanDelta >= 6 ? "jublar vilt" : "är kluvna men nyfikna"}.`, "Klubben");
     else if (fanDelta >= 3) pushNews(`Fansen är mycket nöjda med värvningen av ${player.name}.`, "Klubben");
     else if (fanDelta < 0) pushNews(`Fansen är skeptiska till värvningen av ${player.name} — dyrt för vad som levererades.`, "Klubben");
-    showToast(`${player.name} skrev på för ${formatMoney(agreedPrice)} (${formatMoney(wage)}/omg i lön)!${installmentNote}`);
+    showToast(`${player.name} skrev på för ${formatMoney(agreedPrice)} (${formatMoney(wage)}/omg i lön)!${installmentNote}${agentFeeNote}`);
   }
   // Shared by every path that actually completes a sale from an incoming offer (straight accept, or a
   // negotiated price the manager has explicitly confirmed) — keeps the squad/budget/history mutation in
@@ -6137,15 +6169,23 @@ function setupCup(type, base) {
     showToast(`${prospect.name} flyttas upp till A-laget!`);
   }
   function renewContract(playerId, negotiatedWage, includeClause) {
+    let agentFee = 0;
     setG(prev => {
       const player = prev.squad.find(p => p.id === playerId);
       if (!player) return prev;
-      const demand = contractDemand(player);
-      const newWage = negotiatedWage || wageDemand(player, prev.reputation, prev.budget);
+      const inflationMult = marketInflationMultiplier(prev.season, prev.difficulty);
+      const demand = contractDemand(player, inflationMult);
+      const newWage = negotiatedWage || wageDemand(player, prev.reputation, prev.budget, inflationMult);
       const releaseClause = includeClause ? Math.round(demand.newValue * 1.6) : null;
-      return { ...prev, squad: prev.squad.map(p => p.id === playerId ? { ...p, contractYears: demand.years, value: demand.newValue, wage: newWage, releaseClause, needsContractRenewal: false } : p) };
+      // Agents take a cut for brokering the renewal — scales with the new wage and contract length,
+      // same way a real agent's percentage would.
+      agentFee = Math.round(newWage * demand.years * 0.06);
+      return {
+        ...prev, budget: prev.budget - agentFee,
+        squad: prev.squad.map(p => p.id === playerId ? { ...p, contractYears: demand.years, value: demand.newValue, wage: newWage, releaseClause, needsContractRenewal: false } : p),
+      };
     });
-    showToast(includeClause ? "Nytt kontrakt med utköpsklausul signerat!" : "Nytt kontrakt signerat!");
+    showToast(includeClause ? `Nytt kontrakt med utköpsklausul signerat! Agentarvode: ${formatMoney(agentFee)}.` : `Nytt kontrakt signerat! Agentarvode: ${formatMoney(agentFee)}.`);
   }
   function requestFromOwner(type) {
     const owner = g.owner;
@@ -6524,11 +6564,22 @@ function setupCup(type, base) {
       const newDivision = newClubs[prev.userClubId].division;
       let promoMsg = null;
       let promotionBonus = 0;
+      let relegatedSponsors = prev.sponsors;
       if (newDivision < oldDivision) {
         promotionBonus = newDivision === 1 ? 600 : newDivision === 2 ? 250 : 0;
         promoMsg = `${newClubs[prev.userClubId].name} flyttas upp till Division ${newDivision}! Avancemangsbonus: ${formatMoney(promotionBonus)}.`;
       }
-      else if (newDivision > oldDivision) promoMsg = `${newClubs[prev.userClubId].name} flyttas ned till Division ${newDivision}.`;
+      else if (newDivision > oldDivision) {
+        promoMsg = `${newClubs[prev.userClubId].name} flyttas ned till Division ${newDivision}.`;
+        // Real sponsor deals carry relegation clauses — a drop in division triggers an immediate,
+        // steep cut to every active sponsor's per-round payout rather than waiting for the contract
+        // to expire naturally.
+        const cutPct = 0.4;
+        const cutSponsor = sp => sp ? { ...sp, income: Math.round(sp.income * (1 - cutPct)) } : sp;
+        relegatedSponsors = { main: cutSponsor(prev.sponsors.main), stadium: cutSponsor(prev.sponsors.stadium), local: cutSponsor(prev.sponsors.local) };
+        const lostPerRound = ["main", "stadium", "local"].reduce((sum, slot) => sum + ((prev.sponsors[slot]?.income || 0) - (relegatedSponsors[slot]?.income || 0)), 0);
+        if (lostPerRound > 0) pushNews(`Nedflyttningen utlöser klausuler i sponsoravtalen — sponsorintäkterna sjunker med ca ${formatMoney(lostPerRound)}/omgång.`, "Ekonomi");
+      }
 
       const seasonTrophies = [];
       if (s.pos === 1) seasonTrophies.push(`${divisionLabel(prev.leagueId, oldDivision)}-mästare — Säsong ${prev.season}`);
@@ -6795,7 +6846,7 @@ function setupCup(type, base) {
         eliteReputationSeasons: newEliteReputationSeasons, eliteStreakHasTrophy: newEliteStreakHasTrophy,
         seasonIncomeTotal: 0, seasonWageTotal: 0, clubRecords,
         seasonStaffImpact: { physio: 0, assistant: 0, analyst: 0, gkCoach: 0, fitnessCoach: 0 }, lastSeasonStaffImpact: prev.seasonStaffImpact,
-        lastSeasonSummary: s, seasonEndSnapshot: prev.seasonEndSnapshot, history,
+        lastSeasonSummary: s, seasonEndSnapshot: prev.seasonEndSnapshot, history, sponsors: relegatedSponsors,
         _toast: (boardCrisis || gotSacked) ? null : (combinedToast || null),
       };
     });
@@ -7137,7 +7188,7 @@ function setupCup(type, base) {
                   season={g.season} round={g.round} totalRounds={g.schedule.length} seasonIncomeTotal={g.seasonIncomeTotal || 0} seasonWageTotal={g.seasonWageTotal || 0}
                   ticketPrice={g.ticketPrice} onSetTicketPrice={setTicketPrice}
                   loans={g.loans} onTakeLoan={takeLoan} sponsors={g.sponsors} dev={g.dev} onUpgrade={upgradeDev} onUpgradePart={upgradePart} onSignSponsor={signSponsor} onTerminateSponsor={terminateSponsor}
-                  club={userClub} arenaStands={g.arenaStands} arenaFacilities={g.arenaFacilities} arenaConstruction={g.arenaConstruction} onStartConstruction={startArenaConstruction} recentMatchFinances={g.recentMatchFinances} transferInstallments={g.transferInstallments} onSubViewChange={setSubViewOpen} customArenaName={g.customArenaName} onNameArena={nameOwnArena} staff={g.staff} transferHistory={g.transferHistory} userClubId={g.userClubId} />
+                  club={userClub} arenaStands={g.arenaStands} arenaFacilities={g.arenaFacilities} arenaConstruction={g.arenaConstruction} onStartConstruction={startArenaConstruction} recentMatchFinances={g.recentMatchFinances} transferInstallments={g.transferInstallments} onSubViewChange={setSubViewOpen} customArenaName={g.customArenaName} onNameArena={nameOwnArena} staff={g.staff} transferHistory={g.transferHistory} userClubId={g.userClubId} difficulty={g.difficulty} />
               ) : g.activeTab === "personal" ? (
                 <PersonalTab budget={g.budget} staff={g.staff} reputation={g.reputation} homeCountry={userClub.league} staffCandidates={g.staffCandidates}
                   onOpenStaffCandidates={openStaffCandidates} onHireStaff={hireStaff} onRenegotiateStaff={renegotiateStaffWage}
@@ -8861,6 +8912,9 @@ function MatchResultView({ report, userTeamName, competitionLabel, onContinue })
                 <div className="flex items-center justify-between text-sm"><span style={{ color: C.inkSoft }}>Sponsring & TV</span><span className="font-mono">{formatMoney(report.incomeBreakdown.sponsorsAndTv)}</span></div>
                 <div className="flex items-center justify-between text-sm" style={{ borderTop: `1px dashed ${C.paperDim}`, paddingTop: 4, marginTop: 2 }}><span style={{ color: C.inkSoft }}>Bruttointäkt</span><span className="font-mono font-semibold">{formatMoney(report.incomeBreakdown.income)}</span></div>
                 <div className="flex items-center justify-between text-sm"><span style={{ color: C.inkSoft }}>Löner</span><span className="font-mono" style={{ color: C.loss }}>−{formatMoney(report.incomeBreakdown.wageBill)}</span></div>
+                {report.incomeBreakdown.academyCost > 0 && (
+                  <div className="flex items-center justify-between text-sm"><span style={{ color: C.inkSoft }}>Akademins drift</span><span className="font-mono" style={{ color: C.loss }}>−{formatMoney(report.incomeBreakdown.academyCost)}</span></div>
+                )}
                 <div className="flex items-center justify-between text-sm font-semibold" style={{ borderTop: `1px solid ${C.paperDim}`, paddingTop: 4, marginTop: 2 }}>
                   <span>Totalt denna omgång</span><span className="font-mono" style={{ color: report.incomeBreakdown.total >= 0 ? C.win : C.loss }}>{report.incomeBreakdown.total >= 0 ? "+" : ""}{formatMoney(report.incomeBreakdown.total)}</span>
                 </div>
@@ -14975,8 +15029,12 @@ function LoanDetail({ budget, loans, reputation, onTakeLoan, onBack }) {
   );
 }
 
-function CashFlowDetail({ budget, squad, staff, sponsors, loans, transferInstallments, recentMatchFinances, seasonIncomeTotal, seasonWageTotal, round, transferHistory, userClubId, season, onBack }) {
-  const wageBill = totalWageBill(squad);
+function CashFlowDetail({ budget, squad, staff, sponsors, loans, transferInstallments, recentMatchFinances, seasonIncomeTotal, seasonWageTotal, round, transferHistory, userClubId, season, difficulty, akademiLevel, onBack }) {
+  const baseWageBill = totalWageBill(squad);
+  const inflationMult = marketInflationMultiplier(season, difficulty);
+  const wageBill = Math.round(baseWageBill * inflationMult);
+  const inflationExtra = wageBill - baseWageBill;
+  const academyCost = academyRunningCost(akademiLevel || 1);
   const staffWages = (staff?.assistant?.wage || 0) + (staff?.physio?.wage || 0) + (staff?.scout?.wage || 0) + (staff?.gkCoach?.wage || 0) + (staff?.analyst?.wage || 0) + (staff?.fitnessCoach?.wage || 0);
   const sponsorIncome = (sponsors?.main?.income || 0) + (sponsors?.stadium?.income || 0) + (sponsors?.local?.income || 0);
   const loanPayments = (loans || []).reduce((s, l) => s + l.installment, 0);
@@ -14999,8 +15057,9 @@ function CashFlowDetail({ budget, squad, staff, sponsors, loans, transferInstall
     { label: "Sponsoravtal", value: sponsorIncome, note: `${Object.values(sponsors || {}).filter(Boolean).length}/3 aktiva avtal` },
   ];
   const expenseItems = [
-    { label: "Spelarlöner", value: wageBill, note: `${squad.length} spelare i truppen` },
+    { label: "Spelarlöner", value: wageBill, note: `${squad.length} spelare i truppen${inflationExtra > 0 ? ` · varav ${formatMoney(inflationExtra)} löneinflation (säsong ${season})` : ""}` },
     { label: "Personallöner", value: staffWages, note: "Assisterande, fys, scout m.fl." },
+    { label: "Akademins drift", value: academyCost, note: `Nivå ${akademiLevel || 1} — högre nivå kostar mer att underhålla` },
     { label: "Låneavbetalning", value: loanPayments, note: `${loans?.length || 0} aktiva lån` },
     { label: "Övergångsavbetalningar", value: installmentOut, note: `${transferInstallments?.length || 0} pågående` },
   ];
@@ -15241,14 +15300,14 @@ function EconomyStatCard({ icon, label, value, valueColor, barPct, barColor, sub
   );
 }
 function EconomyTab({ budget, seasonStartBudget, reputation, division, sponsringLevel, squad, history, season, round, totalRounds, seasonIncomeTotal, seasonWageTotal, ticketPrice, onSetTicketPrice,
-  loans, onTakeLoan, sponsors, dev, onUpgrade, onUpgradePart, onSignSponsor, onTerminateSponsor, club, arenaStands, arenaFacilities, arenaConstruction, onStartConstruction, recentMatchFinances, transferInstallments, onSubViewChange, customArenaName, onNameArena, staff, transferHistory, userClubId }) {
+  loans, onTakeLoan, sponsors, dev, onUpgrade, onUpgradePart, onSignSponsor, onTerminateSponsor, club, arenaStands, arenaFacilities, arenaConstruction, onStartConstruction, recentMatchFinances, transferInstallments, onSubViewChange, customArenaName, onNameArena, staff, transferHistory, userClubId, difficulty }) {
   const [selectedCategory, setSelectedCategory] = useState(null);
   useEffect(() => { onSubViewChange?.(!!selectedCategory); }, [selectedCategory]);
   if (selectedCategory === "loner") return <WagesDetail squad={squad} reputation={reputation} division={division} sponsringLevel={sponsringLevel} onBack={() => setSelectedCategory(null)} />;
   if (selectedCategory === "lan") return <LoanDetail budget={budget} loans={loans} reputation={reputation} onTakeLoan={onTakeLoan} onBack={() => setSelectedCategory(null)} />;
   if (selectedCategory === "sponsring") return <SponsorDetail dev={dev} budget={budget} reputation={reputation} sponsors={sponsors} customArenaName={customArenaName} onNameArena={onNameArena} onUpgrade={onUpgrade} onSignSponsor={onSignSponsor} onTerminateSponsor={onTerminateSponsor} onBack={() => setSelectedCategory(null)} />;
   if (selectedCategory === "arena") return <ArenaDetail club={club} dev={dev} budget={budget} arenaStands={arenaStands} arenaFacilities={arenaFacilities} arenaConstruction={arenaConstruction} onUpgrade={onUpgrade} onUpgradePart={onUpgradePart} onStartConstruction={onStartConstruction} ticketPrice={ticketPrice} onSetTicketPrice={onSetTicketPrice} recentMatchFinances={recentMatchFinances} onBack={() => setSelectedCategory(null)} />;
-  if (selectedCategory === "kassaflode") return <CashFlowDetail budget={budget} squad={squad} staff={staff} sponsors={sponsors} loans={loans} transferInstallments={transferInstallments} recentMatchFinances={recentMatchFinances} seasonIncomeTotal={seasonIncomeTotal} seasonWageTotal={seasonWageTotal} round={round} transferHistory={transferHistory} userClubId={userClubId} season={season} onBack={() => setSelectedCategory(null)} />;
+  if (selectedCategory === "kassaflode") return <CashFlowDetail budget={budget} squad={squad} staff={staff} sponsors={sponsors} loans={loans} transferInstallments={transferInstallments} recentMatchFinances={recentMatchFinances} seasonIncomeTotal={seasonIncomeTotal} seasonWageTotal={seasonWageTotal} round={round} transferHistory={transferHistory} userClubId={userClubId} season={season} difficulty={difficulty} akademiLevel={dev?.akademi} onBack={() => setSelectedCategory(null)} />;
 
   const cap = wageBudgetCap(reputation, division, sponsringLevel);
   const wageBill = totalWageBill(squad);
