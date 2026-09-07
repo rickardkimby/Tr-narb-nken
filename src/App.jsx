@@ -399,15 +399,14 @@ const LEAGUES = [
   { id: "germany", name: "Tyskland", blurb: "Organisation, disciplin och lojala supportrar.", cupName: "Kaiserpokal" },
   { id: "france", name: "Frankrike", blurb: "Talangfabriker och snabb, ung fotboll.", cupName: "Coupe Impériale" },
 ];
-// Division 1 in each country keeps the old fictional league name as its own competition brand (like a
-// real top-flight often has a unique name), while Division 2/3 are simply relabeled Division 1/2 —
-// this is purely a DISPLAY layer; the underlying division numbers (1/2/3) driving all game logic are untouched.
+// Every division in every country now carries its real-world competition name — this is purely a
+// DISPLAY layer; the underlying division numbers (1/2/3) driving all game logic are untouched.
 const DIVISION_DISPLAY_NAME = {
-  england: { 1: "Premier League", 2: "Division One", 3: "Division Two" },
-  italy: { 1: "Campionato d'Italia", 2: "Division 1", 3: "Division 2" },
-  spain: { 1: "Primera Liga", 2: "Division 1", 3: "Division 2" },
-  germany: { 1: "Bundesmeisterschaft", 2: "Division 1", 3: "Division 2" },
-  france: { 1: "Ligue Nationale", 2: "Division 1", 3: "Division 2" },
+  england: { 1: "Premier League", 2: "Championship", 3: "League One" },
+  italy: { 1: "Serie A", 2: "Serie B", 3: "Serie C" },
+  spain: { 1: "La Liga", 2: "Segunda División", 3: "Primera Federación" },
+  germany: { 1: "Bundesliga", 2: "2. Bundesliga", 3: "3. Liga" },
+  france: { 1: "Ligue 1", 2: "Ligue 2", 3: "National" },
 };
 function divisionLabel(leagueId, division) {
   return DIVISION_DISPLAY_NAME[leagueId]?.[division] || `Division ${division}`;
