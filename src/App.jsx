@@ -1230,15 +1230,33 @@ function academyRunningCost(akademiLevel) {
 // current first-team ability instead. Without this, every value formula in the game was flat-linear
 // against a 1-99 scale, which put an absolute ceiling around £900k-1M on ANY player regardless of quality
 // — a genuine world-class superstar cost about the same as a solid squad player.
-// Driven by the HIGHER of attack/defense, not their average — a pure specialist (a world-class goalkeeper
-// or an out-and-out poacher) has one of those two numbers sitting low by design, since it barely applies
-// to their job. Averaging it in would wash out exactly the players this exists to correctly price: the
-// best goalkeeper or striker in the game would otherwise look "merely decent" on the diluted average and
-// stay cheap forever, no matter how convex the curve is.
-function eliteValueMultiplier(attack, defense) {
-  const peak = Math.max(attack, defense);
-  if (peak <= 75) return 1;
-  return 1 + Math.pow(clamp((peak - 75) / 24, 0, 1), 2.4) * 11;
+// positionWeightedQuality mirrors overallOf()'s position weights (collapsed onto attack/defense directly,
+// ignoring the small per-sub-attribute jitter) so "quality" tracks the SAME number the game displays as a
+// player's overall, for every position. An earlier version drove the elite premium off raw max(attack,
+// defense) instead, meant to stop a pure specialist's weak off-stat from diluting their price — but
+// max(attack,defense) is NOT comparable across positions: a goalkeeper or defender's defense stat sits
+// much closer to their raw classify-style target than a striker's attack stat does relative to *their*
+// overall (defenders/keepers need a much higher raw secondary-stat pairing just to reach a given blended
+// overall, since defense only carries partial weight there too). The result was goalkeepers and defenders
+// getting priced up to 6-7x higher than attackers/midfielders at the exact same displayed overall rating —
+// the opposite of real transfer-market economics, where attacking quality usually commands the premium.
+// Using positionWeightedQuality for BOTH the base value and the elite-premium threshold fixes that while
+// keeping the original specialist-protection intent: a striker's overall is already position-weighted
+// toward attack (so a low defense stat barely dents it), the same way this always worked for the
+// average-based part of the formula — it just needed to use the real position-weighted number instead of
+// a flat 50/50 average or an uncomparable raw peak.
+const POSITION_VALUE_WEIGHTS = { MV: { a: 0.249, d: 0.534 }, FÖ: { a: 0.31, d: 0.57 }, MF: { a: 0.5625, d: 0.325 }, AN: { a: 0.7975, d: 0.1225 } };
+function positionWeightedQuality(pos, attack, defense) {
+  const w = POSITION_VALUE_WEIGHTS[pos] || POSITION_VALUE_WEIGHTS.MF;
+  return w.a * attack + w.d * defense;
+}
+// Absolute threshold (not scaled per position) so two players who display the same overall cost about the
+// same regardless of position — a keeper or defender's structurally lower ceiling (~75/~84 vs a striker's
+// ~88, an already-established property of overallOf()'s weights) means they naturally reach the full
+// premium less often, exactly as intended, rather than needing a lower bar to compensate.
+function eliteValueMultiplier(quality) {
+  if (quality <= 63) return 1;
+  return 1 + Math.pow(clamp((quality - 63) / 25, 0, 1), 2.4) * 11;
 }
 const PERSONALITIES = ["Balanserad", "Balanserad", "Balanserad", "Balanserad", "Balanserad", "Ledare", "Lojal", "Ambitiös", "Problemspelare"];
 const PERSONALITY_DESC = {
@@ -1261,7 +1279,8 @@ function makePlayer(pos, homeCountry, forcedSpecificPosition, archetype, divisio
   attack = clamp(attack + shift, 15, 96);
   defense = clamp(defense + shift, 15, 96);
   if (youthSlot) { attack = clamp(Math.round(attack * 0.82), 15, 90); defense = clamp(Math.round(defense * 0.82), 15, 90); }
-  const value = Math.round((((attack + defense) / 2) * 8 + rndInt(-25, 35)) * 1.1 * eliteValueMultiplier(attack, defense));
+  const quality = positionWeightedQuality(pos, attack, defense);
+  const value = Math.round((quality * 8 + rndInt(-25, 35)) * 1.1 * eliteValueMultiplier(quality));
   const nationality = homeCountry ? randomDomesticNationality(homeCountry) : pick(NATIONALITY_KEYS);
   const age = youthSlot ? rndInt(18, 21) : rndInt(18, 33);
   const finalValue = Math.max(40, value);
@@ -1373,7 +1392,8 @@ function makeScoutPlayer(pos, region, rating, clubs) {
   else { attack = rndInt(60, 84); defense = rndInt(22, 45); }
   attack = clamp(Math.round((attack + bias.attack) * scale), 20, 97);
   defense = clamp(Math.round((defense + bias.defense) * scale), 20, 97);
-  const value = Math.max(60, Math.round((((attack + defense) / 2) * 8 * bias.priceMult + rndInt(-25, 35)) * 1.1 * eliteValueMultiplier(attack, defense)));
+  const scoutQuality = positionWeightedQuality(pos, attack, defense);
+  const value = Math.max(60, Math.round((scoutQuality * 8 * bias.priceMult + rndInt(-25, 35)) * 1.1 * eliteValueMultiplier(scoutQuality)));
   const nationality = bias.nationality || pick(EUROPEAN_NATIONALITIES);
   const age = rndInt(19, 31);
   const clubId = clubs ? pickOwningClub(clubs, (attack + defense) / 2) : null;
@@ -1397,7 +1417,8 @@ function generateWorldPoolPlayer(region) {
   else { attack = clamp(Math.round(tierBase * 1.1), 15, 92); defense = clamp(Math.round(tierBase * 0.4), 15, 70); }
   attack = clamp(Math.round(attack + bias.attack), 15, 95);
   defense = clamp(Math.round(defense + bias.defense), 15, 95);
-  const value = Math.max(50, Math.round((((attack + defense) / 2) * 7.5 * bias.priceMult + rndInt(-20, 30)) * 1.05 * eliteValueMultiplier(attack, defense)));
+  const poolQuality = positionWeightedQuality(pos, attack, defense);
+  const value = Math.max(50, Math.round((poolQuality * 7.5 * bias.priceMult + rndInt(-20, 30)) * 1.05 * eliteValueMultiplier(poolQuality)));
   const nationality = bias.nationality || pick(EUROPEAN_NATIONALITIES);
   const age = rndInt(18, 32);
   const player = { id: uid(), name: randomPlayerName(nationality), nationality, age, pos, specificPosition: randomSpecificPosition(pos), attack, defense, value, wage: computeWage(value, attack, defense), region, contractYears: rndInt(1, 4), injuryWeeks: 0, yellowCards: 0, suspendedMatches: 0, morale: 70, apps: 0, goals: 0, assists: 0, ratingSum: 0 };
@@ -7441,14 +7462,15 @@ function excelRowsToWorld(clubRows, playerRows, youthRows) {
     const clubId = String(row.KlubbID || "").trim();
     if (!world[clubId]) return;
     const attack = num(row.Anfall), defense = num(row.Försvar);
+    const pos = String(row.Position || "").trim();
     // Same failure mode as the old Styrka column: a sheet's Värde/Lön can drift completely out of sync
     // with what the player actually is (a database has turned up with an inverse correlation between
     // Overall and Värde). Derive both from attack/defense the same way a freshly generated player's are
     // — the sheet's own numbers only survive as a fallback when attack/defense are missing.
-    const value = (attack !== undefined && defense !== undefined) ? Math.max(40, Math.round(((attack + defense) / 2) * 8.8 * eliteValueMultiplier(attack, defense))) : num(row.Värde);
+    const value = (attack !== undefined && defense !== undefined) ? Math.max(40, Math.round(positionWeightedQuality(pos, attack, defense) * 8.8 * eliteValueMultiplier(positionWeightedQuality(pos, attack, defense)))) : num(row.Värde);
     world[clubId].squad.push({
       id: String(row.SpelarID || "").trim(), name: String(row.Namn || "").trim(), number: num(row.Nummer),
-      age: num(row.Ålder), pos: String(row.Position || "").trim(), specificPosition: String(row.SpecifikPosition || "").trim(),
+      age: num(row.Ålder), pos, specificPosition: String(row.SpecifikPosition || "").trim(),
       attack, defense, potential: num(row.Potential),
       value, wage: computeWage(value, attack ?? 50, defense ?? 50), nationality: String(row.Nationalitet || "").trim(),
       contractYears: row.Kontraktsår === "" || row.Kontraktsår === undefined ? 3 : num(row.Kontraktsår),
@@ -7534,14 +7556,15 @@ function excelRowsToWorldPool(rows) {
     const region = String(row.Region || "").trim();
     if (!pool[region]) return;
     const attack = num(row.Anfall), defense = num(row.Försvar);
+    const pos = String(row.Position || "").trim();
     // Same drift risk as the league sheets (see excelRowsToWorld): a sheet's Värde/Lön can end up on a
     // completely different scale than the rest of the game (seen in an imported database: Övriga världen
     // players priced at 100-200M vs. an 11M storklubb budget). Derive both from attack/defense the same
     // way a freshly generated world-pool player's are — the sheet's own numbers only survive as a fallback.
-    const value = (attack !== undefined && defense !== undefined) ? Math.max(40, Math.round(((attack + defense) / 2) * 8.8 * eliteValueMultiplier(attack, defense))) : num(row.Värde);
+    const value = (attack !== undefined && defense !== undefined) ? Math.max(40, Math.round(positionWeightedQuality(pos, attack, defense) * 8.8 * eliteValueMultiplier(positionWeightedQuality(pos, attack, defense)))) : num(row.Värde);
     pool[region].push({
       id: String(row.SpelarID || "").trim() || uid(), name: String(row.Namn || "").trim(),
-      age: num(row.Ålder), pos: String(row.Position || "").trim(), specificPosition: String(row.SpecifikPosition || "").trim(),
+      age: num(row.Ålder), pos, specificPosition: String(row.SpecifikPosition || "").trim(),
       attack, defense, potential: num(row.Potential),
       value, wage: computeWage(value, attack ?? 50, defense ?? 50), nationality: String(row.Nationalitet || "").trim(),
       contractYears: row.Kontraktsår === "" || row.Kontraktsår === undefined ? 2 : num(row.Kontraktsår),
