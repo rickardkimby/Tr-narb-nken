@@ -4148,14 +4148,14 @@ function buildSeason1Qualifiers(clubs) {
   // Order matters within each league: more specific patterns (e.g. "nerazzurri"/"inter") are checked
   // before more generic ones (e.g. "milan") so a club can't be claimed by the wrong entry.
   const CUP1_PATTERNS = {
-    england: [["trafford", "manchester united", "man utd", "man united"], ["north london", "arsenal", "gunners"], ["elland", "leeds"]],
+    england: [["north london", "arsenal", "gunners"], ["manchester city", "man city", "citizens"], ["liverpool"]],
     italy: [["piemonte", "juventus", "juve"], ["laziale", "lazio"], ["milano 1899", "ac milan", "milan"]],
     spain: [["cf madrid", "real madrid"], ["deportivo barcelona", "barcelona", "barca"], ["turia", "valencia"], ["deportivo la coru", "la coruna", "la coruña", "santander"]],
     france: [["fc paris", "psg", "paris saint"], ["monegasque", "monaco"], ["rhone", "lyonnais", "lyon"]],
     germany: [["leverkusen"], ["elbe hamburg", "hamburg", "hsv"], ["münchen 1900", "munchen", "münchen", "bayern"]],
   };
   const CUP2_PATTERNS = {
-    england: [["liverpool"], ["stamford", "chelsea"], ["villa claret", "aston villa"]],
+    england: [["trafford", "manchester united", "man utd", "man united"], ["stamford", "chelsea"]],
     italy: [["nerazzurri", "inter milan", "inter"], ["parma"], ["udine", "udinese"], ["roma 1927", "as roma", "roma"]],
     spain: [["osasuna", "alav"], ["celticos", "celta"], ["periquito", "espanyol"]],
     france: [["sang et or", "lens", "sedan"], ["nantais", "nantes"], ["gironde", "bordeaux"]],
