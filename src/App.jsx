@@ -2035,7 +2035,12 @@ function withSeededRandom(seedStr, fn) {
 }
 const POSITION_WEIGHTS = {
   MV: { shooting: 0.35, passing: 0.2, dribbling: 0, pace: 0, defending: 0.3, physical: 0.15 },
-  FÖ: { shooting: 0.05, passing: 0.15, dribbling: 0.05, pace: 0.15, defending: 0.4, physical: 0.2 },
+  // A defender's primary attribute (defending) used to carry the least weight-per-unit of any position's
+  // top attribute (0.4, versus attackers' 0.35-weighted "shooting" which - unlike defending - is derived
+  // as a full 1:1 read of attack with no dilution, see getAttrs). That structurally capped even a perfect
+  // defender well below a perfect attacker/midfielder's ceiling, no matter how good their database stats
+  // were. Rebalanced so defending dominates the blend the same way shooting does for attackers.
+  FÖ: { shooting: 0, passing: 0.15, dribbling: 0.03, pace: 0.12, defending: 0.5, physical: 0.2 },
   MF: { shooting: 0.15, passing: 0.3, dribbling: 0.2, pace: 0.1, defending: 0.15, physical: 0.1 },
   AN: { shooting: 0.35, passing: 0.1, dribbling: 0.25, pace: 0.2, defending: 0, physical: 0.1 },
 };
@@ -2051,7 +2056,9 @@ function getAttrs(player) {
     passing: clamp(Math.round(a * 0.4 + d * 0.4 + j()), 8, 96),
     dribbling: clamp(Math.round(a * 0.9 + j()), 8, 96),
     pace: clamp(Math.round(a * 0.7 + d * 0.2 + j()), 8, 96),
-    defending: clamp(Math.round(d * 0.95 + j()), 8, 96),
+    // Undiluted read of defense, matching how "shooting" above is a full 1:1 read of attack for outfield
+    // players rather than a fraction of it - a defender's core skill deserves the same full credit.
+    defending: clamp(Math.round(d * 1.0 + j()), 8, 96),
     physical: clamp(Math.round(((a + d) / 2) * 0.85 + j()), 8, 96),
   };
   // Database-set overrides win over the derived values, so a custom database can hand-tune sub-attributes
