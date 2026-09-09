@@ -2072,7 +2072,13 @@ function getAttrs(player) {
   const j = () => Math.floor(rng() * 17) - 8;
   const a = clamp(player.attack, 12, 96), d = clamp(player.defense, 12, 96);
   const derived = {
-    shooting: clamp(Math.round((player.pos === "FÖ" || player.pos === "MV" ? d * 0.3 + a * 0.3 : a) + j()), 8, 96),
+    // A goalkeeper's "shooting" (labeled "Reflexer" - their shot-stopping ability) used to read the same
+    // diluted attack/defense blend as an outfield defender's, even though it's MV's single highest-weighted
+    // attribute (0.35) - meaning even a flawless shot-stopper (defense 96) could never push it past ~29 of
+    // its own 30-point attack-blended half, capping the whole position's ceiling far below every outfield
+    // position. Reflexes are a defensive quality; giving it the same full, undiluted 1:1 read of defense
+    // that defenders' own primary attribute gets fixes that structural ceiling the same way.
+    shooting: clamp(Math.round((player.pos === "MV" ? d : player.pos === "FÖ" ? d * 0.3 + a * 0.3 : a) + j()), 8, 96),
     passing: clamp(Math.round(a * 0.4 + d * 0.4 + j()), 8, 96),
     dribbling: clamp(Math.round(a * 0.9 + j()), 8, 96),
     pace: clamp(Math.round(a * 0.7 + d * 0.2 + j()), 8, 96),
