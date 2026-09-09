@@ -2050,6 +2050,13 @@ const POSITION_WEIGHTS = {
   // specificPosition "CB"; every other FÖ sub-role (VB/HB/VWB/HWB) keeps the general FÖ weights above.
   CB: { shooting: 0, passing: 0.1, dribbling: 0.02, pace: 0.05, defending: 0.68, physical: 0.15 },
   MF: { shooting: 0.15, passing: 0.3, dribbling: 0.2, pace: 0.1, defending: 0.15, physical: 0.1 },
+  // A genuine defensive midfielder/destroyer (specificPosition "CDM") now gets a database attack/defense
+  // split that's honestly skewed toward defense (see overall_to_attack_defense in the build pipeline) rather
+  // than defaulting to the same near-maxed attack every other elite midfielder got - so they need the same
+  // "don't structurally punish a one-dimensional specialist" treatment CB already gets, or a genuinely elite
+  // destroyer would rate lower than a mediocre all-rounder just for being honestly rated. Every other MF
+  // sub-role (CM/CAM/VOM/HOM/VM/HM) keeps the general MF weights above.
+  CDM: { shooting: 0.05, passing: 0.3, dribbling: 0.1, pace: 0.1, defending: 0.3, physical: 0.15 },
   AN: { shooting: 0.35, passing: 0.1, dribbling: 0.25, pace: 0.2, defending: 0, physical: 0.1 },
 };
 const ATTR_LABELS_OUTFIELD = { shooting: "Avslut", passing: "Passning", dribbling: "Dribbling", pace: "Fart", defending: "Försvarsspel", physical: "Fysik" };
@@ -2145,9 +2152,14 @@ function clutchLabel(cf) {
   if (cf <= -0.6) return "Kan tyngas i stora matcher";
   return "Jämn i stora matcher";
 }
+function subPositionWeights(player) {
+  if (player.pos === "FÖ" && player.specificPosition === "CB") return POSITION_WEIGHTS.CB;
+  if (player.pos === "MF" && player.specificPosition === "CDM") return POSITION_WEIGHTS.CDM;
+  return POSITION_WEIGHTS[player.pos];
+}
 function overallOf(player) {
   const attrs = getAttrs(player);
-  const w = (player.pos === "FÖ" && player.specificPosition === "CB" ? POSITION_WEIGHTS.CB : POSITION_WEIGHTS[player.pos]) || POSITION_WEIGHTS.MF;
+  const w = subPositionWeights(player) || POSITION_WEIGHTS.MF;
   return clamp(Math.round(Object.keys(w).reduce((s, k) => s + attrs[k] * w[k], 0)), 1, 95);
 }
 function bestAttribute(player) {
