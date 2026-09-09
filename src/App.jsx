@@ -2055,8 +2055,13 @@ const POSITION_WEIGHTS = {
   // than defaulting to the same near-maxed attack every other elite midfielder got - so they need the same
   // "don't structurally punish a one-dimensional specialist" treatment CB already gets, or a genuinely elite
   // destroyer would rate lower than a mediocre all-rounder just for being honestly rated. Every other MF
-  // sub-role (CM/CAM/VOM/HOM/VM/HM) keeps the general MF weights above.
+  // sub-role (CM/VOM/HOM/VM/HM) keeps the general MF weights above.
   CDM: { shooting: 0.05, passing: 0.3, dribbling: 0.1, pace: 0.1, defending: 0.3, physical: 0.15 },
+  // The flip side of CDM above: a genuine creative #10 (specificPosition "CAM") now honestly gets a LOWER
+  // defense stat from the build pipeline (mirroring the destroyer's honestly-lower attack) - without a
+  // matching weight table their overall would drop for the same reason CBs used to be punished, just from
+  // the other direction. Leans hard into shooting/passing/dribbling, barely touches defending/physical.
+  CAM: { shooting: 0.22, passing: 0.3, dribbling: 0.3, pace: 0.1, defending: 0.04, physical: 0.04 },
   AN: { shooting: 0.35, passing: 0.1, dribbling: 0.25, pace: 0.2, defending: 0, physical: 0.1 },
 };
 const ATTR_LABELS_OUTFIELD = { shooting: "Avslut", passing: "Passning", dribbling: "Dribbling", pace: "Fart", defending: "Försvarsspel", physical: "Fysik" };
@@ -2155,6 +2160,7 @@ function clutchLabel(cf) {
 function subPositionWeights(player) {
   if (player.pos === "FÖ" && player.specificPosition === "CB") return POSITION_WEIGHTS.CB;
   if (player.pos === "MF" && player.specificPosition === "CDM") return POSITION_WEIGHTS.CDM;
+  if (player.pos === "MF" && player.specificPosition === "CAM") return POSITION_WEIGHTS.CAM;
   return POSITION_WEIGHTS[player.pos];
 }
 function overallOf(player) {
