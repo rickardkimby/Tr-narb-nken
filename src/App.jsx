@@ -2041,6 +2041,11 @@ const POSITION_WEIGHTS = {
   // defender well below a perfect attacker/midfielder's ceiling, no matter how good their database stats
   // were. Rebalanced so defending dominates the blend the same way shooting does for attackers.
   FÖ: { shooting: 0, passing: 0.15, dribbling: 0.03, pace: 0.12, defending: 0.5, physical: 0.2 },
+  // Centre-backs specifically lean even further into pure defending/physicality than the general FÖ blend
+  // above (which still credits pace/dribbling fairly generously - fair for an attacking full-back/wing-back,
+  // but a genuine stopper's game barely touches either). Used only for specificPosition "CB"; every other
+  // FÖ sub-role (VB/HB/VWB/HWB) keeps the general FÖ weights above.
+  CB: { shooting: 0, passing: 0.15, dribbling: 0.02, pace: 0.08, defending: 0.58, physical: 0.17 },
   MF: { shooting: 0.15, passing: 0.3, dribbling: 0.2, pace: 0.1, defending: 0.15, physical: 0.1 },
   AN: { shooting: 0.35, passing: 0.1, dribbling: 0.25, pace: 0.2, defending: 0, physical: 0.1 },
 };
@@ -2139,7 +2144,7 @@ function clutchLabel(cf) {
 }
 function overallOf(player) {
   const attrs = getAttrs(player);
-  const w = POSITION_WEIGHTS[player.pos] || POSITION_WEIGHTS.MF;
+  const w = (player.pos === "FÖ" && player.specificPosition === "CB" ? POSITION_WEIGHTS.CB : POSITION_WEIGHTS[player.pos]) || POSITION_WEIGHTS.MF;
   return clamp(Math.round(Object.keys(w).reduce((s, k) => s + attrs[k] * w[k], 0)), 1, 95);
 }
 function bestAttribute(player) {
