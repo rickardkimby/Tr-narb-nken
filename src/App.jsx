@@ -6982,7 +6982,6 @@ function setupCup(type, base) {
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
         html, body, #root { height: 100%; margin: 0; }
         .font-display { font-family: 'Fraunces', 'Inter', serif; font-weight: 700; letter-spacing: -0.005em; }
         .font-mono { font-family: 'IBM Plex Mono', monospace; }
@@ -7330,7 +7329,7 @@ function SaveSelectView({ saves, onSelect, onNew, onDelete, onExport, onImport, 
   const [codeInput, setCodeInput] = useState("");
   const [codeError, setCodeError] = useState(false);
   const fileInputRef = useRef(null);
-  const fontStyle = `@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap'); .font-display{font-family:'Fraunces','Inter',serif;font-weight:700;letter-spacing:-0.005em;} ::-webkit-scrollbar{display:none;}`;
+  const fontStyle = `.font-display{font-family:'Fraunces','Inter',serif;font-weight:700;letter-spacing:-0.005em;} ::-webkit-scrollbar{display:none;}`;
   const sorted = [...saves].sort((a, b) => new Date(b.lastPlayed) - new Date(a.lastPlayed));
   return (
     <div style={{ background: C.turfDeep, minHeight: "100vh", color: C.paper }} className="flex flex-col items-center px-5 pt-10 pb-10">
@@ -7392,7 +7391,7 @@ function SaveSelectView({ saves, onSelect, onNew, onDelete, onExport, onImport, 
   );
 }
 
-const ONBOARDING_FONT_STYLE = `@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap'); .font-display{font-family:'Fraunces','Inter',serif;font-weight:700;letter-spacing:-0.005em;} ::-webkit-scrollbar{display:none;}`;
+const ONBOARDING_FONT_STYLE = `.font-display{font-family:'Fraunces','Inter',serif;font-weight:700;letter-spacing:-0.005em;} ::-webkit-scrollbar{display:none;}`;
 // Validates an imported/user-created database JSON against the same structure the standard database
 // (generateWorld()) produces: an object keyed by club id, each club holding a squad array of players.
 // Checks required fields, duplicate IDs (both clubs and players), and relational validity (league/division).
